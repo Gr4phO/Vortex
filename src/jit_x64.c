@@ -1246,20 +1246,47 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
             }
 
             case IR_CALL_USER: {
-                for (int a = 0; a < ins->arg_count; a++) {
+                int num_args = ins->arg_count;
+                for (int a = 0; a < num_args; a++) {
                     int r = get_vreg_int_reg(ir, ins->args[a], PREG_RAX, j);
                     emit_push_r(j, r);
                 }
-                if (ins->arg_count == 1) { emit_u8(j, 0x59); }
-                else if (ins->arg_count == 2) { emit_u8(j, 0x5A); emit_u8(j, 0x59); }
-                else if (ins->arg_count == 3) { emit_u8(j, 0x41); emit_u8(j, 0x58); emit_u8(j, 0x5A); emit_u8(j, 0x59); }
-                else if (ins->arg_count == 4) { emit_u8(j, 0x41); emit_u8(j, 0x59); emit_u8(j, 0x41); emit_u8(j, 0x58); emit_u8(j, 0x5A); emit_u8(j, 0x59); }
 
-                emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xEC); emit_u8(j, 0x20);
+                int min_space = (num_args <= 4) ? 32 : (32 + (num_args - 4) * 8);
+                int alloc_space = min_space;
+                if ((num_args * 8 + alloc_space) % 16 != 0) alloc_space += 8;
+                emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xEC); emit_u8(j, (uint8_t)alloc_space);
+
+                for (int k = 4; k < num_args; k++) {
+                    int src_off = alloc_space + (num_args - 1 - k) * 8;
+                    int dst_off = 32 + (k - 4) * 8;
+                    emit_u8(j, 0x4C); emit_u8(j, 0x8B); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)src_off);
+                    emit_u8(j, 0x4C); emit_u8(j, 0x89); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)dst_off);
+                }
+
+                if (num_args > 0) {
+                    int off0 = alloc_space + (num_args - 1) * 8;
+                    emit_u8(j, 0x48); emit_u8(j, 0x8B); emit_u8(j, 0x4C); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off0);
+                }
+                if (num_args > 1) {
+                    int off1 = alloc_space + (num_args - 2) * 8;
+                    emit_u8(j, 0x48); emit_u8(j, 0x8B); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off1);
+                }
+                if (num_args > 2) {
+                    int off2 = alloc_space + (num_args - 3) * 8;
+                    emit_u8(j, 0x4C); emit_u8(j, 0x8B); emit_u8(j, 0x44); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off2);
+                }
+                if (num_args > 3) {
+                    int off3 = alloc_space + (num_args - 4) * 8;
+                    emit_u8(j, 0x4C); emit_u8(j, 0x8B); emit_u8(j, 0x4C); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off3);
+                }
+
                 emit_u8(j, 0xE8);
                 size_t call_pos = j->size;
                 emit_u32(j, 0);
-                emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xC4); emit_u8(j, 0x20);
+
+                int total_cleanup = alloc_space + num_args * 8;
+                emit_u8(j, 0x48); emit_u8(j, 0x81); emit_u8(j, 0xC4); emit_u32(j, (uint32_t)total_cleanup);
 
                 if (g_user_func_reloc_count < MAX_USER_FUNC_RELOCS) {
                     UserFuncReloc* ufr = &g_user_func_relocs[g_user_func_reloc_count++];

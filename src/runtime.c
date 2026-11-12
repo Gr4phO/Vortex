@@ -9,14 +9,41 @@ bool g_has_last_symtab = false;
 
 jmp_buf g_error_jmp;
 bool g_in_repl = false;
+static bool g_is_packaged_app = false;
+
+static void vortex_wait_on_standalone_error(const char* msg) {
+#ifdef _WIN32
+    fflush(stderr);
+    HWND console_wnd = GetConsoleWindow();
+    HANDLE hErr = GetStdHandle(STD_ERROR_HANDLE);
+    DWORD err_type = (hErr != NULL && hErr != INVALID_HANDLE_VALUE) ? GetFileType(hErr) : FILE_TYPE_UNKNOWN;
+    DWORD pids[2];
+    DWORD proc_count = (console_wnd != NULL) ? GetConsoleProcessList(pids, 2) : 0;
+
+    if (g_is_packaged_app && console_wnd == NULL && err_type == FILE_TYPE_UNKNOWN) {
+        const char* text = (msg && msg[0]) ? msg : "Vortex initialization or runtime execution failed.";
+        MessageBoxA(NULL, text, "Vortex Runtime Error", MB_OK | MB_ICONERROR);
+    } else if (g_is_packaged_app && console_wnd != NULL && proc_count == 1 && err_type == FILE_TYPE_CHAR) {
+        fprintf(stderr, "\n[VORTEX] Initialization or runtime error encountered. Press Enter to exit...\n");
+        fflush(stderr);
+        int ch = getchar();
+        (void)ch;
+    }
+#else
+    (void)msg;
+    fflush(stderr);
+#endif
+}
 
 void vortex_error(const char* msg) {
     if (msg && msg[0]) {
         fprintf(stderr, "%s\n", msg);
     }
+    fflush(stderr);
     if (g_in_repl) {
         longjmp(g_error_jmp, 1);
     } else {
+        vortex_wait_on_standalone_error(msg);
         exit(1);
     }
 }
@@ -107,25 +134,37 @@ int64_t vortex_gui_window(int64_t title_ptr, int64_t width, int64_t height) {
         wc.lpszClassName = "VortexWindowClass";
         wc.hCursor = LoadCursor(NULL, IDC_ARROW);
         wc.style = CS_HREDRAW | CS_VREDRAW;
-        RegisterClassA(&wc);
+        if (!RegisterClassA(&wc)) {
+            fprintf(stderr, "[VORTEX GUI ERROR] RegisterClassA failed (Win32 error %lu)\n", (unsigned long)GetLastError());
+            vortex_error("");
+        }
         g_win_class_registered = true;
     }
 
     VortexWindow* w = (VortexWindow*)calloc(1, sizeof(VortexWindow));
+    if (!w) {
+        fprintf(stderr, "[VORTEX GUI ERROR] Out of memory allocating VortexWindow\n");
+        vortex_error("");
+    }
     w->width = (int)width;
     w->height = (int)height;
     w->is_open = true;
-    strncpy(w->title, title, sizeof(w->title) - 1);
+    if (title) strncpy(w->title, title, sizeof(w->title) - 1);
 
     RECT rc = {0, 0, w->width, w->height};
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
 
     w->hwnd = CreateWindowExA(
-        0, "VortexWindowClass", title,
+        0, "VortexWindowClass", title ? title : "Vortex",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
         NULL, NULL, hInst, NULL
     );
+    if (!w->hwnd) {
+        fprintf(stderr, "[VORTEX GUI ERROR] CreateWindowExA failed (Win32 error %lu)\n", (unsigned long)GetLastError());
+        free(w);
+        vortex_error("");
+    }
 
     SetWindowLongPtr(w->hwnd, GWLP_USERDATA, (LONG_PTR)w);
 
@@ -141,6 +180,15 @@ int64_t vortex_gui_window(int64_t title_ptr, int64_t width, int64_t height) {
     bmi.bmiHeader.biCompression = BI_RGB;
 
     w->bitmap = CreateDIBSection(w->mem_dc, &bmi, DIB_RGB_COLORS, (void**)&w->pixels, NULL, 0);
+    if (!w->hdc || !w->mem_dc || !w->bitmap || !w->pixels) {
+        fprintf(stderr, "[VORTEX GUI ERROR] Failed to create GDI framebuffer (Win32 error %lu)\n", (unsigned long)GetLastError());
+        if (w->bitmap) DeleteObject(w->bitmap);
+        if (w->mem_dc) DeleteDC(w->mem_dc);
+        if (w->hdc) ReleaseDC(w->hwnd, w->hdc);
+        DestroyWindow(w->hwnd);
+        free(w);
+        vortex_error("");
+    }
     SelectObject(w->mem_dc, w->bitmap);
 
     w->font = CreateFontA(17, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
@@ -195,7 +243,6 @@ int64_t vortex_gui_present(int64_t win_ptr) {
     if (!w) return 0;
     BitBlt(w->hdc, 0, 0, w->width, w->height, w->mem_dc, 0, 0, SRCCOPY);
     w->mouse_clicked = false;
-    Sleep(16); // 60 FPS cap
     return 0;
 }
 #else
@@ -334,7 +381,6 @@ int64_t vortex_gui_present(int64_t win_ptr) {
     XPutImage(w->dpy, w->win, w->gc, w->ximage, 0, 0, 0, 0, (unsigned int)w->width, (unsigned int)w->height);
     XFlush(w->dpy);
     w->mouse_clicked = false;
-    usleep(16000); // 60 FPS cap (~16 ms)
     return 0;
 }
 #else
@@ -738,18 +784,16 @@ BuiltinFunc* builtin_find(const char* name) {
 /* --- Source / File JIT Execution --- */
 int execute_vortex_source(const char* source) {
     arena_init();
+    if (!g_in_repl) {
+        g_struct_type_count = 0;
+    }
     g_user_func_count = 0;
     g_user_func_reloc_count = 0;
     g_ffi_func_count = 0;
     g_literal_string_count = 0;
 
     Lexer lexer;
-    lexer.src = source;
-    lexer.pos = 0;
-    lexer.len = strlen(source);
-    lexer.line = 1;
-    lexer.col = 1;
-    next_token(&lexer);
+    lexer_init(&lexer, source);
 
     SymbolTable symtab;
     memset(&symtab, 0, sizeof(symtab));
@@ -889,36 +933,51 @@ bool check_and_run_embedded_payload(int argc, char** argv) {
         return false;
     }
 
+    g_is_packaged_app = true;
+
     if (footer.payload_offset >= (uint64_t)(file_size - sizeof(VortexPackageFooter))) {
         fclose(f);
-        return false;
+        fprintf(stderr, "[VORTEX PACKAGE ERROR] Invalid embedded payload offset (%llu)\n",
+                (unsigned long long)footer.payload_offset);
+        vortex_error("");
     }
 
     if (fseek(f, (long)footer.payload_offset, SEEK_SET) != 0) {
         fclose(f);
-        return false;
+        fprintf(stderr, "[VORTEX PACKAGE ERROR] Failed to seek to embedded payload\n");
+        vortex_error("");
     }
 
     VortexPackageHeader hdr;
     if (fread(&hdr, sizeof(hdr), 1, f) != 1) {
         fclose(f);
-        return false;
+        fprintf(stderr, "[VORTEX PACKAGE ERROR] Failed to read embedded package header\n");
+        vortex_error("");
     }
 
     if (memcmp(hdr.header_magic, VORTEX_PACK_MAGIC_HEADER, 4) != 0) {
         fclose(f);
-        return false;
+        fprintf(stderr, "[VORTEX PACKAGE ERROR] Corrupted package header magic\n");
+        vortex_error("");
+    }
+
+    if (hdr.version != VORTEX_PACK_VERSION) {
+        fclose(f);
+        fprintf(stderr, "[VORTEX PACKAGE ERROR] Unsupported package version (%u)\n", hdr.version);
+        vortex_error("");
     }
 
     if (hdr.source_len == 0 || hdr.source_len > 100 * 1024 * 1024) {
         fclose(f);
-        return false;
+        fprintf(stderr, "[VORTEX PACKAGE ERROR] Invalid embedded source size (%u bytes)\n", hdr.source_len);
+        vortex_error("");
     }
 
     char* src_buf = (char*)malloc(hdr.source_len + 1);
     if (!src_buf) {
         fclose(f);
-        return false;
+        fprintf(stderr, "[VORTEX PACKAGE ERROR] Out of memory loading embedded payload (%u bytes)\n", hdr.source_len);
+        vortex_error("");
     }
 
     size_t read_bytes = fread(src_buf, 1, hdr.source_len, f);
@@ -927,11 +986,17 @@ bool check_and_run_embedded_payload(int argc, char** argv) {
 
     if (read_bytes != hdr.source_len) {
         free(src_buf);
-        return false;
+        fprintf(stderr, "[VORTEX PACKAGE ERROR] Truncated embedded payload (%zu/%u bytes read)\n",
+                read_bytes, hdr.source_len);
+        vortex_error("");
     }
 
     int res = execute_vortex_source(src_buf);
     free(src_buf);
+    if (res != 0) {
+        fprintf(stderr, "[VORTEX PACKAGE ERROR] Packaged application exited with status %d\n", res);
+        vortex_wait_on_standalone_error("Packaged application initialization or execution failed.");
+    }
     exit(res);
     return true;
 }
@@ -964,19 +1029,33 @@ int vortex_cmd_build(int argc, char** argv) {
         fprintf(stderr, "[VORTEX BUILD ERROR] Cannot open source file '%s'\n", input_path);
         return 1;
     }
-    fseek(in_f, 0, SEEK_END);
+    if (fseek(in_f, 0, SEEK_END) != 0) {
+        fclose(in_f);
+        fprintf(stderr, "[VORTEX BUILD ERROR] Failed to seek source file '%s'\n", input_path);
+        return 1;
+    }
     long src_len = ftell(in_f);
+    if (src_len <= 0) {
+        fclose(in_f);
+        fprintf(stderr, "[VORTEX BUILD ERROR] Source file '%s' is empty or unreadable\n", input_path);
+        return 1;
+    }
     fseek(in_f, 0, SEEK_SET);
 
-    char* src_buf = (char*)malloc(src_len + 1);
+    char* src_buf = (char*)malloc((size_t)src_len + 1);
     if (!src_buf) {
         fclose(in_f);
         fprintf(stderr, "[VORTEX BUILD ERROR] Out of memory reading source file\n");
         return 1;
     }
-    size_t r = fread(src_buf, 1, src_len, in_f);
+    size_t r = fread(src_buf, 1, (size_t)src_len, in_f);
     src_buf[r] = '\0';
     fclose(in_f);
+    if (r == 0) {
+        free(src_buf);
+        fprintf(stderr, "[VORTEX BUILD ERROR] Failed to read source file '%s'\n", input_path);
+        return 1;
+    }
 
     char self_path[1024] = {0};
 #ifdef _WIN32
@@ -1013,6 +1092,12 @@ int vortex_cmd_build(int argc, char** argv) {
             runtime_clean_size = (long)prev_footer.payload_offset;
         }
     }
+    if (runtime_clean_size <= 0) {
+        fprintf(stderr, "[VORTEX BUILD ERROR] Invalid base runtime executable size\n");
+        fclose(self_f);
+        free(src_buf);
+        return 1;
+    }
     fseek(self_f, 0, SEEK_SET);
 
     FILE* out_f = fopen(output_path, "wb");
@@ -1030,7 +1115,13 @@ int vortex_cmd_build(int argc, char** argv) {
         size_t chunk = (remaining < (long)sizeof(copy_buf)) ? (size_t)remaining : sizeof(copy_buf);
         size_t n = fread(copy_buf, 1, chunk, self_f);
         if (n == 0) break;
-        fwrite(copy_buf, 1, n, out_f);
+        if (fwrite(copy_buf, 1, n, out_f) != n) {
+            fprintf(stderr, "[VORTEX BUILD ERROR] Write error while copying base runtime\n");
+            fclose(self_f);
+            fclose(out_f);
+            free(src_buf);
+            return 1;
+        }
         remaining -= (long)n;
     }
     fclose(self_f);
@@ -1044,17 +1135,26 @@ int vortex_cmd_build(int argc, char** argv) {
     hdr.flags = 0;
     hdr.num_structs = (uint32_t)g_struct_type_count;
     hdr.num_constants = 0;
-    hdr.source_len = (uint32_t)src_len;
+    hdr.source_len = (uint32_t)r;
 
-    fwrite(&hdr, sizeof(hdr), 1, out_f);
-    fwrite(src_buf, 1, src_len, out_f);
+    if (fwrite(&hdr, sizeof(hdr), 1, out_f) != 1 ||
+        fwrite(src_buf, 1, r, out_f) != r) {
+        fprintf(stderr, "[VORTEX BUILD ERROR] Failed to write embedded payload to '%s'\n", output_path);
+        fclose(out_f);
+        free(src_buf);
+        return 1;
+    }
     free(src_buf);
 
     // 3. Append fixed 16-byte footer
     VortexPackageFooter footer;
     footer.payload_offset = payload_offset;
     memcpy(footer.footer_magic, VORTEX_PACK_MAGIC_FOOTER, 8);
-    fwrite(&footer, sizeof(footer), 1, out_f);
+    if (fwrite(&footer, sizeof(footer), 1, out_f) != 1) {
+        fprintf(stderr, "[VORTEX BUILD ERROR] Failed to write package footer to '%s'\n", output_path);
+        fclose(out_f);
+        return 1;
+    }
 
     long final_size = ftell(out_f);
     fclose(out_f);
@@ -1064,8 +1164,8 @@ int vortex_cmd_build(int argc, char** argv) {
 #endif
 
     printf("[VORTEX BUILD] Executable standalone generated successfully: %s\n", output_path);
-    printf("               Runtime: %ld bytes | Payload: %ld bytes | Total: %ld bytes\n",
-           runtime_clean_size, src_len + (long)sizeof(hdr) + (long)sizeof(footer), final_size);
+    printf("               Runtime: %ld bytes | Payload: %zu bytes | Total: %ld bytes\n",
+           runtime_clean_size, r + sizeof(hdr) + sizeof(footer), final_size);
     printf("               Payload offset: %llu (0x%llX)\n",
            (unsigned long long)payload_offset, (unsigned long long)payload_offset);
     printf("               Zero external dependencies. Sub-millisecond instant startup ready.\n");

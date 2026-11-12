@@ -509,6 +509,7 @@ int64_t vortex_str_from_i64(int64_t n);
 int64_t vortex_str_from_f32(int64_t f_bits);
 
 /* --- src/lexer_parser.c --- */
+void lexer_init(Lexer* lex, const char* source);
 void next_token(Lexer* lex);
 VortexStructType* struct_type_find(const char* name);
 VortexStructType* struct_type_find_by_id(int id);

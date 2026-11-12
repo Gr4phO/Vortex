@@ -25,7 +25,28 @@ static void unescape_string(char* dst, const char* src) {
     *dst = '\0';
 }
 
+void lexer_init(Lexer* lex, const char* source) {
+    lex->src = source ? source : "";
+    lex->pos = 0;
+    lex->len = strlen(lex->src);
+    lex->line = 1;
+    lex->col = 1;
+    if (lex->len >= 3 &&
+        (unsigned char)lex->src[0] == 0xEF &&
+        (unsigned char)lex->src[1] == 0xBB &&
+        (unsigned char)lex->src[2] == 0xBF) {
+        lex->pos = 3;
+    }
+    next_token(lex);
+}
+
 void next_token(Lexer* lex) {
+    if (lex->pos == 0 && lex->len >= 3 &&
+        (unsigned char)lex->src[0] == 0xEF &&
+        (unsigned char)lex->src[1] == 0xBB &&
+        (unsigned char)lex->src[2] == 0xBF) {
+        lex->pos = 3;
+    }
     while (lex->pos < lex->len) {
         char c = lex->src[lex->pos];
         if (c == ' ' || c == '\t' || c == '\r') {
@@ -876,12 +897,26 @@ void parse_statement(Compiler* c) {
 
         void* lib_handle = vortex_load_dynlib(lib_name);
         if (!lib_handle) {
-            fprintf(stderr, "[VORTEX FFI ERROR] Cannot load dynamic library '%s' for extern function '%s' at line %d\n", lib_name, fn_name, l->cur.line);
+#ifdef _WIN32
+            fprintf(stderr, "[VORTEX FFI ERROR] Cannot load dynamic library '%s' for extern function '%s' at line %d (Win32 error %lu)\n",
+                    lib_name, fn_name, l->cur.line, (unsigned long)GetLastError());
+#else
+            const char* dl_err = dlerror();
+            fprintf(stderr, "[VORTEX FFI ERROR] Cannot load dynamic library '%s' for extern function '%s' at line %d (%s)\n",
+                    lib_name, fn_name, l->cur.line, dl_err ? dl_err : "unknown dlopen error");
+#endif
             vortex_error("");
         }
         void* fn_ptr = vortex_resolve_symbol(lib_handle, fn_name);
         if (!fn_ptr) {
-            fprintf(stderr, "[VORTEX FFI ERROR] Symbol '%s' not found in dynamic library '%s' at line %d\n", fn_name, lib_name, l->cur.line);
+#ifdef _WIN32
+            fprintf(stderr, "[VORTEX FFI ERROR] Symbol '%s' not found in dynamic library '%s' at line %d (Win32 error %lu)\n",
+                    fn_name, lib_name, l->cur.line, (unsigned long)GetLastError());
+#else
+            const char* dl_err = dlerror();
+            fprintf(stderr, "[VORTEX FFI ERROR] Symbol '%s' not found in dynamic library '%s' at line %d (%s)\n",
+                    fn_name, lib_name, l->cur.line, dl_err ? dl_err : "unknown dlsym error");
+#endif
             vortex_error("");
         }
 
