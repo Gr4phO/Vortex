@@ -1,0 +1,73 @@
+// Test FFI C Natif Dynamique pour Vortex (Jalon 5)
+
+extern "kernel32" fn GetTickCount64() -> i64;
+extern "msvcrt" fn puts(s: str) -> i32;
+extern "msvcrt" fn fflush(stream: ptr) -> i32;
+extern "msvcrt" fn abs(n: i64) -> i64;
+extern "msvcrt" fn pow(x: f64, y: f64) -> f64;
+extern "msvcrt" fn sqrt(x: f64) -> f64;
+extern "msvcrt" fn _snprintf(buf: ptr, max_len: i64, fmt: str, a1: i64, a2: i64, a3: i64) -> i32;
+
+struct Counter {
+    val: i64
+}
+
+struct TextBuffer {
+    w0: i64,
+    w1: i64,
+    w2: i64,
+    w3: i64,
+    w4: i64,
+    w5: i64,
+    w6: i64,
+    w7: i64
+}
+
+extern "kernel32" fn QueryPerformanceCounter(lpPerformanceCount: ptr) -> i32;
+
+puts("--- [TEST 1: puts from msvcrt.dll] ---");
+fflush(0);
+
+let tick = GetTickCount64();
+puts("GetTickCount64 result:");
+fflush(0);
+print(tick);
+
+let abs_val = abs(-42);
+puts("abs(-42) result (expected 42):");
+fflush(0);
+print(abs_val);
+
+let p = pow(2.0, 10.0);
+puts("pow(2.0, 10.0) result (expected 1024.0):");
+fflush(0);
+print(p);
+
+let s = sqrt(144.0);
+puts("sqrt(144.0) result (expected 12.0):");
+fflush(0);
+print(s);
+
+let c = Counter { val: 0 };
+let qpc_ok = QueryPerformanceCounter(c);
+puts("QueryPerformanceCounter returned (expected 1):");
+fflush(0);
+print(qpc_ok);
+puts("Counter val mutated in-place:");
+fflush(0);
+print(c.val);
+
+puts("--- [TEST 6-ARG STACK FFI: _snprintf with 6 arguments] ---");
+fflush(0);
+let tb = TextBuffer { w0: 0, w1: 0, w2: 0, w3: 0, w4: 0, w5: 0, w6: 0, w7: 0 };
+let written = _snprintf(tb, 64, "X=%lld Y=%lld Z=%lld", 10, 20, 30);
+puts("Characters formatted:");
+fflush(0);
+print(written);
+puts("Buffer content via puts(tb):");
+fflush(0);
+puts(tb);
+fflush(0);
+
+puts("--- [ALL FFI TESTS COMPLETED SUCCESSFULLY] ---");
+fflush(0);

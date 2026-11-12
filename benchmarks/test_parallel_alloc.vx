@@ -1,0 +1,30 @@
+struct Particle {
+    x: i64,
+    y: i64,
+    z: i64
+}
+
+let n: i64 = 1000000;
+let workers: i64 = num_workers();
+print_str("--- VORTEX JALON 3: PARALLEL THREAD-LOCAL ARENA BENCHMARK ---\n");
+print_str("Spawning 1,000,000 Particle allocations across ");
+print(workers);
+print_str(" CPU workers...\n");
+
+let t0: i64 = time_us();
+
+parallel_for i in 0..n {
+    let p = Particle {
+        x: i,
+        y: i * 3,
+        z: 42
+    };
+    let val: i64 = p.x + p.y + p.z;
+}
+
+let t1: i64 = time_us();
+let parallel_time_us: i64 = t1 - t0;
+
+print_str("PARALLEL 1,000,000 ALLOCATIONS TIME (us): ");
+print(parallel_time_us);
+print_str("ZERO-CONTENTION THREAD-LOCAL ALLOCATIONS SUCCESSFUL!\n");

@@ -1,0 +1,27 @@
+# Compiled binaries and build artifacts
+vortex
+*.exe
+*.out
+*.o
+*.obj
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.dll
+*.so
+*.dylib
+build/
+dist/
+target/
+
+# Temporary logs, backups, and IDE files
+*.log
+*.tmp
+*.bak
+*_backup*
+.vscode/
+.vs/
+.idea/
+.DS_Store
+Thumbs.db

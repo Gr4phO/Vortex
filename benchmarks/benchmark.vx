@@ -1,0 +1,22 @@
+// Benchmark Étalon : Intégration Numérique Riemann pour Pi (100,000,000 itérations)
+let n: i64 = 100000000;
+let step: f32 = 0.00000001;
+let mut sum: f32 = 0.0;
+let mut x: f32 = 0.000000005;
+
+let t0: i64 = time_us();
+
+for i in 0..n {
+    sum = sum + 4.0 / (1.0 + x * x);
+    x = x + step;
+}
+
+let t1: i64 = time_us();
+let loop_time_us: i64 = t1 - t0;
+let pi: f32 = sum * step;
+
+print_str("ALGO: RIEMANN_PI_100M\n");
+print_str("RESULT_PI: ");
+print(pi);
+print_str("LOOP_TIME_US: ");
+print(loop_time_us);

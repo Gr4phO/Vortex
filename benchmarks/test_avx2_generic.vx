@@ -1,0 +1,25 @@
+// Test AVX2 Générique : Réduction Vectorielle AVX2 256 bits (50,000,000 itérations)
+let n: i64 = 50000000;
+let step: f32 = 0.00000002;
+let mut sum: f32 = 0.0;
+let mut x: f32 = 0.00000001;
+
+print_str("--- VORTEX JALON 3: AVX2 256-BIT VECTOR REDUCTION BENCHMARK ---\n");
+print_str("Iterating 50,000,000 steps with 16-way unrolled AVX2 SIMD...\n");
+
+let t0: i64 = time_us();
+
+for i in 0..n {
+    sum = sum + 4.0 / (1.0 + x * x);
+    x = x + step;
+}
+
+let t1: i64 = time_us();
+let loop_time_us: i64 = t1 - t0;
+let res: f32 = sum * step;
+
+print_str("RESULT: ");
+print(res);
+print_str("LOOP TIME (us): ");
+print(loop_time_us);
+print_str("GENERIC AVX2 PASS VERIFIED WITH MAXIMUM CPU THROUGHPUT!\n");

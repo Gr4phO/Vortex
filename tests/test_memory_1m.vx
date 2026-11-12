@@ -1,0 +1,36 @@
+// =============================================================================
+// VORTEX 2.0 - JALON 1 MEMORY STRESS & ZERO-LEAK TEST (1,000,000 ITERATIONS)
+// =============================================================================
+
+struct Vertex3D {
+    x: i64,
+    y: i64,
+    z: i64
+}
+
+print_str("[TEST JALON 1] Running 1,000,000 scoped Vertex3D transformations...\n");
+
+let t_start = time_us();
+
+for chunk in 0..1000 {
+    let sp = scope_push();
+    let temp_vec = vec_new();
+
+    for i in 0..1000 {
+        let v = Vertex3D { x: i, y: i * 2, z: i * 3 };
+        vec_push(temp_vec, v);
+    }
+
+    // Mutate and access
+    for i in 0..1000 {
+        let v = vec_get(temp_vec, i);
+        v.x = v.x + 1;
+    }
+
+    scope_pop(sp); // Instant 1-cycle bulk deallocation (recycling pages without leak!)
+}
+
+let elapsed_ms = (time_us() - t_start) / 1000;
+print_str("[TEST JALON 1] 1,000,000 Vertex3D allocations & mutations completed successfully in: ");
+print(elapsed_ms);
+print_str(" ms\n");

@@ -1,0 +1,16 @@
+struct Point3D {
+    x: i64,
+    y: i64,
+    z: i64
+}
+
+let p = Point3D { x: 10, y: 25, z: 99 };
+print(p.x);
+print(p.y);
+print(p.z);
+
+p.x = 42;
+print(p.x);
+
+print(struct_size("Point3D"));
+print(struct_align("Point3D"));

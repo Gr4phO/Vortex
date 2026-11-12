@@ -1,0 +1,204 @@
+// =============================================================================
+// VORTEX 2.0 - ULTRA-DETAILED 3D TORUS MESH RENDERING (app_3d.vx)
+// Single-File Autonomous 3D Real-Time Graphics Engine (Zero External Dependencies)
+// Refactored with JALON 1: Typed Structs & 2MB Paged Region Arena
+// =============================================================================
+
+struct Vertex3D {
+    x: i64,
+    y: i64,
+    z: i64
+}
+
+let width = 640;
+let height = 480;
+let win = gui_window("Vortex 2.0 - Ultra-Detailed 3D Engine (JIT)", width, height);
+gui_set_pos(win, 80, 140);
+
+// 1. Procedural 3D Mesh Generation : Torus (36 Meridians x 24 Parallels = 864 Vertices)
+let num_u = 36;
+let num_v = 24;
+let total_verts = 864; // 36 * 24
+
+let r_major = 135;
+let r_minor = 55;
+
+let base_verts = vec_new();
+let proj_verts = vec_new();
+
+print_str("[VORTEX 3D] Generating 3D Torus Mesh with struct Vertex3D (864 vertices, 2592 edges)...\n");
+
+for u in 0..num_u {
+    let u_deg = u * 100; // 0..3500 tenths of deg (0..350 deg)
+    let cos_u = math_cos(u_deg);
+    let sin_u = math_sin(u_deg);
+
+    for v in 0..num_v {
+        let v_deg = v * 150; // 0..3450 tenths of deg (0..345 deg)
+        let cos_v = math_cos(v_deg);
+        let sin_v = math_sin(v_deg);
+
+        let rad = r_major + (r_minor * cos_v) / 4096;
+        let px = (rad * cos_u) / 4096;
+        let py = (rad * sin_u) / 4096;
+        let pz = (r_minor * sin_v) / 4096;
+
+        let bv = Vertex3D { x: px, y: py, z: pz };
+        vec_push(base_verts, bv);
+
+        let pv = Vertex3D { x: 0, y: 0, z: 0 };
+        vec_push(proj_verts, pv);
+    }
+}
+
+// Color Palette
+let col_bg       = gui_rgb(10, 12, 18);
+let col_hud_bg   = gui_rgb(18, 24, 38);
+let col_hud_bord = gui_rgb(38, 52, 80);
+let col_white    = gui_rgb(240, 245, 255);
+let col_cyan     = gui_rgb(56, 220, 255);
+let col_green    = gui_rgb(74, 222, 128);
+let col_purple   = gui_rgb(168, 85, 247);
+let col_deep_bl  = gui_rgb(30, 45, 90);
+let col_muted    = gui_rgb(148, 163, 184);
+
+let mut rot_x = 0;
+let mut rot_y = 0;
+let mut rot_z = 0;
+
+let mut fps_counter = 0;
+let mut display_fps = 60;
+let mut last_fps_time = time_us();
+let mut frame_duration_us = 0;
+
+print_str("[VORTEX 3D] Entering Real-Time 3D Render Loop...\n");
+
+while gui_is_open(win) {
+    let t_start = time_us();
+
+    // 1. Advance 3-Axis Rotation Angles
+    rot_x = (rot_x + 12) % 3600;
+    rot_y = (rot_y + 18) % 3600;
+    rot_z = (rot_z + 8) % 3600;
+
+    let cx = math_cos(rot_x);
+    let sx = math_sin(rot_x);
+    let cy = math_cos(rot_y);
+    let sy = math_sin(rot_y);
+    let cz = math_cos(rot_z);
+    let sz = math_sin(rot_z);
+
+    // 2. Clear Screen
+    gui_clear(win, col_bg);
+
+    // 3. Transform & Project All 864 Vertices using struct Vertex3D
+    let cam_dist = 420;
+    let cam_z = 320;
+
+    for i in 0..total_verts {
+        let b = vec_get(base_verts, i);
+        let px = b.x;
+        let py = b.y;
+        let pz = b.z;
+
+        // Rotation X
+        let y1 = (py * cx - pz * sx) / 4096;
+        let z1 = (py * sx + pz * cx) / 4096;
+
+        // Rotation Y
+        let x2 = (px * cy + z1 * sy) / 4096;
+        let z2 = (0 - px * sy + z1 * cy) / 4096;
+
+        // Rotation Z
+        let x3 = (x2 * cz - y1 * sz) / 4096;
+        let y3 = (x2 * sz + y1 * cz) / 4096;
+        let z3 = z2;
+
+        // Perspective Projection
+        let denom = z3 + cam_z;
+        let mut sx_proj = 320;
+        let mut sy_proj = 255;
+        if denom > 10 {
+            sx_proj = 320 + (x3 * cam_dist) / denom;
+            sy_proj = 255 + (y3 * cam_dist) / denom;
+        }
+
+        let pv = vec_get(proj_verts, i);
+        pv.x = sx_proj;
+        pv.y = sy_proj;
+        pv.z = z3;
+    }
+
+    // 4. Render 2,592 Wireframe 3D Edges with Depth Shading
+    for u in 0..num_u {
+        let next_u = (u + 1) % num_u;
+        let row_curr = u * num_v;
+        let row_next = next_u * num_v;
+
+        for v in 0..num_v {
+            let next_v = (v + 1) % num_v;
+
+            let idx0 = row_curr + v;
+            let idx_u = row_next + v;
+            let idx_v = row_curr + next_v;
+
+            let p0 = vec_get(proj_verts, idx0);
+            let pu = vec_get(proj_verts, idx_u);
+            let pv = vec_get(proj_verts, idx_v);
+
+            let x0 = p0.x;
+            let y0 = p0.y;
+            let z0 = p0.z;
+
+            let xu = pu.x;
+            let yu = pu.y;
+
+            let xv = pv.x;
+            let yv = pv.y;
+
+            // Depth-based color shading
+            let mut col_edge = col_deep_bl;
+            if z0 > 40 {
+                col_edge = col_cyan;
+            } else if z0 > 0 - 20 {
+                col_edge = col_purple;
+            }
+
+            // Draw longitude edge
+            gui_draw_line(win, x0, y0, xu, yu, col_edge);
+
+            // Draw latitude edge
+            gui_draw_line(win, x0, y0, xv, yv, col_edge);
+        }
+    }
+
+    // 5. Draw Top HUD Bar with Real-Time FPS and Telemetry
+    gui_draw_rect(win, 0, 0, width, 42, col_hud_bg);
+    gui_draw_rect(win, 0, 42, width, 2, col_hud_bord);
+
+    gui_draw_text(win, "FPS :", 20, 12, col_white);
+    gui_draw_number(win, display_fps, 62, 12, col_green);
+
+    gui_draw_text(win, "|  Frame :", 110, 12, col_muted);
+    let frame_ms = frame_duration_us / 1000;
+    gui_draw_number(win, frame_ms, 175, 12, col_cyan);
+    gui_draw_text(win, "ms", 200, 12, col_muted);
+
+    gui_draw_text(win, "|  Vertices : 864  |  Edges : 2592", 230, 12, col_muted);
+    gui_draw_text(win, "VORTEX 2.0 (JIT - STRUCT)", 465, 12, col_cyan);
+
+    // 6. FPS Calculation
+    fps_counter = fps_counter + 1;
+    let now = time_us();
+    if now - last_fps_time >= 1000000 {
+        display_fps = fps_counter;
+        fps_counter = 0;
+        last_fps_time = now;
+    }
+
+    // 7. Measure Render Time and Present
+    frame_duration_us = time_us() - t_start;
+    gui_present(win);
+}
+
+print_str("[VORTEX 3D] Window closed cleanly.\n");

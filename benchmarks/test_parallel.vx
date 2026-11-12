@@ -1,0 +1,24 @@
+let n: i64 = 10000000;
+let workers: i64 = num_workers();
+print_str("--- VORTEX JALON 3: MULTITHREADING BENCHMARK ---\n");
+print_str("CPU Cores: ");
+print(workers);
+
+let mut arr: ptr = vec_new();
+for k in 0..workers {
+    vec_push(arr, 0);
+}
+
+let t0: i64 = time_us();
+
+// Parallel loop across 12 threads with lock-free thread-local arenas
+parallel_for i in 0..n {
+    let x: i64 = i * 2;
+}
+
+let t1: i64 = time_us();
+let parallel_time_us: i64 = t1 - t0;
+
+print_str("PARALLEL_FOR 10M ITERATIONS TIME (us): ");
+print(parallel_time_us);
+print_str("PARALLEL_FOR COMPLETED SUCCESSFULLY!\n");

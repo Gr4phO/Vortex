@@ -1,0 +1,17 @@
+struct Point3D {
+    x: i64,
+    y: i64,
+    z: i64
+}
+
+let v = vec_new();
+
+for i in 0..5 {
+    let p = Point3D { x: i * 10, y: i * 20, z: i * 30 };
+    vec_push(v, p);
+}
+
+let pt = vec_get(v, 2);
+pt.x = 999;
+let pt2 = vec_get(v, 2);
+print(pt2.x);

@@ -1,0 +1,174 @@
+// =============================================================================
+// VORTEX 2.0 INTERACTIVE APPLICATION (app.vx)
+// Architecture : Single-File Autonomous JIT Engine & Zero-Dependency Native GUI
+// =============================================================================
+
+// 1. User-Defined Functions : Mathematical & Recursive Algorithms
+fn fibonacci(n) {
+    if n <= 1 {
+        return n;
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+fn compute_power(base, exp) {
+    let mut res = 1;
+    let mut i = 0;
+    while i < exp {
+        res = res * base;
+        i = i + 1;
+    }
+    return res;
+}
+
+// 2. Data Structures Initialization (Zero-GC Scope-Arena)
+let sp_root = scope_push();
+
+let history = vec_new();
+let app_state = map_new();
+
+map_set(app_state, "clicks", 0);
+map_set(app_state, "fib_val", 0);
+map_set(app_state, "multiplier", 2);
+
+// 3. Color Palette Definitions (Modern Dark Theme)
+let col_bg       = gui_rgb(18, 22, 30);
+let col_header   = gui_rgb(26, 32, 44);
+let col_card     = gui_rgb(32, 40, 56);
+let col_border   = gui_rgb(48, 60, 84);
+let col_cyan     = gui_rgb(56, 189, 248);
+let col_green    = gui_rgb(74, 222, 128);
+let col_yellow   = gui_rgb(250, 204, 21);
+let col_white    = gui_rgb(241, 245, 249);
+let col_muted    = gui_rgb(148, 163, 184);
+
+// 4. Open Native Win32 Window (600x400 Framebuffer)
+let win = gui_window("Vortex 2.0 - High Performance Native GUI", 600, 400);
+gui_set_pos(win, 80, 160);
+
+let mut clicks = 0;
+let mut frame_count = 0;
+let mut current_fib = 0;
+let mut render_us = 0;
+
+print_str("[VORTEX GUI] Window initialized at x=80, y=160. Running 300-frame render throughput test...\n");
+
+// 1. Benchmark de débit de rendu (300 frames uncapped)
+let bench_start = time_us();
+for b in 0..300 {
+    gui_clear(win, col_bg);
+    gui_draw_rect(win, 0, 0, 600, 48, col_header);
+    gui_draw_rect(win, 0, 48, 600, 2, col_border);
+    gui_draw_text(win, "VORTEX 2.0  |  Autonomous Reactive GUI & Native JIT", 20, 15, col_white);
+    gui_draw_rect(win, 24, 70, 260, 175, col_card);
+    gui_draw_rect(win, 24, 70, 260, 3, col_cyan);
+    gui_draw_rect(win, 316, 70, 260, 175, col_card);
+    gui_draw_rect(win, 316, 70, 260, 3, col_green);
+    gui_draw_rect(win, 24, 265, 552, 105, col_card);
+    gui_draw_rect(win, 24, 265, 552, 3, col_yellow);
+}
+let bench_time = time_us() - bench_start;
+let mut avg_frame_us = bench_time / 300;
+if avg_frame_us == 0 {
+    avg_frame_us = 1;
+}
+let uncapped_fps = 1000000 / avg_frame_us;
+print_str("=== VORTEX GUI BENCHMARK RESULTS ===\n");
+print_str("300 Frames Render Time : ");
+print(bench_time / 1000);
+print_str(" ms\nAverage Frame Latency  : ");
+print(avg_frame_us);
+print_str(" us\nUncapped Throughput    : ");
+print(uncapped_fps);
+print_str(" FPS\n====================================\n");
+
+// 5. Interactive Event & Render Loop
+while gui_is_open(win) {
+    let f_start = time_us();
+    frame_count = frame_count + 1;
+
+    // A. Clear background
+    gui_clear(win, col_bg);
+
+    // B. Header Bar
+    gui_draw_rect(win, 0, 0, 600, 48, col_header);
+    gui_draw_rect(win, 0, 48, 600, 2, col_border);
+    gui_draw_text(win, "VORTEX 2.0  |  Autonomous Reactive GUI & Native JIT", 20, 15, col_white);
+
+    // C. Card 1: Interactive State & Button
+    gui_draw_rect(win, 24, 70, 260, 175, col_card);
+    gui_draw_rect(win, 24, 70, 260, 3, col_cyan);
+    gui_draw_text(win, "REACTIVE CONTROLLER", 40, 84, col_muted);
+
+    gui_draw_text(win, "Total User Clicks :", 40, 115, col_white);
+    gui_draw_number(win, clicks, 195, 115, col_cyan);
+
+    gui_draw_text(win, "Vector Item Count :", 40, 140, col_white);
+    let v_len = vec_len(history);
+    gui_draw_number(win, v_len, 195, 140, col_yellow);
+
+    // Immediate-Mode Interactive Button
+    if gui_button(win, 1, "Click: Compute & Append", 40, 180, 228, 42) {
+        clicks = clicks + 1;
+        vec_push(history, clicks);
+        map_set(app_state, "clicks", clicks);
+
+        // Run recursive algorithm in JIT
+        let mut fib_idx = clicks;
+        if fib_idx > 24 {
+            fib_idx = 24;
+        }
+        current_fib = fibonacci(fib_idx);
+        map_set(app_state, "fib_val", current_fib);
+
+        print_str("[EVENT] Button Clicked! clicks=");
+        print(clicks);
+        print_str("  fib=");
+        print(current_fib);
+    }
+
+    // D. Card 2: Real-Time JIT Mathematics & Render Stats
+    gui_draw_rect(win, 316, 70, 260, 175, col_card);
+    gui_draw_rect(win, 316, 70, 260, 3, col_green);
+    gui_draw_text(win, "REAL-TIME COMPUTATION", 332, 84, col_muted);
+
+    gui_draw_text(win, "Fibonacci (N) :", 332, 115, col_white);
+    gui_draw_number(win, current_fib, 475, 115, col_green);
+
+    let power_val = compute_power(2, clicks);
+    gui_draw_text(win, "Power 2^N :", 332, 140, col_white);
+    gui_draw_number(win, power_val, 475, 140, col_yellow);
+
+    gui_draw_text(win, "Render Frame :", 332, 165, col_white);
+    gui_draw_number(win, render_us, 475, 165, col_cyan);
+    gui_draw_text(win, "us", 520, 165, col_muted);
+
+    gui_draw_text(win, "Loop Frame :", 332, 190, col_white);
+    gui_draw_number(win, frame_count, 475, 190, col_muted);
+
+    // E. Card 3: Memory & Scope-Arena Diagnostic
+    gui_draw_rect(win, 24, 265, 552, 105, col_card);
+    gui_draw_rect(win, 24, 265, 552, 3, col_yellow);
+    gui_draw_text(win, "ZERO-GC ARCHITECTURE & DATA STRUCTURE MONITOR", 40, 280, col_muted);
+
+    gui_draw_text(win, "Flat Hash Map Status :", 40, 310, col_white);
+    let m_len = map_len(app_state);
+    gui_draw_number(win, m_len, 210, 310, col_green);
+    gui_draw_text(win, "entries active (open addressing)", 235, 310, col_muted);
+
+    let mut last_val = 0;
+    if v_len > 0 {
+        last_val = vec_get(history, v_len - 1);
+    }
+    gui_draw_text(win, "Last Appended Val :", 332, 335, col_white);
+    gui_draw_number(win, last_val, 475, 335, col_cyan);
+
+    render_us = time_us() - f_start;
+
+    // F. Blit to Screen & 60 FPS Frame Sync
+    gui_present(win);
+}
+
+// 6. Cleanup Scope-Arena
+scope_pop(sp_root);
+print_str("[VORTEX GUI] Window closed by user. Resources freed cleanly.\n");
