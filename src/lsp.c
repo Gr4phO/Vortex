@@ -1,6 +1,6 @@
 /*
  * VORTEX LANGUAGE SERVER PROTOCOL (vortex lsp)
- * JSON-RPC 2.0 over stdio reusing Vortex lexer_parser + ir_region_verify:
+ * JSON-RPC 2.0 over stdio reusing Vortex lexer + parser modules + ir_region_verify:
  * - Real-time diagnostics (syntax, type, unsafe rules, region escape, imports)
  * - Go-to-definition (local symbols + cross-file imported/package modules)
  * - Hover documentation (functions, structs, fields, variables, builtins, keywords)

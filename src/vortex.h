@@ -727,7 +727,7 @@ int64_t vortex_str_find(int64_t haystack_ptr, int64_t needle_ptr, int64_t start_
 int64_t vortex_str_to_i64(int64_t s_ptr);
 int64_t vortex_ptr_to_str(int64_t ptr_val);
 
-/* --- src/lexer_parser.c --- */
+/* --- src/lexer.c, src/modules.c, src/parser_expr.c, src/parser_stmt.c --- */
 void lexer_init(Lexer* lex, const char* source);
 void next_token(Lexer* lex);
 VortexStructType* struct_type_find(const char* name);

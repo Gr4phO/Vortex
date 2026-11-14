@@ -10,7 +10,7 @@ Vortex is a compiled-on-the-fly (`x86-64` JIT) systems and numerical computing l
   Source (.vx / REPL)
          │
          ▼
-  [1] Lexer & Type-Aware Recursive-Descent Parser (src/lexer_parser.c)
+  [1] Lexer, Modules & Recursive-Descent Parser (src/lexer.c, src/modules.c, src/parser_expr.c, src/parser_stmt.c)
          │  Emits 3-address virtual-register instructions (v0..vN)
          ▼
   [2] Loop Auto-Vectorizer Pass (src/ir_opt.c :: ir_loop_vectorize)

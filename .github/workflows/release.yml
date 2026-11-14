@@ -24,7 +24,7 @@ jobs:
           set VORTEX_VER=1.0.1
           if exist VERSION set /p VORTEX_VER=<VERSION
           for /f "tokens=* delims= " %%a in ("%VORTEX_VER%") do set VORTEX_VER=%%a
-          clang -std=c99 -Oz -s -flto -ffunction-sections -fdata-sections -Wl,--gc-sections -Wall -Wextra -DVORTEX_VERSION=\"%VORTEX_VER%\" src/arena.c src/lexer_parser.c src/ir_opt.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/runtime.c src/main.c -o releases/v1.0.0/vortex-windows-x64.exe -luser32 -lgdi32
+          clang -std=c99 -Oz -s -flto -ffunction-sections -fdata-sections -Wl,--gc-sections -Wall -Wextra -DVORTEX_VERSION=\"%VORTEX_VER%\" src/arena.c src/lexer.c src/modules.c src/parser_expr.c src/parser_stmt.c src/ir_opt.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/runtime.c src/main.c -o releases/v1.0.0/vortex-windows-x64.exe -luser32 -lgdi32
           copy /Y releases\v1.0.0\vortex-windows-x64.exe vortex.exe >nul
           .\releases\v1.0.0\vortex-windows-x64.exe --version
 

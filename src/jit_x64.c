@@ -122,37 +122,51 @@ int64_t vortex_ffi_symbol(int64_t lib_handle, int64_t sym_name_ptr) {
 #endif
 }
 
+static void vortex_ffi_require_fn(int64_t fn_ptr, const char* call_name) {
+    if (!fn_ptr) {
+        fprintf(stderr, "[VORTEX FFI ERROR] %s called with NULL function pointer\n", call_name);
+        vortex_error("");
+    }
+}
+
 int64_t vortex_ffi_call0(int64_t fn_ptr) {
+    vortex_ffi_require_fn(fn_ptr, "ffi_call0");
     typedef int64_t (*fn0_t)(void);
     return ((fn0_t)fn_ptr)();
 }
 
 int64_t vortex_ffi_call1(int64_t fn_ptr, int64_t a1) {
+    vortex_ffi_require_fn(fn_ptr, "ffi_call1");
     typedef int64_t (*fn1_t)(int64_t);
     return ((fn1_t)fn_ptr)(a1);
 }
 
 int64_t vortex_ffi_call2(int64_t fn_ptr, int64_t a1, int64_t a2) {
+    vortex_ffi_require_fn(fn_ptr, "ffi_call2");
     typedef int64_t (*fn2_t)(int64_t, int64_t);
     return ((fn2_t)fn_ptr)(a1, a2);
 }
 
 int64_t vortex_ffi_call3(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3) {
+    vortex_ffi_require_fn(fn_ptr, "ffi_call3");
     typedef int64_t (*fn3_t)(int64_t, int64_t, int64_t);
     return ((fn3_t)fn_ptr)(a1, a2, a3);
 }
 
 int64_t vortex_ffi_call4(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {
+    vortex_ffi_require_fn(fn_ptr, "ffi_call4");
     typedef int64_t (*fn4_t)(int64_t, int64_t, int64_t, int64_t);
     return ((fn4_t)fn_ptr)(a1, a2, a3, a4);
 }
 
 int64_t vortex_ffi_call5(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5) {
+    vortex_ffi_require_fn(fn_ptr, "ffi_call5");
     typedef int64_t (*fn5_t)(int64_t, int64_t, int64_t, int64_t, int64_t);
     return ((fn5_t)fn_ptr)(a1, a2, a3, a4, a5);
 }
 
 int64_t vortex_ffi_call6(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+    vortex_ffi_require_fn(fn_ptr, "ffi_call6");
     typedef int64_t (*fn6_t)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
     return ((fn6_t)fn_ptr)(a1, a2, a3, a4, a5, a6);
 }

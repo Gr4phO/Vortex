@@ -245,7 +245,7 @@ fn net_so_reuseaddr() -> i64 { return 4; }
 
 fn net_tcp_listen(port: i64, nonblocking: i64) -> i64 {
     let sock = net_socket_create();
-    if sock == -1 { return -1; }
+    if sock < 0 { return -1; }
     unsafe {
         let lib = net_sock_lib();
         let sol = net_sol_socket();
@@ -253,6 +253,14 @@ fn net_tcp_listen(port: i64, nonblocking: i64) -> i64 {
         let p_setsock = ffi_symbol(lib, "setsockopt");
         let p_bind = ffi_symbol(lib, "bind");
         let p_listen = ffi_symbol(lib, "listen");
+        if p_bind == 0 {
+            net_close(sock);
+            return -1;
+        }
+        if p_listen == 0 {
+            net_close(sock);
+            return -1;
+        }
         if p_setsock != 0 {
             let one = alloc(8) as i64;
             ptr_write32(one, 1);

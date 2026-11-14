@@ -131,6 +131,36 @@ int main(void) {
     /* Task 3 */
     int64_t n3 = v_n3;
     int64_t t3_0 = time_us();
+#ifdef BENCH_ARENA
+    const size_t page_cap = 2u * 1024u * 1024u;
+    size_t max_pages = ((size_t)n3 * sizeof(Node)) / page_cap + 8u;
+    uint8_t** pages = (uint8_t**)malloc(max_pages * sizeof(uint8_t*));
+    size_t page_count = 1u;
+    pages[0] = (uint8_t*)malloc(page_cap);
+    size_t page_off = 0u;
+    Node** nodes3 = (Node**)malloc((size_t)n3 * sizeof(Node*));
+    for (int64_t i = 0; i < n3; i++) {
+        if (page_off + sizeof(Node) > page_cap) {
+            pages[page_count] = (uint8_t*)malloc(page_cap);
+            page_count++;
+            page_off = 0u;
+        }
+        Node* p = (Node*)(pages[page_count - 1] + page_off);
+        page_off += sizeof(Node);
+        p->x = i;
+        p->y = i * 2;
+        p->z = i + 5;
+        nodes3[i] = p;
+    }
+    int64_t sum3 = 0;
+    for (int64_t i = 0; i < n3; i++) {
+        Node* p = nodes3[i];
+        sum3 += p->x + p->y + p->z;
+    }
+    for (size_t pi = 0; pi < page_count; pi++) free(pages[pi]);
+    free(pages);
+    free(nodes3);
+#else
     Node** nodes3 = (Node**)malloc((size_t)n3 * sizeof(Node*));
     for (int64_t i = 0; i < n3; i++) {
         Node* p = (Node*)malloc(sizeof(Node));
@@ -146,6 +176,7 @@ int main(void) {
     }
     for (int64_t i = 0; i < n3; i++) free(nodes3[i]);
     free(nodes3);
+#endif
     int64_t t3_1 = time_us();
     int64_t us3 = t3_1 - t3_0;
 

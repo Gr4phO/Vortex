@@ -12,7 +12,7 @@ $VortexBin = Join-Path $SuiteDir "bench_vortex_cli.exe"
 $clangBuild = Get-Command clang -ErrorAction SilentlyContinue
 if ($clangBuild) {
     Push-Location $RepoRoot
-    & clang -std=c99 -Os -Wall -Wextra -flto -ffunction-sections -fdata-sections src/arena.c src/lexer_parser.c src/ir_opt.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/runtime.c src/main.c -o $VortexBin -luser32 -lgdi32 "-Wl,--gc-sections" -s
+    & clang -std=c99 -Os -Wall -Wextra -flto -ffunction-sections -fdata-sections src/arena.c src/lexer.c src/modules.c src/parser_expr.c src/parser_stmt.c src/ir_opt.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/runtime.c src/main.c -o $VortexBin -luser32 -lgdi32 "-Wl,--gc-sections" -s
     Pop-Location
 } elseif (Test-Path (Join-Path $RepoRoot "vortex.exe")) {
     $VortexBin = Join-Path $RepoRoot "vortex.exe"
@@ -183,6 +183,34 @@ if ($clangCmd) {
         }
         $cVer2 = (cmd /c "clang --version 2>&1" | Select-Object -First 1).Trim()
         Add-BenchmarkResult -Language "C (-O3 -ffast-math)" -Toolchain "Clang -O3 -march=native -ffast-math ($cVer2)" -Status "Mesure localement" -CompileMs $swFast.Elapsed.TotalMilliseconds -BinaryKb $cfSizeKb -NumRuns $Runs -RunData $runsCFast
+    }
+
+    $cArenaExe = Join-Path $SuiteDir "bench_c_arena.exe"
+    $swArena = [System.Diagnostics.Stopwatch]::StartNew()
+    & clang -O3 -march=native -DBENCH_ARENA (Join-Path $SuiteDir "bench_c.c") -o $cArenaExe
+    $swArena.Stop()
+    if ($LASTEXITCODE -eq 0) {
+        $caSizeKb = (Get-Item $cArenaExe).Length / 1024.0
+        $runsCArena = [System.Collections.ArrayList]::new()
+        for ($i = 0; $i -lt $Runs; $i++) {
+            [void]$runsCArena.Add((Invoke-MeasuredProcess -FilePath $cArenaExe -ArgumentList @() -WorkDir $SuiteDir))
+        }
+        $cVer3 = (cmd /c "clang --version 2>&1" | Select-Object -First 1).Trim()
+        Add-BenchmarkResult -Language "C (-O3 + arena)" -Toolchain "Clang -O3 -march=native -DBENCH_ARENA ($cVer3)" -Status "Mesure localement" -CompileMs $swArena.Elapsed.TotalMilliseconds -BinaryKb $caSizeKb -NumRuns $Runs -RunData $runsCArena
+    }
+
+    $cFastArenaExe = Join-Path $SuiteDir "bench_c_fast_arena.exe"
+    $swFastArena = [System.Diagnostics.Stopwatch]::StartNew()
+    & clang -O3 -march=native -ffast-math -DBENCH_ARENA (Join-Path $SuiteDir "bench_c.c") -o $cFastArenaExe
+    $swFastArena.Stop()
+    if ($LASTEXITCODE -eq 0) {
+        $cfaSizeKb = (Get-Item $cFastArenaExe).Length / 1024.0
+        $runsCFastArena = [System.Collections.ArrayList]::new()
+        for ($i = 0; $i -lt $Runs; $i++) {
+            [void]$runsCFastArena.Add((Invoke-MeasuredProcess -FilePath $cFastArenaExe -ArgumentList @() -WorkDir $SuiteDir))
+        }
+        $cVer4 = (cmd /c "clang --version 2>&1" | Select-Object -First 1).Trim()
+        Add-BenchmarkResult -Language "C (-O3 -ffast-math + arena)" -Toolchain "Clang -O3 -march=native -ffast-math -DBENCH_ARENA ($cVer4)" -Status "Mesure localement" -CompileMs $swFastArena.Elapsed.TotalMilliseconds -BinaryKb $cfaSizeKb -NumRuns $Runs -RunData $runsCFastArena
     }
 }
 

@@ -1,0 +1,52 @@
+name: CI (Build & Test)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  test-windows:
+    name: Windows x64 (Clang)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Vortex (Clang -std=c99 -Wall -Wextra)
+        shell: cmd
+        run: .\build.bat
+
+      - name: Run full test suite (Windows)
+        shell: cmd
+        run: .\tests\run_tests.bat
+
+  test-linux:
+    name: Linux x86-64 (GCC + Clang)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build & Test with GCC (-D_FORTIFY_SOURCE=2)
+        run: |
+          sudo apt-get update && sudo apt-get install -y libx11-dev
+          make clean && make CC=gcc CFLAGS="-std=c99 -O2 -D_FORTIFY_SOURCE=2 -Wall -Wextra"
+          VORTEX_HEADLESS=1 ./tests/run_tests.sh
+
+      - name: Build & Test with Clang
+        run: |
+          make clean && make CC=clang
+          VORTEX_HEADLESS=1 ./tests/run_tests.sh
+
+  test-macos:
+    name: macOS (Clang)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build & Test with Clang (macOS)
+        run: |
+          make clean && make CC=clang TARGET=vortex
+          VORTEX_HEADLESS=1 ./tests/run_tests.sh
