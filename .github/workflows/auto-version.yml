@@ -1,0 +1,82 @@
+name: Auto SemVer Versioning
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'VERSION'
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Type d increment SemVer (auto, patch, minor, major)'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bump-version:
+    if: "!contains(github.event.head_commit.message, '[skip ci]') && !startsWith(github.event.head_commit.message, 'chore(release):')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full git history & tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next SemVer & create git tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MANUAL_BUMP: ${{ github.event.inputs.bump || 'auto' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          LAST_TAG=$(git describe --tags --abbrev=0 --match "v[0-9]*.[0-9]*.[0-9]*" 2>/dev/null || echo "v1.0.0")
+          BASE_VER="${LAST_TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VER"
+
+          BUMP="$MANUAL_BUMP"
+          if [ "$BUMP" = "auto" ]; then
+            COMMITS=$(git log "${LAST_TAG}..HEAD" --pretty=format:"%s%n%b" 2>/dev/null || git log -1 --pretty=format:"%s%n%b")
+            if echo "$COMMITS" | grep -qE 'BREAKING CHANGE|^[a-z]+(\([^)]+\))?!:'; then
+              BUMP="major"
+            elif echo "$COMMITS" | grep -qE '^feat(\([^)]+\))?:'; then
+              BUMP="minor"
+            else
+              BUMP="patch"
+            fi
+          fi
+
+          case "$BUMP" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_VER="${MAJOR}.${MINOR}.${PATCH}"
+          NEW_TAG="v${NEW_VER}"
+
+          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
+            echo "Tag $NEW_TAG already exists, skipping."
+            exit 0
+          fi
+
+          echo "$NEW_VER" > VERSION
+          git add VERSION
+          git commit -m "chore(release): ${NEW_TAG} [skip ci]"
+          git tag -a "$NEW_TAG" -m "Release ${NEW_TAG}"
+          git push origin HEAD:main
+          git push origin "$NEW_TAG"
+
+          echo "Released version $NEW_TAG (bump=$BUMP)"
+          gh workflow run release.yml --ref "$NEW_TAG" || true

@@ -1,192 +1,98 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="955" viewBox="0 0 1280 955">
-<defs>
-<linearGradient id="vxGrad" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#0284c7"/><stop offset="100%" stop-color="#38bdf8"/></linearGradient>
-<filter id="vxGlow" x="-5%" y="-20%" width="110%" height="140%"><feDropShadow dx="0" dy="0" stdDeviation="2.5" flood-color="#38bdf8" flood-opacity="0.45"/></filter>
-</defs>
-<rect x="0" y="0" width="1280" height="955" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
-<text x="32" y="38" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="21" font-weight="700">Vortex v1.0.0 vs 10 Langages — Temps d'Exécution Multi-Tâches</text>
-<text x="32" y="61" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13">AMD Ryzen 5 5500 (6C/12T Zen 3 @ 3.60 GHz) • Windows 11 x64 • Médiane sur 5 runs (ms, plus bas = mieux) • * Étalonné (réf. Zen 3)</text>
-<rect x="935" y="18" width="14" height="14" rx="3" fill="url(#vxGrad)" stroke="#7dd3fc" stroke-width="1"/>
-<text x="956" y="30" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600">Vortex v1.0.0</text>
-<rect x="1055" y="18" width="14" height="14" rx="3" fill="#34d399"/>
-<text x="1076" y="30" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12">Mesuré local</text>
-<rect x="1165" y="18" width="14" height="14" rx="3" fill="#60a5fa" fill-opacity="0.55" stroke="#93c5fd" stroke-dasharray="3,2" stroke-width="1.2"/>
-<text x="1186" y="30" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12">* Étalonné</text>
-<rect x="24" y="80" width="1232" height="350" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-<text x="42" y="106" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600">Vue Globale — Somme des 5 Épreuves (échelle logarithmique ms, 100 ms → 50 000 ms)</text>
-<text x="1238" y="106" text-anchor="end" fill="#38bdf8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600">Post-optimisations : 1 829 → 669 ms (2.73×) • #1 sur T1 &amp; T3, #3 sur T2 (&gt; C/C++)</text>
-<line x1="215.0" y1="122" x2="215.0" y2="412" stroke="#21262d" stroke-width="1"/>
-<text x="215.0" y="424" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">100 ms</text>
-<line x1="349.3" y1="122" x2="349.3" y2="412" stroke="#21262d" stroke-width="1"/>
-<text x="349.3" y="424" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">250 ms</text>
-<line x1="450.9" y1="122" x2="450.9" y2="412" stroke="#21262d" stroke-width="1"/>
-<text x="450.9" y="424" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">500 ms</text>
-<line x1="552.5" y1="122" x2="552.5" y2="412" stroke="#21262d" stroke-width="1"/>
-<text x="552.5" y="424" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">1000 ms</text>
-<line x1="654.2" y1="122" x2="654.2" y2="412" stroke="#21262d" stroke-width="1"/>
-<text x="654.2" y="424" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">2000 ms</text>
-<line x1="788.5" y1="122" x2="788.5" y2="412" stroke="#21262d" stroke-width="1"/>
-<text x="788.5" y="424" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">5000 ms</text>
-<line x1="890.1" y1="122" x2="890.1" y2="412" stroke="#21262d" stroke-width="1"/>
-<text x="890.1" y="424" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">10s</text>
-<line x1="1093.3" y1="122" x2="1093.3" y2="412" stroke="#21262d" stroke-width="1"/>
-<text x="1093.3" y="424" text-anchor="middle" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">40s</text>
-<text x="205" y="143" text-anchor="end" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500">C++ (Clang++)</text>
-<rect x="215" y="130" width="243.7" height="17" rx="4" fill="#10b981" fill-opacity="0.88"/>
-<text x="466.7" y="143" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600">527.3 ms</text>
-<text x="205" y="171" text-anchor="end" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500">Rust (-O3)</text>
-<rect x="215" y="158" width="252.5" height="17" rx="4" fill="#fb923c" fill-opacity="0.88"/>
-<text x="475.5" y="171" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600">559.7 ms</text>
-<text x="205" y="199" text-anchor="end" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500">C (Clang -O3)</text>
-<rect x="215" y="186" width="261.6" height="17" rx="4" fill="#34d399" fill-opacity="0.88"/>
-<text x="484.6" y="199" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600">595.8 ms</text>
-<text x="205" y="227" text-anchor="end" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500">Go 1.23*</text>
-<rect x="215" y="214" width="275.6" height="17" rx="4" fill="#60a5fa" fill-opacity="0.55" stroke="#60a5fa" stroke-dasharray="4,2" stroke-width="1.2"/>
-<text x="498.6" y="227" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600">655.5 ms</text>
-<rect x="36" y="238" width="1208" height="24" rx="5" fill="#0c2d48" fill-opacity="0.45"/>
-<text x="205" y="255" text-anchor="end" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="700">Vortex v1.0.0</text>
-<rect x="215" y="242" width="278.6" height="17" rx="4" fill="url(#vxGrad)" stroke="#7dd3fc" stroke-width="1.2" filter="url(#vxGlow)"/>
-<text x="501.6" y="255" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="700">669.0 ms  (T1: 10.10ms #1 | T3: 11.57ms #1 | T2: 109.9ms &gt; C/C++)</text>
-<text x="205" y="283" text-anchor="end" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500">Java (HotSpot)</text>
-<rect x="215" y="270" width="290.5" height="17" rx="4" fill="#f59e0b" fill-opacity="0.88"/>
-<text x="513.5" y="283" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600">725.7 ms</text>
-<text x="205" y="311" text-anchor="end" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500">C# (.NET v4.8)</text>
-<rect x="215" y="298" width="321.4" height="17" rx="4" fill="#a78bfa" fill-opacity="0.88"/>
-<text x="544.4" y="311" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600">895.8 ms</text>
-<text x="205" y="339" text-anchor="end" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500">Node.js (V8)</text>
-<rect x="215" y="326" width="407.4" height="17" rx="4" fill="#facc15" fill-opacity="0.88"/>
-<text x="630.4" y="339" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600">1610.4 ms</text>
-<text x="205" y="367" text-anchor="end" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500">LuaJIT 2.1*</text>
-<rect x="215" y="354" width="467.0" height="17" rx="4" fill="#818cf8" fill-opacity="0.55" stroke="#818cf8" stroke-dasharray="4,2" stroke-width="1.2"/>
-<text x="690.0" y="367" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600">2418.0 ms  (T4 récursion + T5 mono-cœur)</text>
-<text x="205" y="395" text-anchor="end" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="500">Python 3.12</text>
-<rect x="215" y="382" width="878.6" height="17" rx="4" fill="#f43f5e" fill-opacity="0.88"/>
-<text x="1101.6" y="395" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600">40 084 ms  (40.08 s)</text>
-<rect x="24" y="446" width="1232" height="486" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-<text x="42" y="472" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600">Zoom Peloton de Tête par Tâche (Vortex vs C, C++, Rust, Go*, C#, Java — Échelle Linéaire ms)</text>
-<rect x="40" y="490" width="232" height="426" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
-<text x="52" y="514" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700">T1 : SIMD f32 (100M)</text>
-<text x="52" y="532" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">Vortex #1 (7.2× &gt; C++ FMA3)</text>
-<rect x="45" y="549" width="222" height="43" rx="5" fill="#0c2d48" fill-opacity="0.45" stroke="#0284c7" stroke-width="0.8"/>
-<text x="52" y="563" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700">#1 Vortex v1.0.0</text>
-<rect x="52" y="570" width="5.8" height="15" rx="3.5" fill="url(#vxGrad)" stroke="#7dd3fc" stroke-width="1"/>
-<text x="63.8" y="581" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">10.10 ms</text>
-<text x="52" y="613" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#2 C++ (Clang++)</text>
-<rect x="52" y="620" width="41.8" height="15" rx="3.5" fill="#10b981" fill-opacity="0.88"/>
-<text x="99.8" y="631" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">72.88 ms</text>
-<text x="52" y="663" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#3 C (Clang -O3)</text>
-<rect x="52" y="670" width="42.3" height="15" rx="3.5" fill="#34d399" fill-opacity="0.88"/>
-<text x="100.3" y="681" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">73.81 ms</text>
-<text x="52" y="713" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#4 C# (.NET v4.8)</text>
-<rect x="52" y="720" width="46.9" height="15" rx="3.5" fill="#a78bfa" fill-opacity="0.88"/>
-<text x="104.9" y="731" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">81.81 ms</text>
-<text x="52" y="763" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#5 Rust (-O3)</text>
-<rect x="52" y="770" width="47.1" height="15" rx="3.5" fill="#fb923c" fill-opacity="0.88"/>
-<text x="105.1" y="781" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">82.05 ms</text>
-<text x="52" y="813" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#6 Go 1.23*</text>
-<rect x="52" y="820" width="50.5" height="15" rx="3.5" fill="#60a5fa" fill-opacity="0.55" stroke="#60a5fa" stroke-dasharray="3,2" stroke-width="1"/>
-<text x="108.5" y="831" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">88.00 ms</text>
-<text x="52" y="863" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#7 Java (HotSpot)</text>
-<rect x="52" y="870" width="140.0" height="15" rx="3.5" fill="#f59e0b" fill-opacity="0.88"/>
-<text x="198.0" y="881" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">244.0 ms</text>
-<rect x="284" y="490" width="232" height="426" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
-<text x="296" y="514" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700">T2 : Tableau 50M i64</text>
-<text x="296" y="532" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">Vortex #3 (&gt; C/C++, AVX2 i64)</text>
-<text x="296" y="563" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#1 C# (.NET v4.8)</text>
-<rect x="296" y="570" width="107.6" height="15" rx="3.5" fill="#a78bfa" fill-opacity="0.88"/>
-<text x="409.6" y="581" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">108.8 ms</text>
-<text x="296" y="613" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#2 Rust (-O3)</text>
-<rect x="296" y="620" width="107.8" height="15" rx="3.5" fill="#fb923c" fill-opacity="0.88"/>
-<text x="409.8" y="631" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">108.9 ms</text>
-<rect x="289" y="649" width="222" height="43" rx="5" fill="#0c2d48" fill-opacity="0.45" stroke="#0284c7" stroke-width="0.8"/>
-<text x="296" y="663" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700">#3 Vortex v1.0.0</text>
-<rect x="296" y="670" width="108.7" height="15" rx="3.5" fill="url(#vxGrad)" stroke="#7dd3fc" stroke-width="1"/>
-<text x="410.7" y="681" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">109.9 ms</text>
-<text x="296" y="713" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#4 Java (HotSpot)</text>
-<rect x="296" y="720" width="112.5" height="15" rx="3.5" fill="#f59e0b" fill-opacity="0.88"/>
-<text x="414.5" y="731" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">113.7 ms</text>
-<text x="296" y="763" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#5 Go 1.23*</text>
-<rect x="296" y="770" width="133.6" height="15" rx="3.5" fill="#60a5fa" fill-opacity="0.55" stroke="#60a5fa" stroke-dasharray="3,2" stroke-width="1"/>
-<text x="435.6" y="781" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">135.0 ms</text>
-<text x="296" y="813" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#6 C (Clang -O3)</text>
-<rect x="296" y="820" width="135.0" height="15" rx="3.5" fill="#34d399" fill-opacity="0.88"/>
-<text x="437.0" y="831" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">136.5 ms</text>
-<text x="296" y="863" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#7 C++ (Clang++)</text>
-<rect x="296" y="870" width="140.0" height="15" rx="3.5" fill="#10b981" fill-opacity="0.88"/>
-<text x="442.0" y="881" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">141.5 ms</text>
-<rect x="528" y="490" width="232" height="426" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
-<text x="540" y="514" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700">T3 : 1M Struct Node</text>
-<text x="540" y="532" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">Vortex #1 (bat Java TLAB !)</text>
-<rect x="533" y="549" width="222" height="43" rx="5" fill="#0c2d48" fill-opacity="0.45" stroke="#0284c7" stroke-width="0.8"/>
-<text x="540" y="563" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700">#1 Vortex v1.0.0</text>
-<rect x="540" y="570" width="23.5" height="15" rx="3.5" fill="url(#vxGrad)" stroke="#7dd3fc" stroke-width="1"/>
-<text x="569.5" y="581" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">11.57 ms</text>
-<text x="540" y="613" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#2 Java (HotSpot)</text>
-<rect x="540" y="620" width="30.0" height="15" rx="3.5" fill="#f59e0b" fill-opacity="0.88"/>
-<text x="576.0" y="631" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">14.78 ms</text>
-<text x="540" y="663" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#3 C++ (Clang++)</text>
-<rect x="540" y="670" width="77.8" height="15" rx="3.5" fill="#10b981" fill-opacity="0.88"/>
-<text x="623.8" y="681" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">38.31 ms</text>
-<text x="540" y="713" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#4 Rust (-O3)</text>
-<rect x="540" y="720" width="116.3" height="15" rx="3.5" fill="#fb923c" fill-opacity="0.88"/>
-<text x="662.3" y="731" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">57.27 ms</text>
-<text x="540" y="763" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#5 C (Clang -O3)</text>
-<rect x="540" y="770" width="118.6" height="15" rx="3.5" fill="#34d399" fill-opacity="0.88"/>
-<text x="664.6" y="781" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">58.42 ms</text>
-<text x="540" y="813" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#6 Go 1.23*</text>
-<rect x="540" y="820" width="125.9" height="15" rx="3.5" fill="#60a5fa" fill-opacity="0.55" stroke="#60a5fa" stroke-dasharray="3,2" stroke-width="1"/>
-<text x="671.9" y="831" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">62.00 ms</text>
-<text x="540" y="863" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#7 C# (.NET v4.8)</text>
-<rect x="540" y="870" width="140.0" height="15" rx="3.5" fill="#a78bfa" fill-opacity="0.88"/>
-<text x="686.0" y="881" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">68.94 ms</text>
-<rect x="772" y="490" width="232" height="426" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
-<text x="784" y="514" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700">T4 : fib(40)+100M appels</text>
-<text x="784" y="532" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">3.0× accéléré (&gt; C# / Node)</text>
-<text x="784" y="563" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#1 C++ (Clang++)</text>
-<rect x="784" y="570" width="59.9" height="15" rx="3.5" fill="#10b981" fill-opacity="0.88"/>
-<text x="849.9" y="581" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">266.7 ms</text>
-<text x="784" y="613" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#2 Rust (-O3)</text>
-<rect x="784" y="620" width="68.7" height="15" rx="3.5" fill="#fb923c" fill-opacity="0.88"/>
-<text x="858.7" y="631" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">305.7 ms</text>
-<text x="784" y="663" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#3 Java (HotSpot)</text>
-<rect x="784" y="670" width="72.1" height="15" rx="3.5" fill="#f59e0b" fill-opacity="0.88"/>
-<text x="862.1" y="681" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">320.8 ms</text>
-<text x="784" y="713" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#4 C (Clang -O3)</text>
-<rect x="784" y="720" width="73.6" height="15" rx="3.5" fill="#34d399" fill-opacity="0.88"/>
-<text x="863.6" y="731" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">327.6 ms</text>
-<text x="784" y="763" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#5 Go 1.23*</text>
-<rect x="784" y="770" width="80.9" height="15" rx="3.5" fill="#60a5fa" fill-opacity="0.55" stroke="#60a5fa" stroke-dasharray="3,2" stroke-width="1"/>
-<text x="870.9" y="781" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">360.0 ms</text>
-<rect x="777" y="799" width="222" height="43" rx="5" fill="#0c2d48" fill-opacity="0.45" stroke="#0284c7" stroke-width="0.8"/>
-<text x="784" y="813" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700">#6 Vortex v1.0.0</text>
-<rect x="784" y="820" width="118.0" height="15" rx="3.5" fill="url(#vxGrad)" stroke="#7dd3fc" stroke-width="1"/>
-<text x="908.0" y="831" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">525.5 ms</text>
-<text x="784" y="863" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#7 C# (.NET v4.8)</text>
-<rect x="784" y="870" width="140.0" height="15" rx="3.5" fill="#a78bfa" fill-opacity="0.88"/>
-<text x="930.0" y="881" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">623.3 ms</text>
-<rect x="1016" y="490" width="232" height="426" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
-<text x="1028" y="514" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="700">T5 : Parallèle 12 Threads</text>
-<text x="1028" y="532" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11">Vortex 11.1ms (&gt; C# &amp; Java)</text>
-<text x="1028" y="563" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#1 C++ (Clang++)</text>
-<rect x="1028" y="570" width="35.6" height="15" rx="3.5" fill="#10b981" fill-opacity="0.88"/>
-<text x="1069.6" y="581" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">7.65 ms</text>
-<text x="1028" y="613" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#2 C (Clang -O3)</text>
-<rect x="1028" y="620" width="38.1" height="15" rx="3.5" fill="#34d399" fill-opacity="0.88"/>
-<text x="1072.1" y="631" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">8.19 ms</text>
-<text x="1028" y="663" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#3 Rust (-O3)</text>
-<rect x="1028" y="670" width="40.1" height="15" rx="3.5" fill="#fb923c" fill-opacity="0.88"/>
-<text x="1074.1" y="681" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">8.61 ms</text>
-<text x="1028" y="713" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#4 Go 1.23*</text>
-<rect x="1028" y="720" width="48.9" height="15" rx="3.5" fill="#60a5fa" fill-opacity="0.55" stroke="#60a5fa" stroke-dasharray="3,2" stroke-width="1"/>
-<text x="1082.9" y="731" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">10.50 ms</text>
-<rect x="1021" y="749" width="222" height="43" rx="5" fill="#0c2d48" fill-opacity="0.45" stroke="#0284c7" stroke-width="0.8"/>
-<text x="1028" y="763" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="700">#5 Vortex v1.0.0</text>
-<rect x="1028" y="770" width="51.7" height="15" rx="3.5" fill="url(#vxGrad)" stroke="#7dd3fc" stroke-width="1"/>
-<text x="1085.7" y="781" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">11.10 ms</text>
-<text x="1028" y="813" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#6 C# (.NET v4.8)</text>
-<rect x="1028" y="820" width="72.2" height="15" rx="3.5" fill="#a78bfa" fill-opacity="0.88"/>
-<text x="1106.2" y="831" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">15.50 ms</text>
-<text x="1028" y="863" fill="#c9d1d9" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500">#7 Java (HotSpot)</text>
-<rect x="1028" y="870" width="140.0" height="15" rx="3.5" fill="#f59e0b" fill-opacity="0.88"/>
-<text x="1174.0" y="881" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700">30.06 ms</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="720" viewBox="0 0 1160 720">
+<rect width="100%" height="100%" rx="12" fill="#05070A"/>
+<rect x="16" y="16" width="1128" height="688" rx="10" fill="#0A0E14" stroke="#171E29" stroke-width="1"/>
+<text x="40" y="54" fill="#E2E8F0" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="20" font-weight="700">Temps d'Execution Total (T1..T5) — Vortex v1.0.0 vs 10 Langages</text>
+<text x="40" y="78" fill="#64748B" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="13">AMD Ryzen 5 5500 (6C/12T @ 3.60 GHz, Windows 11 x64) · Mediane 5 runs · Plus court = plus rapide · * = etalonne Zen 3</text>
+<rect x="780" y="40" width="12" height="12" rx="3" fill="#10B981"/>
+<text x="798" y="51" fill="#34D399" font-family="Segoe UI, Inter, sans-serif" font-size="12" font-weight="600">Vortex (#1)</text>
+<rect x="886" y="40" width="12" height="12" rx="3" fill="#334155"/>
+<text x="904" y="51" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="12">Mesure localement</text>
+<rect x="1028" y="40" width="12" height="12" rx="3" fill="#1E293B" stroke="#475569" stroke-dasharray="2,2"/>
+<text x="1046" y="51" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="12">Etalonne*</text>
+<line x1="320.0" y1="102" x2="320.0" y2="538" stroke="#121822" stroke-width="1"/>
+<text x="320.0" y="556" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">0 ms</text>
+<line x1="439.2" y1="102" x2="439.2" y2="538" stroke="#121822" stroke-width="1"/>
+<text x="439.2" y="556" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">500 ms</text>
+<line x1="558.5" y1="102" x2="558.5" y2="538" stroke="#121822" stroke-width="1"/>
+<text x="558.5" y="556" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">1000 ms</text>
+<line x1="677.7" y1="102" x2="677.7" y2="538" stroke="#121822" stroke-width="1"/>
+<text x="677.7" y="556" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">1500 ms</text>
+<line x1="796.9" y1="102" x2="796.9" y2="538" stroke="#121822" stroke-width="1"/>
+<text x="796.9" y="556" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">2000 ms</text>
+<line x1="916.2" y1="102" x2="916.2" y2="538" stroke="#121822" stroke-width="1"/>
+<text x="916.2" y="556" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">2500 ms</text>
+<rect x="28" y="108" width="1104" height="40" rx="6" fill="#052E22" fill-opacity="0.45" stroke="#10B981" stroke-opacity="0.4" stroke-width="1"/>
+<text x="44" y="127" fill="#34D399" font-family="Consolas, monospace" font-size="13" font-weight="700">#1</text>
+<text x="80" y="127" fill="#FFFFFF" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="700">Vortex v1.0.0</text>
+<text x="80" y="142" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">JIT x86-64 AVX2 (--release)</text>
+<rect x="320" y="118" width="620" height="20" rx="4" fill="#0E131B"/>
+<rect x="320" y="118" width="97.8" height="20" rx="4" fill="#10B981"/>
+<text x="958" y="132" fill="#34D399" font-family="Consolas, monospace" font-size="13" font-weight="700">410.30 ms</text>
+<text x="1116" y="132" text-anchor="end" fill="#34D399" font-family="Consolas, monospace" font-size="12">REFERENCE #1</text>
+<text x="44" y="175" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#2</text>
+<text x="80" y="175" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">C++</text>
+<text x="80" y="190" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">Clang++ 23 (-O3 -march=native)</text>
+<rect x="320" y="166" width="620" height="20" rx="4" fill="#0E131B"/>
+<rect x="320" y="166" width="130.5" height="20" rx="4" fill="#334155"/>
+<text x="958" y="180" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">547.28 ms</text>
+<text x="1116" y="180" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.33x</text>
+<text x="44" y="223" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#3</text>
+<text x="80" y="223" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">Rust</text>
+<text x="80" y="238" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">rustc 1.99 (-C opt-level=3)</text>
+<rect x="320" y="214" width="620" height="20" rx="4" fill="#0E131B"/>
+<rect x="320" y="214" width="140.0" height="20" rx="4" fill="#334155"/>
+<text x="958" y="228" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">587.08 ms</text>
+<text x="1116" y="228" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.43x</text>
+<text x="44" y="271" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#4</text>
+<text x="80" y="271" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">C</text>
+<text x="80" y="286" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">Clang 23 (-O3 -march=native)</text>
+<rect x="320" y="262" width="620" height="20" rx="4" fill="#0E131B"/>
+<rect x="320" y="262" width="148.3" height="20" rx="4" fill="#334155"/>
+<text x="958" y="276" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">621.72 ms</text>
+<text x="1116" y="276" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.52x</text>
+<text x="44" y="319" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#5</text>
+<text x="80" y="319" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">Go 1.23*</text>
+<text x="80" y="334" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">gc (etalonne Zen 3)</text>
+<rect x="320" y="310" width="620" height="20" rx="4" fill="#0E131B"/>
+<rect x="320" y="310" width="156.3" height="20" rx="4" fill="#1E293B" stroke="#475569" stroke-dasharray="4,3" stroke-width="1"/>
+<text x="958" y="324" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">655.50 ms</text>
+<text x="1116" y="324" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.60x</text>
+<text x="44" y="367" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#6</text>
+<text x="80" y="367" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">Java</text>
+<text x="80" y="382" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">OpenJDK HotSpot 17</text>
+<rect x="320" y="358" width="620" height="20" rx="4" fill="#0E131B"/>
+<rect x="320" y="358" width="177.7" height="20" rx="4" fill="#334155"/>
+<text x="958" y="372" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">745.02 ms</text>
+<text x="1116" y="372" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.82x</text>
+<text x="44" y="415" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#7</text>
+<text x="80" y="415" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">C# (.NET)</text>
+<text x="80" y="430" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">csc v4.8 / RyuJIT</text>
+<rect x="320" y="406" width="620" height="20" rx="4" fill="#0E131B"/>
+<rect x="320" y="406" width="217.2" height="20" rx="4" fill="#334155"/>
+<text x="958" y="420" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">910.82 ms</text>
+<text x="1116" y="420" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">2.22x</text>
+<text x="44" y="463" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#8</text>
+<text x="80" y="463" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">Node.js</text>
+<text x="80" y="478" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">v26.13 (V8 JIT)</text>
+<rect x="320" y="454" width="620" height="20" rx="4" fill="#0E131B"/>
+<rect x="320" y="454" width="376.9" height="20" rx="4" fill="#334155"/>
+<text x="958" y="468" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">1 580.34 ms</text>
+<text x="1116" y="468" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">3.85x</text>
+<text x="44" y="511" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#9</text>
+<text x="80" y="511" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">LuaJIT 2.1*</text>
+<text x="80" y="526" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">Trace JIT (etalonne Zen 3)</text>
+<rect x="320" y="502" width="620" height="20" rx="4" fill="#0E131B"/>
+<rect x="320" y="502" width="576.6" height="20" rx="4" fill="#1E293B" stroke="#475569" stroke-dasharray="4,3" stroke-width="1"/>
+<text x="958" y="516" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">2 418.00 ms</text>
+<text x="1116" y="516" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">5.89x</text>
+<rect x="28" y="572" width="1104" height="46" rx="6" fill="#080B10" stroke="#171E29" stroke-width="1"/>
+<text x="44" y="599" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#10</text>
+<text x="80" y="593" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="13" font-weight="600">Python 3.12 (CPython — hors echelle)</text>
+<text x="80" y="608" fill="#475569" font-family="Segoe UI, Inter, sans-serif" font-size="11">Interprete standard sans JIT (3 runs)</text>
+<rect x="320" y="586" width="620" height="18" rx="4" fill="#131922" stroke="#26303D" stroke-dasharray="6,4"/>
+<text x="630.0" y="599" text-anchor="middle" fill="#64748B" font-family="Consolas, monospace" font-size="11.5">HORS ECHELLE (&gt; 16x limite graphique)</text>
+<text x="958" y="599" fill="#64748B" font-family="Consolas  monospace" font-size="13" font-weight="700">42 891.01 ms</text>
+<text x="1116" y="599" text-anchor="end" fill="#475569" font-family="Consolas, monospace" font-size="12">104.5x</text>
+<rect x="28" y="652" width="1104" height="36" rx="6" fill="#070A0F" stroke="#171E29"/>
+<text x="44" y="674" fill="#64748B" font-family="Consolas, monospace" font-size="12">Vortex v1.0.0 (#1):  T1=10.15 ms (#1)  ·  T2=111.16 ms  ·  T3=10.75 ms (#1)  ·  T4=257.19 ms (#1)  ·  T5=12.56 ms  ·  100% checksums exacts</text>
 </svg>
