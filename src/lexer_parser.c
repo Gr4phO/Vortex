@@ -1371,8 +1371,12 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
             vortex_error("");
         }
         uf = &g_user_funcs[g_user_func_count++];
+        memset(uf, 0, sizeof(*uf));
+    } else {
+        if (uf->inline_instrs) free(uf->inline_instrs);
+        if (uf->inline_vregs) free(uf->inline_vregs);
+        memset(uf, 0, sizeof(*uf));
     }
-    memset(uf, 0, sizeof(*uf));
     strncpy(uf->name, fn_name, sizeof(uf->name) - 1);
     uf->is_unsafe = is_unsafe;
     uf->ret_type = TYPE_I64;
@@ -1458,6 +1462,7 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
     if (fn_ir.count == 0 || fn_ir.instrs[fn_ir.count - 1].op != IR_RET) {
         ir_emit_ret(&fn_ir, VREG_NONE, TYPE_VOID);
     }
+    fn_ir.param_count = uf->param_count;
 
     ir_region_verify(&fn_ir);
     if (g_lsp_capture_errors) {
@@ -1465,6 +1470,39 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
         ir_free(&fn_ir);
         return;
     }
+
+    /* Pillar #1: Capture unoptimized small non-recursive function IR for caller inlining */
+    if (!is_unsafe && !uf->returns_ref && fn_ir.count > 0 && fn_ir.count <= 32 && fn_ir.vreg_count <= 256) {
+        bool ok_inline = true;
+        for (int i = 0; i < fn_ir.count; i++) {
+            IROpcode op = fn_ir.instrs[i].op;
+            if (op == IR_RAW_RIEMANN || op == IR_VEC_LOOP || op == IR_VEC_ARR_OP) {
+                ok_inline = false;
+                break;
+            }
+            if (op == IR_CALL_USER && strcmp(fn_ir.instrs[i].func_name, uf->name) == 0) {
+                ok_inline = false;
+                break;
+            }
+        }
+        if (ok_inline) {
+            uf->inline_instrs = malloc((size_t)fn_ir.count * sizeof(IRInstruction));
+            uf->inline_vregs = malloc((size_t)fn_ir.vreg_count * sizeof(VRegInfo));
+            if (uf->inline_instrs && uf->inline_vregs) {
+                memcpy(uf->inline_instrs, fn_ir.instrs, (size_t)fn_ir.count * sizeof(IRInstruction));
+                memcpy(uf->inline_vregs, fn_ir.vregs, (size_t)fn_ir.vreg_count * sizeof(VRegInfo));
+                uf->can_inline = true;
+                uf->inline_ir_count = fn_ir.count;
+                uf->inline_vreg_count = fn_ir.vreg_count;
+            } else {
+                free(uf->inline_instrs);
+                free(uf->inline_vregs);
+                uf->inline_instrs = NULL;
+                uf->inline_vregs = NULL;
+            }
+        }
+    }
+
     ir_optimize_bounds_and_licm(&fn_ir);
     ir_loop_vectorize(&fn_ir);
     ir_liveness_analysis(&fn_ir);
@@ -1474,11 +1512,13 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
     size_t skip_func_jmp = bk->emit_jmp_placeholder(c->j);
     uf->code_offset = c->j->size;
 
+    jit_set_active_ir_frame(&fn_ir);
     int fn_frame_size = bk->compute_frame_size(fn_ir.total_spill_bytes);
     debug_info_set_current_func(uf->name);
     bk->emit_func_prologue(c->j, fn_frame_size);
     bk->ir_codegen(&fn_ir, c->j);
     bk->emit_func_epilogue(c->j, fn_frame_size);
+    jit_set_active_ir_frame(NULL);
     debug_info_record_func(uf->name, uf->code_offset, c->j->size, fn_frame_size, false, g_current_filename, fn_decl_line);
     debug_info_set_current_func("__main__");
 
@@ -2342,6 +2382,7 @@ void parse_statement(Compiler* c) {
         VReg call_args1[1] = { v_size };
         ir_emit_call(c->ir, v_ctx, (void*)arena_alloc_fast, call_args1, 1, TYPE_I64);
 
+        int store_ip_base = c->ir->count;
         for (int s = 0; s < num_captures; s++) {
             Symbol* parent_sym = &c->st->symbols[s];
             ir_emit_store_offset(c->ir, v_ctx, s * 8, parent_sym->vreg, parent_sym->type);
@@ -2371,6 +2412,7 @@ void parse_statement(Compiler* c) {
         VReg v_w_end = ir_new_vreg(&worker_ir, TYPE_I64);
         ir_emit_load_param(&worker_ir, v_w_end, 2);
 
+        int load_ip_base = worker_ir.count;
         for (int s = 0; s < num_captures; s++) {
             Symbol* parent_sym = &c->st->symbols[s];
             Symbol* ws = symtab_add(&worker_st, parent_sym->name, parent_sym->type, parent_sym->is_mut);
@@ -2408,6 +2450,34 @@ void parse_statement(Compiler* c) {
         ir_emit_jmp(&worker_ir, lbl_loop);
         ir_emit_label(&worker_ir, lbl_exit);
         ir_emit_ret(&worker_ir, VREG_NONE, TYPE_VOID);
+        for (int s = 0; s < num_captures; s++) {
+            VReg wv = worker_ir.instrs[load_ip_base + s].dest;
+            bool used = false;
+            for (int k = load_ip_base + num_captures; k < worker_ir.count; k++) {
+                IRInstruction* wi = &worker_ir.instrs[k];
+                if (wi->dest == wv || wi->src1 == wv || wi->src2 == wv ||
+                    wi->src3 == wv || wi->src4 == wv) {
+                    used = true;
+                    break;
+                }
+                for (int a = 0; a < wi->arg_count; a++) {
+                    if (wi->args[a] == wv) { used = true; break; }
+                }
+                if (used) break;
+                if (wi->op == IR_RAW_RIEMANN || wi->op == IR_VEC_LOOP || wi->op == IR_VEC_ARR_OP) {
+                    if (wi->i_vreg == wv || wi->lim_vreg == wv || wi->acc_vreg == wv ||
+                        wi->x_vreg == wv || wi->step_vreg == wv) {
+                        used = true;
+                        break;
+                    }
+                }
+            }
+            if (!used) {
+                c->ir->instrs[store_ip_base + s].op = IR_NOP;
+                worker_ir.instrs[load_ip_base + s].op = IR_NOP;
+            }
+        }
+        worker_ir.param_count = 3;
 
         ir_region_verify(&worker_ir);
         ir_optimize_bounds_and_licm(&worker_ir);
@@ -2419,10 +2489,12 @@ void parse_statement(Compiler* c) {
         size_t skip_worker = bk->emit_jmp_placeholder(c->j);
         void* worker_fn_addr = (void*)(c->j->code + c->j->size);
 
+        jit_set_active_ir_frame(&worker_ir);
         int worker_frame_size = bk->compute_frame_size(worker_ir.total_spill_bytes);
         bk->emit_func_prologue(c->j, worker_frame_size);
         bk->ir_codegen(&worker_ir, c->j);
         bk->emit_func_epilogue(c->j, worker_frame_size);
+        jit_set_active_ir_frame(NULL);
 
         bk->patch_jump(c->j, skip_worker);
         ir_free(&worker_ir);
@@ -2477,10 +2549,12 @@ void parse_statement(Compiler* c) {
         ir_emit_binop(c->ir, IR_LT, v_cmp, i_sym->vreg, lim_sym->vreg, TYPE_I64);
         ir_emit_jz(c->ir, v_cmp, lbl_exit);
 
+        int saved_loop_st_count = c->st->count;
         while (c->lex->cur.type != TOK_RBRACE && c->lex->cur.type != TOK_EOF) {
             parse_statement(c);
         }
         match(c, TOK_RBRACE);
+        c->st->count = saved_loop_st_count;
 
         VReg v_one = ir_new_vreg(c->ir, TYPE_I64);
         ir_emit_const_i64(c->ir, v_one, 1);

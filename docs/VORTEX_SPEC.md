@@ -277,3 +277,20 @@ At startup, `check_and_run_embedded_payload` reads the last 16 bytes of the bina
   - `:cls` / `:clear` — Clear screen
   - `:reset` — Wipe session declarations, structs, FFI handles, and reset arenas
   - `:exit` / `:quit` — Exit terminal
+
+---
+
+## 12. Multi-File Modules (`import`)
+
+Vortex supports native multi-file projects via the preprocessor `import` directive:
+
+```vortex
+import "lib/math.vx";
+import "models/vec2.vx";
+```
+
+- **Recursive Preprocessor Resolution (`vortex_resolve_imports`)**: Before parsing and JIT compilation, `vortex run`, `vortex <file.vx>`, and `vortex build` recursively resolve top-level `import "rel/path.vx";` directives (outside `//` comments) and inline the target module source with traceability markers.
+- **Relative Paths**: Each `import` path is resolved relative to the directory of the file that declares it (normalizing both `/` and `\`), with fallback to standard library (`std/...`) and `vortex.toml` package dependencies.
+- **Deduplication & Cycle Protection (`#pragma once`)**: Canonical file paths are tracked across the compilation unit. Subsequent or circular imports of an already-included canonical path are silently skipped, preventing duplicate definitions and infinite recursion.
+- **Error Diagnostics**: Missing or unreadable imported files abort compilation immediately with `[VORTEX IMPORT ERROR] Cannot open imported file '<path>' (at <file>:<line>)`.
+- **Standalone Packaging**: `vortex build main.vx -o app.exe` embeds the entire resolved module graph into the `VTXPACK1` payload so the generated executable remains 100% self-contained with no external `.vx` files required.

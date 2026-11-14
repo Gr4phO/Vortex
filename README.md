@@ -12,7 +12,7 @@ Uniquement le compilateur/CLI autonome `vortex` (zéro dépendance externe, aucu
 
 | Plateforme | Architecture | Lien Direct (Dépôt / GitHub Releases) | Taille | Exécution Rapide |
 | :--- | :--- | :--- | :---: | :--- |
-| **Windows** | `x86-64` | **[`vortex-windows-x64.exe` (local)](releases/v1.0.0/vortex-windows-x64.exe)** · [GitHub Release](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-windows-x64.exe) | **169 Ko** (`173 056` o) | `.\vortex-windows-x64.exe run --release script.vx` |
+| **Windows** | `x86-64` | **[`vortex-windows-x64.exe` (local)](releases/v1.0.0/vortex-windows-x64.exe)** · [GitHub Release](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-windows-x64.exe) | **188.5 Ko** (`193 024` o) | `.\vortex-windows-x64.exe run --release script.vx` |
 | **Linux** | `x86-64` (headless) | **[`vortex-linux-x64` (GitHub Release)](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-linux-x64)** | `< 200 Ko` (CI `ubuntu-latest`) | `chmod +x vortex-linux-x64 && ./vortex-linux-x64 --headless run --release script.vx` |
 | **macOS** | `x86-64` (Darwin) | **[`vortex-macos-x64` (GitHub Release)](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-macos-x64)** | `< 200 Ko` (CI `macos-latest`) | `chmod +x vortex-macos-x64 && ./vortex-macos-x64 --headless run --release script.vx` |
 
@@ -61,8 +61,8 @@ Uniquement le compilateur/CLI autonome `vortex` (zéro dépendance externe, aucu
 
 - **2 MiB Paged Region Arenas (Zero-GC)**: Cache-line / AVX-512 aligned (`64`-byte) bump allocation across chained 2 MiB OS pages with $O(1)$ scoped rewind (`scope_push` / `scope_pop`) and zero per-object destructor overhead.
 - **Typed C-Layout Structures (`struct`)**: Natural field alignment and offsets, named/positional struct literals, nested field reads/writes, and `struct_size` / `struct_align` introspection.
-- **Linear IR & Loop-Aware Register Allocation**: 3-address virtual-register IR (`v0..vN`), loop back-edge lifetime extension, caller/callee-saved GPR/XMM allocation, and automatic frame spilling.
-- **Generic 256-bit AVX2 Auto-Vectorization**: Automatically promotes eligible countable reduction loops to 16-way unrolled VEX AVX2 `YMM` pipelines (`vaddps`, `vsubps`, `vmulps`, `vdivps`, `vhaddps`) with scalar tail handling.
+- **Optimizing Linear IR & Register Allocation**: Automatic small-function IR inlining, constant folding & DCE, generalized LICM invariant hoisting, branchless `cmovge` if-conversion, and loop-depth-weighted linear-scan GPR/XMM allocation with direct register argument passing (`RCX`/`RDI`).
+- **Generic 256-bit AVX2 + FMA3 Auto-Vectorization**: Promotes countable `f32` loops to **32-way FMA3** (`vfmadd231ps` across 4 YMM accumulators) and `i64` slice transforms/reductions to **8-wide AVX2** (`vmovdqu`, `vpsllq`, `vpaddq`), plus compact peephole encoding.
 - **Native Multi-Core `parallel_for`**: Persistent OS worker thread pool (`CreateThread` / `pthread`) automatically capturing outer variables and giving every core its own lock-free thread-local 2 MiB `VortexRegionArena`.
 - **Zero-Wrapper Dynamic C FFI (`extern "lib" fn`)**: Runtime loading via `LoadLibraryA`/`GetProcAddress` (Windows) and `dlopen`/`dlsym` (Linux), supporting up to 8 arguments (register + stack spill), `i32`/`i64`/`f32`/`f64`/`str`/`ptr`/`void`, and variadic C ABI marshalling.
 - **Standalone Packaging (`vortex build`)**: Clones the runtime binary and embeds a `"VRTX"` / `"VTXPACK1"` payload trailer to produce single-file `.exe` / ELF executables with zero external dependencies.
@@ -72,7 +72,7 @@ Uniquement le compilateur/CLI autonome `vortex` (zéro dépendance externe, aucu
 
 ## Benchmarks Officiels (Vortex v1.0.0 vs 10 Langages)
 
-Campagne exécutée sur **AMD Ryzen 5 5500** (`6C/12T @ 3,60 GHz`, Windows 11 x64, `32 Go RAM`), médiane sur **5 exécutions** sur [`benchmarks/suite_10_langs/`](benchmarks/suite_10_langs/) (8 langages mesurés localement, 2 marqués `*` étalonnés sur référence Zen 3) :
+Campagne exécutée sur **AMD Ryzen 5 5500** (`6C/12T @ 3,60 GHz`, Windows 11 x64, `32 Go RAM`), médiane sur **5 exécutions** (`3` pour Python 3.12) sur [`benchmarks/suite_10_langs/`](benchmarks/suite_10_langs/) (8 langages mesurés localement, 2 marqués `*` étalonnés sur référence Zen 3) :
 
 ![Comparatif des temps d'exécution Vortex v1.0.0 vs 10 langages](docs/assets/bench_execution_time.svg)
 
@@ -80,16 +80,16 @@ Campagne exécutée sur **AMD Ryzen 5 5500** (`6C/12T @ 3,60 GHz`, Windows 11 x6
 
 | Langage | Compilation / Démarrage | T1 : Riemann `f32` (100M) | T2 : Tableau `i64` (50M) | T3 : Structs `Node` (1M) | T4 : `fib(40)` + 100M calls | T5 : Grille 12 threads | Binaire / Runtime |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Vortex v1.0.0 (`--release`)** | **`67.95 ms`** | 🏆 **`8.91 ms`** | `209.58 ms` | 🥈 **`20.02 ms`** | `1 573.51 ms` | `16.23 ms` | **`169 Ko`** *(autonome)* |
-| **C (`Clang 23 -O3`)** | `797.17 ms` | `73.36 ms` | `137.70 ms` | `57.97 ms` | `320.84 ms` | **`7.72 ms`** | `68.5 Ko` |
-| **C++ (`Clang++ 23 -O3`)** | `1 782.97 ms` | `73.09 ms` | `144.70 ms` | `40.92 ms` | **`270.37 ms`** | `8.32 ms` | `76.5 Ko` |
-| **Rust (`rustc 1.99 -O3`)** | `932.97 ms` | `83.32 ms` | **`111.37 ms`** | `60.01 ms` | `311.57 ms` | `11.27 ms` | `4 309.5 Ko` |
+| **Vortex v1.0.0 (`--release`)** | **`80.63 ms`** | 🏆 **`10.10 ms`** | 🥉 **`109.90 ms`** | 🏆 **`11.57 ms`** | `525.52 ms` | `11.10 ms` | **`188.5 Ko`** *(autonome)* |
+| **C (`Clang 23 -O3`)** | `872.31 ms` | `73.82 ms` | `136.48 ms` | `58.42 ms` | `327.58 ms` | `8.19 ms` | `68.5 Ko` |
+| **C++ (`Clang++ 23 -O3`)** | `1 688.53 ms` | `72.88 ms` | `141.52 ms` | `38.31 ms` | **`266.72 ms`** | **`7.65 ms`** | `76.5 Ko` |
+| **Rust (`rustc 1.99 -O3`)** | `912.27 ms` | `82.05 ms` | `108.94 ms` | `57.27 ms` | `305.69 ms` | `8.61 ms` | `4 309.5 Ko` |
 | **Go 1.23\*** *(étalonné Zen 3)* | `420.00 ms`\* | `88.00 ms`\* | `135.00 ms`\* | `62.00 ms`\* | `360.00 ms`\* | `10.50 ms`\* | `2 100.0 Ko`\* |
-| **C# (.NET v4.8)** | `310.81 ms` | `82.59 ms` | `121.49 ms` | `84.57 ms` | `650.57 ms` | `18.65 ms` | `5.0 Ko` *(+ .NET CLR)* |
-| **Java (HotSpot 17)** | `751.94 ms` | `245.93 ms` | `121.83 ms` | **`16.93 ms`** | `338.83 ms` | `32.68 ms` | `3.8 Ko` *(+ 12,5 Mo JVM)* |
-| **JavaScript (Node v26)** | `358.72 ms` | `263.94 ms` | `193.84 ms` | `77.59 ms` | `954.69 ms` | `57.25 ms` | `97 751.8 Ko` (`node.exe`) |
+| **Java (HotSpot 17)** | `643.13 ms` | `244.02 ms` | `113.70 ms` | 🥈 `14.78 ms` | `320.84 ms` | `30.06 ms` | `3.8 Ko` *(+ 12,5 Mo JVM)* |
+| **C# (.NET v4.8)** | `292.20 ms` | `81.81 ms` | **`108.77 ms`** | `68.94 ms` | `623.28 ms` | `15.50 ms` | `5.0 Ko` *(+ .NET CLR)* |
+| **JavaScript (Node v26)** | `319.73 ms` | `262.60 ms` | `204.98 ms` | `83.35 ms` | `1 018.56 ms` | `55.58 ms` | `97 751.8 Ko` (`node.exe`) |
 | **LuaJIT 2.1\*** *(étalonné Zen 3)* | `12.00 ms`\* | `115.00 ms`\* | `165.00 ms`\* | `28.00 ms`\* | `1 930.00 ms`\* | `180.00 ms`\* | `520.0 Ko`\* |
-| **Python 3.12 (CPython)** | `1 187.28 ms` | `6 467.54 ms` | `7 118.88 ms` | `616.05 ms` | `19 969.74 ms` | `4 183.79 ms` | `6 953.7 Ko` |
+| **Python 3.12 (CPython)** | `1 883.24 ms` | `6 454.61 ms` | `7 578.33 ms` | `604.72 ms` | `20 626.96 ms` | `4 897.81 ms` | `6 885.0 Ko` |
 
 - 📄 **Rapport complet & protocole** : [`benchmarks/BENCHMARK_REPORT_v1.0.0.md`](benchmarks/BENCHMARK_REPORT_v1.0.0.md)
 - 🚀 **Feuille de route "Road to #1" (Inlining, LICM, SIB/LEA, FMA3, Peephole)** : [`docs/OPTIMIZATION_ROADMAP.md`](docs/OPTIMIZATION_ROADMAP.md)

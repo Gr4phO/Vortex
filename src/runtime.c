@@ -780,6 +780,11 @@ int64_t vortex_math_sqrt(int64_t x) {
     return (int64_t)sqrt((double)x);
 }
 
+int64_t helper_exit(int64_t code) {
+    exit((int)code);
+    return 0;
+}
+
 int64_t helper_time_us(void) {
 #ifdef _WIN32
     static LARGE_INTEGER freq;
@@ -1023,6 +1028,7 @@ static BuiltinFunc g_builtins[] = {
     {"alloc",          (void*)arena_alloc,           1},
     {"print",          (void*)helper_print_i64,      1},
     {"print_str",      (void*)helper_print_str,      1},
+    {"exit",           (void*)helper_exit,           1},
     {NULL, NULL, 0}
 };
 
@@ -1043,6 +1049,13 @@ static bool compile_vortex_source_internal(const char* source, void* exec_mem, J
     lexer_reset_imports();
     if (!g_in_repl) {
         g_struct_type_count = 0;
+    }
+    for (int i = 0; i < g_user_func_count; i++) {
+        free(g_user_funcs[i].inline_instrs);
+        free(g_user_funcs[i].inline_vregs);
+        g_user_funcs[i].inline_instrs = NULL;
+        g_user_funcs[i].inline_vregs = NULL;
+        g_user_funcs[i].can_inline = false;
     }
     g_user_func_count = 0;
     g_user_func_reloc_count = 0;
@@ -1271,25 +1284,320 @@ int execute_vortex_source(const char* source) {
     return 0;
 }
 
-int execute_vortex_file(const char* filename) {
-    FILE* f = fopen(filename, "rb");
-    if (!f) {
-        fprintf(stderr, "[VORTEX ERROR] Cannot open file '%s'\n", filename);
-        return 1;
-    }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
+/* --- Recursive Module Preprocessor / Import Resolver --- */
 
-    char* buffer = (char*)malloc(sz + 1);
-    if (!buffer) {
+typedef struct {
+    char** paths;
+    int count;
+    int cap;
+    char* out_buf;
+    size_t out_len;
+    size_t out_cap;
+} VortexImportResolver;
+
+static bool import_append_str(VortexImportResolver* r, const char* s, size_t len) {
+    if (r->out_len + len + 1 > r->out_cap) {
+        size_t ncap = (r->out_cap == 0) ? 4096 : (r->out_cap * 2);
+        while (ncap < r->out_len + len + 1) ncap *= 2;
+        char* nb = (char*)realloc(r->out_buf, ncap);
+        if (!nb) return false;
+        r->out_buf = nb;
+        r->out_cap = ncap;
+    }
+    if (len > 0) memcpy(r->out_buf + r->out_len, s, len);
+    r->out_len += len;
+    r->out_buf[r->out_len] = '\0';
+    return true;
+}
+
+static bool import_append_cstr(VortexImportResolver* r, const char* s) {
+    return import_append_str(r, s, strlen(s));
+}
+
+static void import_normalize_slashes(char* s) {
+    for (size_t i = 0; s[i]; i++) {
+        if (s[i] == '\\') s[i] = '/';
+    }
+}
+
+static void import_canonicalize_path(const char* path, char* out, size_t cap) {
+    char raw[1024];
+    strncpy(raw, path ? path : "", sizeof(raw) - 1);
+    raw[sizeof(raw) - 1] = '\0';
+#ifdef _WIN32
+    char full[1024];
+    if (_fullpath(full, raw, sizeof(full)) != NULL) {
+        strncpy(out, full, cap - 1);
+        out[cap - 1] = '\0';
+    } else {
+        strncpy(out, raw, cap - 1);
+        out[cap - 1] = '\0';
+    }
+    import_normalize_slashes(out);
+    for (size_t i = 0; out[i]; i++) {
+        if (out[i] >= 'A' && out[i] <= 'Z') out[i] = (char)(out[i] - 'A' + 'a');
+    }
+#else
+    char full[1024];
+    if (realpath(raw, full) != NULL) {
+        strncpy(out, full, cap - 1);
+        out[cap - 1] = '\0';
+    } else {
+        strncpy(out, raw, cap - 1);
+        out[cap - 1] = '\0';
+    }
+    import_normalize_slashes(out);
+#endif
+}
+
+static bool import_has_seen(const VortexImportResolver* r, const char* canon_path) {
+    for (int i = 0; i < r->count; i++) {
+        if (strcmp(r->paths[i], canon_path) == 0) return true;
+    }
+    return false;
+}
+
+static bool import_mark_seen(VortexImportResolver* r, const char* canon_path) {
+    if (import_has_seen(r, canon_path)) return true;
+    if (r->count >= r->cap) {
+        int ncap = (r->cap == 0) ? 32 : (r->cap * 2);
+        char** np = (char**)realloc(r->paths, (size_t)ncap * sizeof(char*));
+        if (!np) return false;
+        r->paths = np;
+        r->cap = ncap;
+    }
+    size_t len = strlen(canon_path);
+    char* copy = (char*)malloc(len + 1);
+    if (!copy) return false;
+    memcpy(copy, canon_path, len + 1);
+    r->paths[r->count++] = copy;
+    return true;
+}
+
+static void import_extract_dir(const char* file_path, char* out_dir, size_t cap) {
+    if (!file_path || !file_path[0]) {
+        out_dir[0] = '\0';
+        return;
+    }
+    strncpy(out_dir, file_path, cap - 1);
+    out_dir[cap - 1] = '\0';
+    import_normalize_slashes(out_dir);
+    char* sep = strrchr(out_dir, '/');
+    if (sep) *sep = '\0';
+    else out_dir[0] = '\0';
+}
+
+static bool import_is_regular_file(const char* path) {
+    if (!path || !path[0]) return false;
+    FILE* f = fopen(path, "rb");
+    if (!f) return false;
+    int ch = fgetc(f);
+    (void)ch;
+    bool err = (ferror(f) != 0);
+    fclose(f);
+    return !err;
+}
+
+static bool import_resolve_target(const char* spec, const char* parent_file, char* out, size_t cap) {
+    if (!spec || !spec[0]) return false;
+    char norm_spec[512];
+    strncpy(norm_spec, spec, sizeof(norm_spec) - 1);
+    norm_spec[sizeof(norm_spec) - 1] = '\0';
+    import_normalize_slashes(norm_spec);
+
+    char parent_dir[512];
+    import_extract_dir(parent_file, parent_dir, sizeof(parent_dir));
+
+    /* 1. Resolve relative to parent file directory */
+    if (parent_dir[0]) {
+        char cand[1024];
+        snprintf(cand, sizeof(cand), "%s/%s", parent_dir, norm_spec);
+        if (import_is_regular_file(cand)) {
+            strncpy(out, cand, cap - 1);
+            out[cap - 1] = '\0';
+            return true;
+        }
+    }
+
+    /* 2. Fall back to standard library / CWD / package resolver */
+    return vortex_resolve_import(norm_spec, parent_file, out, cap);
+}
+
+static bool import_parse_line_directive(const char* line, size_t line_len, char* out_spec, size_t cap) {
+    size_t i = 0;
+    while (i < line_len && (line[i] == ' ' || line[i] == '\t' || line[i] == '\r')) i++;
+
+    /* Ignore line comments */
+    if (i + 1 < line_len && line[i] == '/' && line[i + 1] == '/') return false;
+
+    /* Must start with 'import' keyword */
+    if (i + 6 > line_len || strncmp(line + i, "import", 6) != 0) return false;
+    i += 6;
+    if (i >= line_len || (line[i] != ' ' && line[i] != '\t' && line[i] != '"')) return false;
+    while (i < line_len && (line[i] == ' ' || line[i] == '\t')) i++;
+    if (i >= line_len) return false;
+
+    size_t k = 0;
+    if (line[i] == '"') {
+        i++;
+        while (i < line_len && line[i] != '"' && line[i] != '\r' && line[i] != '\n') {
+            if (k + 1 < cap) out_spec[k++] = line[i];
+            i++;
+        }
+        if (i >= line_len || line[i] != '"') return false;
+        i++;
+    } else {
+        while (i < line_len && (isalnum((unsigned char)line[i]) || line[i] == '_' ||
+               line[i] == '/' || line[i] == '\\' || line[i] == '.' || line[i] == '-')) {
+            if (k + 1 < cap) out_spec[k++] = line[i];
+            i++;
+        }
+    }
+    out_spec[k] = '\0';
+    if (k == 0) return false;
+
+    while (i < line_len && (line[i] == ' ' || line[i] == '\t' || line[i] == '\r')) i++;
+    if (i < line_len && line[i] == ';') i++;
+    while (i < line_len && (line[i] == ' ' || line[i] == '\t' || line[i] == '\r')) i++;
+    if (i + 1 < line_len && line[i] == '/' && line[i + 1] == '/') return true;
+    return i == line_len;
+}
+
+static char* import_read_file_text(const char* path, size_t* out_len) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) {
         fclose(f);
+        return NULL;
+    }
+    long sz = ftell(f);
+    if (sz < 0) {
+        fclose(f);
+        return NULL;
+    }
+    fseek(f, 0, SEEK_SET);
+    char* buf = (char*)malloc((size_t)sz + 1);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    size_t n = fread(buf, 1, (size_t)sz, f);
+    buf[n] = '\0';
+    fclose(f);
+    if (out_len) *out_len = n;
+    return buf;
+}
+
+static bool import_resolve_file_recursive(VortexImportResolver* r, const char* file_path, bool is_entry) {
+    char canon[1024];
+    import_canonicalize_path(file_path, canon, sizeof(canon));
+    if (import_has_seen(r, canon)) {
+        return true;
+    }
+
+    size_t len = 0;
+    char* src = import_read_file_text(file_path, &len);
+    if (!src) {
+        if (is_entry) {
+            fprintf(stderr, "[VORTEX ERROR] Cannot open file '%s'\n", file_path);
+        } else {
+            fprintf(stderr, "[VORTEX IMPORT ERROR] Cannot open imported file '%s'\n", file_path);
+        }
+        return false;
+    }
+
+    if (!import_mark_seen(r, canon)) {
+        free(src);
         fprintf(stderr, "[VORTEX ERROR] Memory allocation error\n");
+        return false;
+    }
+
+    size_t pos = 0;
+    /* Strip UTF-8 BOM if present */
+    if (len >= 3 && (unsigned char)src[0] == 0xEF &&
+        (unsigned char)src[1] == 0xBB && (unsigned char)src[2] == 0xBF) {
+        pos = 3;
+    }
+
+    int line_num = 1;
+    while (pos < len) {
+        size_t line_start = pos;
+        while (pos < len && src[pos] != '\n') pos++;
+        size_t line_len = pos - line_start;
+        bool has_nl = (pos < len && src[pos] == '\n');
+        if (has_nl) pos++;
+
+        char spec[512];
+        if (import_parse_line_directive(src + line_start, line_len, spec, sizeof(spec))) {
+            char resolved[1024];
+            if (!import_resolve_target(spec, file_path, resolved, sizeof(resolved))) {
+                fprintf(stderr, "[VORTEX IMPORT ERROR] Cannot open imported file '%s' (at %s:%d)\n",
+                        spec, file_path, line_num);
+                free(src);
+                return false;
+            }
+            char target_canon[1024];
+            import_canonicalize_path(resolved, target_canon, sizeof(target_canon));
+            if (!import_has_seen(r, target_canon)) {
+                char marker[1280];
+                snprintf(marker, sizeof(marker), "// --- begin import \"%s\" (%s:%d) ---\n",
+                         spec, file_path, line_num);
+                if (!import_append_cstr(r, marker) ||
+                    !import_resolve_file_recursive(r, resolved, false)) {
+                    free(src);
+                    return false;
+                }
+                snprintf(marker, sizeof(marker), "\n// --- end import \"%s\" ---\n", spec);
+                if (!import_append_cstr(r, marker)) {
+                    free(src);
+                    return false;
+                }
+            }
+        } else {
+            if (!import_append_str(r, src + line_start, line_len) ||
+                (has_nl && !import_append_str(r, "\n", 1))) {
+                free(src);
+                return false;
+            }
+        }
+        line_num++;
+    }
+
+    free(src);
+    return true;
+}
+
+char* vortex_resolve_imports(const char* entry_path) {
+    if (!entry_path || !entry_path[0]) {
+        fprintf(stderr, "[VORTEX ERROR] Cannot open file '%s'\n", entry_path ? entry_path : "");
+        return NULL;
+    }
+
+    VortexImportResolver r;
+    memset(&r, 0, sizeof(r));
+    if (!import_append_cstr(&r, "")) {
+        free(r.out_buf);
+        return NULL;
+    }
+
+    bool ok = import_resolve_file_recursive(&r, entry_path, true);
+    for (int i = 0; i < r.count; i++) {
+        free(r.paths[i]);
+    }
+    free(r.paths);
+
+    if (!ok) {
+        free(r.out_buf);
+        return NULL;
+    }
+    return r.out_buf;
+}
+
+int execute_vortex_file(const char* filename) {
+    char* buffer = vortex_resolve_imports(filename);
+    if (!buffer) {
         return 1;
     }
-    size_t read_bytes = fread(buffer, 1, sz, f);
-    buffer[read_bytes] = '\0';
-    fclose(f);
 
     const char* prev_file = g_current_filename;
     g_current_filename = filename ? filename : "<file>";
@@ -1813,45 +2121,15 @@ int vortex_cmd_build(int argc, char** argv) {
         }
     }
 
-    FILE* in_f = fopen(input_path, "rb");
-    if (!in_f) {
-        fprintf(stderr, "[VORTEX BUILD ERROR] Cannot open source file '%s'\n", input_path);
-        return 1;
-    }
-    if (fseek(in_f, 0, SEEK_END) != 0) {
-        fclose(in_f);
-        fprintf(stderr, "[VORTEX BUILD ERROR] Failed to seek source file '%s'\n", input_path);
-        return 1;
-    }
-    long src_len = ftell(in_f);
-    if (src_len <= 0) {
-        fclose(in_f);
-        fprintf(stderr, "[VORTEX BUILD ERROR] Source file '%s' is empty or unreadable\n", input_path);
-        return 1;
-    }
-    fseek(in_f, 0, SEEK_SET);
-
-    char* src_buf = (char*)malloc((size_t)src_len + 1);
+    char* src_buf = vortex_resolve_imports(input_path);
     if (!src_buf) {
-        fclose(in_f);
-        fprintf(stderr, "[VORTEX BUILD ERROR] Out of memory reading source file\n");
         return 1;
     }
-    size_t r = fread(src_buf, 1, (size_t)src_len, in_f);
-    src_buf[r] = '\0';
-    fclose(in_f);
+    size_t r = strlen(src_buf);
     if (r == 0) {
         free(src_buf);
-        fprintf(stderr, "[VORTEX BUILD ERROR] Failed to read source file '%s'\n", input_path);
+        fprintf(stderr, "[VORTEX BUILD ERROR] Source file '%s' is empty or unreadable\n", input_path);
         return 1;
-    }
-
-    size_t bundled_len = 0;
-    char* bundled = vortex_bundle_source(input_path, src_buf, &bundled_len);
-    if (bundled && bundled_len > 0) {
-        free(src_buf);
-        src_buf = bundled;
-        r = bundled_len;
     }
 
     char self_path[1024] = {0};

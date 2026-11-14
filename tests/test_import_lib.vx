@@ -1,0 +1,11 @@
+// Library module for multi-file import test
+// import "this_should_be_ignored_in_comment.vx";
+
+struct Vec2 {
+    x: i64,
+    y: i64
+}
+
+fn vec2_dot(a: Vec2, b: Vec2) -> i64 {
+    return a.x * b.x + a.y * b.y;
+}

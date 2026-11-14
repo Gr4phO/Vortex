@@ -84,6 +84,7 @@ typedef struct VortexPage {
     uint8_t* base;
     size_t cursor;
     size_t capacity;
+    size_t high_water;
     struct VortexPage* next;
 } VortexPage;
 
@@ -324,6 +325,11 @@ typedef struct {
     int ret_struct_id;
     bool is_unsafe;
     bool returns_ref;
+    bool can_inline;
+    int inline_ir_count;
+    int inline_vreg_count;
+    void* inline_instrs;
+    void* inline_vregs;
 } UserFunc;
 
 typedef struct {
@@ -487,7 +493,9 @@ typedef enum {
     IR_LOAD_PARAM,
     IR_RET,
     IR_RAW_RIEMANN,
-    IR_VEC_LOOP
+    IR_VEC_LOOP,
+    IR_SUB_MOD_IMM,
+    IR_VEC_ARR_OP
 } IROpcode;
 
 typedef int VReg;
@@ -560,6 +568,11 @@ typedef struct {
     int vreg_capacity;
     int next_label;
     int total_spill_bytes;
+    bool uses_avx;
+    bool has_calls;
+    bool optimize_frame;
+    int param_count;
+    uint32_t callee_save_mask;
 } IRBuffer;
 
 typedef struct {
@@ -753,6 +766,7 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir);
 void ir_liveness_analysis(IRBuffer* ir);
 void ir_loop_vectorize(IRBuffer* ir);
 void ir_linear_scan_allocate(IRBuffer* ir);
+void jit_set_active_ir_frame(const IRBuffer* ir);
 
 /* --- Target Abstraction & JIT Backends (src/jit_x64.c, src/jit_arm64.c) --- */
 typedef struct {
@@ -837,6 +851,7 @@ void vortex_parallel_for_dispatch(void* fn_ptr, void* ctx, int64_t start, int64_
 int64_t vortex_num_workers(void);
 BuiltinFunc* builtin_find(const char* name);
 
+char* vortex_resolve_imports(const char* entry_path);
 int execute_vortex_source(const char* source);
 int execute_vortex_file(const char* filename);
 bool check_and_run_embedded_payload(int argc, char** argv);

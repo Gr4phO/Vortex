@@ -1265,6 +1265,9 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 emit_neon_vector_loop(j, ir, ins);
                 break;
             }
+            case IR_SUB_MOD_IMM:
+            case IR_VEC_ARR_OP:
+                break;
         }
         if (ins->line > 0 && j->size > ins_start_off) {
             debug_info_record_line(ins_start_off, j->size, ins->line, ins->file ? ins->file : g_current_filename);

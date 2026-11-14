@@ -73,6 +73,7 @@ VortexPage* arena_page_create(size_t min_capacity) {
     page->base = mem;
     page->cursor = 0;
     page->capacity = cap;
+    page->high_water = 0;
     page->next = NULL;
     return page;
 }
@@ -87,6 +88,7 @@ void arena_init(void) {
     } else {
         VortexPage* p = ar->head;
         while (p) {
+            if (p->cursor > p->high_water) p->high_water = p->cursor;
             p->cursor = 0;
             p = p->next;
         }
@@ -114,10 +116,18 @@ static void* arena_bump_raw(VortexRegionArena* ar, size_t total_aligned) {
         return ptr;
     }
 
-    /* Slow path: move to next recycled page or allocate new 2MB page from OS */
+    /* Slow path: move to next recycled page (with enough capacity) or allocate new OS page */
+    if (cur->cursor > cur->high_water) cur->high_water = cur->cursor;
+    while (cur->next && cur->next->capacity < total_aligned) {
+        cur = cur->next;
+        ar->current_page_index++;
+        if (cur->cursor > cur->high_water) cur->high_water = cur->cursor;
+        cur->cursor = 0;
+    }
     if (cur->next) {
         ar->current = cur->next;
         ar->current_page_index++;
+        if (ar->current->cursor > ar->current->high_water) ar->current->high_water = ar->current->cursor;
         ar->current->cursor = 0;
     } else {
         VortexPage* new_page = arena_page_create(total_aligned);
@@ -177,8 +187,8 @@ void* arena_alloc(size_t bytes) {
 
 int64_t vortex_alloc_struct(int64_t size) {
     if (g_compile_mode == VORTEX_MODE_RELEASE) {
-        size_t aligned = ((size_t)size + (VORTEX_ALIGNMENT - 1)) & ~(size_t)(VORTEX_ALIGNMENT - 1);
-        if (aligned == 0) aligned = VORTEX_ALIGNMENT;
+        size_t aligned = ((size_t)size + 7U) & ~(size_t)7U;
+        if (aligned == 0) aligned = 8;
         return (int64_t)arena_bump_raw(get_active_arena(), aligned);
     }
     return (int64_t)arena_alloc_with_header((size_t)size, 0, 0);
@@ -192,7 +202,16 @@ static int64_t vortex_alloc_slice_common(int64_t len, uint32_t elem_size) {
     size_t bytes = (size_t)len * (size_t)elem_size;
     void* ptr = arena_alloc_with_header(bytes, (uint64_t)len, elem_size);
     if (bytes > 0) {
-        memset(ptr, 0, bytes);
+        VortexRegionArena* ar = get_active_arena();
+        VortexPage* page = ar->current;
+        if (page && page->high_water > 0) {
+            size_t user_off = (size_t)((uint8_t*)ptr - page->base);
+            if (user_off < page->high_water) {
+                size_t dirty_bytes = page->high_water - user_off;
+                if (dirty_bytes > bytes) dirty_bytes = bytes;
+                memset(ptr, 0, dirty_bytes);
+            }
+        }
     }
     return (int64_t)ptr;
 }
@@ -338,12 +357,14 @@ int64_t vortex_scope_pop(int64_t mark) {
     }
 
     if (p) {
+        if (p->cursor > p->high_water) p->high_water = p->cursor;
         ar->current = p;
         ar->current_page_index = target_page_idx;
         p->cursor = target_cursor;
 
         VortexPage* next_page = p->next;
         while (next_page) {
+            if (next_page->cursor > next_page->high_water) next_page->high_water = next_page->cursor;
             next_page->cursor = 0;
             next_page = next_page->next;
         }

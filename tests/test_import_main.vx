@@ -1,0 +1,12 @@
+// Main entry file for multi-file import test
+// import "nonexistent_in_comment.vx";
+import "test_import_lib.vx";
+import "./test_import_lib.vx";
+
+let v1 = Vec2 { x: 3, y: 4 };
+let v2 = Vec2 { x: 5, y: 6 };
+let dot = vec2_dot(v1, v2);
+print(dot);
+if dot != 39 {
+    exit(1);
+}

@@ -17,7 +17,7 @@ echo "========================================================"
 PASSED=0
 FAILED=0
 
-for t in test_struct.vx test_vec_struct.vx test_fib.vx test_ffi.vx test_memory_1m.vx test_safety_pass.vx; do
+for t in test_struct.vx test_vec_struct.vx test_fib.vx test_ffi.vx test_memory_1m.vx test_safety_pass.vx test_import_main.vx; do
     echo ""
     echo "--- [RUN] $t ---"
     if "$VORTEX_BIN" "$SCRIPT_DIR/$t"; then
