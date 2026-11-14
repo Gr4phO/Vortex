@@ -1,173 +1,151 @@
 # Vortex
 
-**A lightweight, zero-GC x86-64 AVX2 JIT systems language and native runtime written in modular C99.**
+**Compilateur JIT natif x86-64 AVX2/FMA3, langage système sans garbage collector et runtime autonome en C99 modulaire.**
 
-Vortex compiles source scripts and interactive REPL sessions directly into native x86-64 machine code in memory, pairing `2 MiB` paged region arenas and loop-aware linear-scan register allocation with generic 256-bit AVX2 auto-vectorization, native OS multi-threading (`parallel_for`), dynamic C FFI (`extern fn`), and single-binary standalone packaging (`vortex build`).
+[![Version](https://img.shields.io/badge/version-v1.0.0-10B981?style=flat-square)](releases/v1.0.0/)
+[![Architecture](https://img.shields.io/badge/arch-x86--64%20AVX2%20%7C%20ARM64-334155?style=flat-square)](#architecture-du-compilateur)
+[![Standard](https://img.shields.io/badge/C99-zero%20external%20deps-334155?style=flat-square)](#compilation-depuis-les-sources)
+[![CI](https://img.shields.io/github/actions/workflow/status/corbac10099/Vortex/release.yml?style=flat-square&label=release%20CI)](.github/workflows/release.yml)
+
+Vortex compile les scripts `.vx` et sessions REPL directement en code machine natif x86-64 en mémoire. Il combine des arènes paginées de `2 MiB` sans GC, une allocation de registres Linear Scan pondérée par la profondeur de boucle, l'auto-vectorisation AVX2/FMA3, le parallélisme natif OS (`parallel_for`), une FFI C dynamique sans wrapper (`extern fn`) et le packaging en exécutable autonome (`vortex build`).
 
 ---
 
-## Télécharger Vortex CLI v1.0.0 (Exécutable Autonome < 200 Ko)
+## Télécharger Vortex CLI (`v1.0.0`)
 
-Uniquement le compilateur/CLI autonome `vortex` (zéro dépendance externe, aucune application de démo empaquetée) :
+Exécutable CLI autonome uniquement (compilateur + JIT + runtime, aucune dépendance externe) :
 
-| Plateforme | Architecture | Lien Direct (Dépôt / GitHub Releases) | Taille | Exécution Rapide |
+| Plateforme | Architecture | Téléchargement direct | Taille | Commande type |
 | :--- | :--- | :--- | :---: | :--- |
-| **Windows** | `x86-64` | **[`vortex-windows-x64.exe` (local)](releases/v1.0.0/vortex-windows-x64.exe)** · [GitHub Release](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-windows-x64.exe) | **205.5 Ko** (`210 432` o) | `.\vortex-windows-x64.exe run --release script.vx` |
-| **Linux** | `x86-64` (headless) | **[`vortex-linux-x64` (GitHub Release)](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-linux-x64)** | `< 200 Ko` (CI `ubuntu-latest`) | `chmod +x vortex-linux-x64 && ./vortex-linux-x64 --headless run --release script.vx` |
-| **macOS** | `x86-64` (Darwin) | **[`vortex-macos-x64` (GitHub Release)](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-macos-x64)** | `< 200 Ko` (CI `macos-latest`) | `chmod +x vortex-macos-x64 && ./vortex-macos-x64 --headless run --release script.vx` |
+| **Windows** | `x86-64` | [Local (`releases/v1.0.0`)](releases/v1.0.0/vortex-windows-x64.exe) · [GitHub Release](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-windows-x64.exe) | **205.5 Ko** | `.\vortex-windows-x64.exe run --release script.vx` |
+| **Linux** | `x86-64` (headless) | [GitHub Release](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-linux-x64) | `< 210 Ko` | `./vortex-linux-x64 --headless run --release script.vx` |
+| **macOS** | `x86-64` (Darwin) | [GitHub Release](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-macos-x64) | `< 210 Ko` | `./vortex-macos-x64 --headless run --release script.vx` |
 
-> *Note* : Le binaire Windows est versionné directement dans [`releases/v1.0.0/`](releases/v1.0.0/). Les binaires Linux et macOS (ainsi que la publication GitHub Releases complète) sont compilés et testés automatiquement sur les runners natifs par [`.github/workflows/release.yml`](.github/workflows/release.yml).
-
-```sh
-# Lancer un script en mode haute performance (--release désactive les vérifications runtime)
-./vortex run --release benchmarks/suite_10_langs/bench_vortex.vx
-
-# Exécuter sans interface graphique (serveurs / CI Linux & macOS)
-./vortex --headless run --release mon_script.vx   # ou VORTEX_HEADLESS=1 ./vortex run mon_script.vx
-```
+> Le binaire Windows (`210 432` octets) est versionné dans [`releases/v1.0.0/`](releases/v1.0.0/). Les binaires Linux et macOS sont compilés et validés sur runners natifs via [`.github/workflows/release.yml`](.github/workflows/release.yml) à chaque tag SemVer généré automatiquement par [`.github/workflows/auto-version.yml`](.github/workflows/auto-version.yml).
 
 ---
 
-## Architecture Pipeline
+## Benchmarks Officiels — Vortex v1.0.0 vs 10 Langages
+
+Protocole strictement identique ([`benchmarks/suite_10_langs/`](benchmarks/suite_10_langs/)) exécuté sur **AMD Ryzen 5 5500** (`6C/12T @ 3.60 GHz`, Windows 11 x64, `32 Go RAM`), médiane sur **5 exécutions** (`3` pour Python 3.12 ; `--release` / optimisation maximale sur chaque compilateur). Les entrées marquées `*` sont étalonnées sur la même architecture Zen 3.
+
+![Temps d'exécution total Vortex v1.0.0 vs 10 langages](docs/assets/bench_execution_time.svg)
+
+![Temps de compilation et taille binaire Vortex v1.0.0 vs 10 langages](docs/assets/bench_binary_size_and_compile.svg)
+
+| Rang | Langage | Total (ms) | T1 (ms) | T2 (ms) | T3 (ms) | T4 (ms) | T5 (ms) | Démarrage (ms) | Binaire (Ko) |
+| :---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **#1** | **Vortex v1.0.0 (`--release`)** | **410.30** | **10.15** | 111.16 | **10.75** | **257.19** | 12.56 | **72.30** | 205.5 |
+| #2 | C++ (`Clang++ 23 -O3`) | 547.28 | 74.91 | 149.83 | 41.12 | 269.35 | **7.90** | 2 508.83 | 76.5 |
+| #3 | Rust (`rustc 1.99 -O3`) | 587.08 | 84.12 | **110.19** | 60.39 | 314.14 | 10.07 | 2 393.49 | 4 309.5 |
+| #4 | C (`Clang 23 -O3`) | 621.72 | 74.98 | 143.16 | 66.41 | 322.40 | 9.82 | 1 436.69 | 68.5 |
+| #5 | Go 1.23\* *(étalonné Zen 3)* | 655.50\* | 88.00\* | 135.00\* | 62.00\* | 360.00\* | 10.50\* | 420.00\* | 2 100.0\* |
+| #6 | Java (OpenJDK HotSpot 17) | 745.02 | 246.42 | 125.88 | 15.73 | 326.25 | 29.66 | 900.22 | 3.8 (+JVM) |
+| #7 | C# (.NET v4.8 / RyuJIT) | 910.82 | 82.89 | 110.59 | 77.05 | 636.31 | 16.87 | 654.86 | 5.0 (+CLR) |
+| #8 | JavaScript (Node.js v26) | 1 580.34 | 264.85 | 199.86 | 78.11 | 983.10 | 62.97 | 344.55 | 97 751.8 |
+| #9 | LuaJIT 2.1\* *(étalonné Zen 3)* | 2 418.00\* | 115.00\* | 165.00\* | 28.00\* | 1 930.00\* | 180.00\* | **12.00\*** | 520.0\* |
+| #10 | Python 3.12 (CPython) | 42 891.01 | 6 599.29 | 7 379.21 | 627.99 | 22 069.13 | 5 292.36 | 403.10 | 6 885.0 |
+
+> **Épreuves** : **T1** Intégrale de Riemann `f32` (`100M`) · **T2** Transformation & réduction tableau `i64` (`50M`) · **T3** Allocation & réduction `1M` structures `Node` · **T4** `fib(40)` + `100M` appels · **T5** Grille multi-cœur `12` threads.  
+> **Rapports détaillés** : [Rapport complet v1.0.0](benchmarks/BENCHMARK_REPORT_v1.0.0.md) · [Feuille de route d'optimisation](docs/OPTIMIZATION_ROADMAP.md).
+
+---
+
+## Capacités & Architecture du Compilateur
 
 ```text
-  .vx Script / Interactive REPL
+  Script .vx / REPL Interactif
          │
          ▼
-  ┌──────────────────────────────────────────────────────────┐
-  │ 1. Lexer & Recursive-Descent Parser (src/lexer_parser.c) │
-  │    Struct layouts, mutability checks, 3-address IR emit  │
-  └──────────────────────────┬───────────────────────────────┘
-                             ▼
-  ┌──────────────────────────────────────────────────────────┐
-  │ 2. IR Optimizations & RegAlloc (src/ir_opt.c)            │
-  │    Generic Loop Vectorizer -> Liveness -> Linear Scan    │
-  └──────────────────────────┬───────────────────────────────┘
-                             ▼
-  ┌──────────────────────────────────────────────────────────┐
-  │ 3. Dual-ABI x86-64 + AVX2 JIT Codegen (src/jit_x64.c)    │
-  │    Windows x64 & Linux System V AMD64, VEX AVX2, C FFI   │
-  └──────────────────────────┬───────────────────────────────┘
-                             ▼
-  ┌──────────────────────────────────────────────────────────┐
-  │ 4. Native Paged-Arena Runtime (src/arena.c, runtime.c)   │
-  │    2MB huge pages, 64B align, thread pool, Win32/X11 GUI │
-  └──────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────┐
+  │ 1. Lexer & Parser récursif (src/lexer_parser.c)                  │
+  │    Layout C des structs, contrôle de mutabilité, émission IR 3-ad│
+  └──────────────────────────────┬───────────────────────────────────┘
+                                 ▼
+  ┌──────────────────────────────────────────────────────────────────┐
+  │ 2. Optimiseur IR & Allocation de Registres (src/ir_opt.c)        │
+  │    Inlining, déroulement récursif, LICM, AVX2 Loop Vectorizer,   │
+  │    analyse de vivacité & Linear Scan pondéré par boucle          │
+  └──────────────────────────────┬───────────────────────────────────┘
+                                 ▼
+  ┌──────────────────────────────────────────────────────────────────┐
+  │ 3. Backends Natifs Dual-ABI (src/jit_x64.c, src/jit_arm64.c)     │
+  │    x86-64 (Win64 / SysV64, AVX2 + FMA3, omit-fp) & ARM64 NEON    │
+  └──────────────────────────────┬───────────────────────────────────┘
+                                 ▼
+  ┌──────────────────────────────────────────────────────────────────┐
+  │ 4. Runtime Natif (src/arena.c, src/runtime.c)                    │
+  │    Arènes 2 MiB alignées 64B, pool de threads OS, FFI C, GUI/CLI │
+  └──────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## Core Capabilities
-
-- **2 MiB Paged Region Arenas (Zero-GC)**: Cache-line / AVX-512 aligned (`64`-byte) bump allocation across chained 2 MiB OS pages with $O(1)$ scoped rewind (`scope_push` / `scope_pop`) and zero per-object destructor overhead.
-- **Typed C-Layout Structures (`struct`)**: Natural field alignment and offsets, named/positional struct literals, nested field reads/writes, and `struct_size` / `struct_align` introspection.
-- **Optimizing Linear IR & Register Allocation**: Automatic small-function IR inlining, constant folding & DCE, generalized LICM invariant hoisting, branchless `cmovge` if-conversion, and loop-depth-weighted linear-scan GPR/XMM allocation with direct register argument passing (`RCX`/`RDI`).
-- **Generic 256-bit AVX2 + FMA3 Auto-Vectorization**: Promotes countable `f32` loops to **32-way FMA3** (`vfmadd231ps` across 4 YMM accumulators) and `i64` slice transforms/reductions to **8-wide AVX2** (`vmovdqu`, `vpsllq`, `vpaddq`), plus compact peephole encoding.
-- **Native Multi-Core `parallel_for`**: Persistent OS worker thread pool (`CreateThread` / `pthread`) automatically capturing outer variables and giving every core its own lock-free thread-local 2 MiB `VortexRegionArena`.
-- **Zero-Wrapper Dynamic C FFI (`extern "lib" fn`)**: Runtime loading via `LoadLibraryA`/`GetProcAddress` (Windows) and `dlopen`/`dlsym` (Linux), supporting up to 8 arguments (register + stack spill), `i32`/`i64`/`f32`/`f64`/`str`/`ptr`/`void`, and variadic C ABI marshalling.
-- **Standalone Packaging (`vortex build`)**: Clones the runtime binary and embeds a `"VRTX"` / `"VTXPACK1"` payload trailer to produce single-file `.exe` / ELF executables with zero external dependencies.
-- **Cross-Platform Native GUI**: Built-in software-framebuffer windowing and drawing primitives (`Win32 GDI` on Windows, `Xlib` on Linux, optional `-DVORTEX_NO_X11` headless mode).
+- **Gestion mémoire sans GC** : arènes chaînées par pages de `2 MiB` (`VirtualAlloc` / `mmap`) alignées sur `64` octets, rembobinage $O(1)$ par portée (`scope_push` / `scope_pop`) et allocation OS zero-copy en `--release`.
+- **Optimisations IR & JIT** : inlining automatique des fonctions courtes, déroulement 1 niveau de récursion binaire avec spécialisation des cas de base, omission du pointeur de trame (`omit_fp`), passage direct du premier paramètre en registre (`RCX`/`RDI`), if-conversion sans branchement (`cmovge`) et réduction d'adresse `LEA`/`SIB`.
+- **Auto-vectorisation AVX2 + FMA3** : boucles `f32` déroulées sur **32 voies FMA3** (`vfmadd231ps`), boucles sur tableaux `i64` sur **16 éléments par itération** avec `prefetcht0`, et boucles de grille modulaires vectorisées via `vpcmpgtq` / `vpand` / `vpsubq`.
+- **Parallélisme multi-cœur (`parallel_for`)** : pool persistant de threads natifs OS dotés chacun de sa propre arène locale sans verrou.
+- **FFI C dynamique & packaging** : appels directs vers bibliothèques partagées (`LoadLibraryA` / `dlopen`) sans code glue, et génération d'exécutables autonomes (`vortex build`).
 
 ---
 
-## Benchmarks Officiels (Vortex v1.0.0 vs 10 Langages)
+## Compilation depuis les Sources & Démarrage Rapide
 
-Campagne exécutée sur **AMD Ryzen 5 5500** (`6C/12T @ 3,60 GHz`, Windows 11 x64, `32 Go RAM`), médiane sur **5 exécutions** (`3` pour Python 3.12) sur [`benchmarks/suite_10_langs/`](benchmarks/suite_10_langs/) (8 langages mesurés localement, 2 marqués `*` étalonnés sur référence Zen 3) :
+### Compiler le compilateur
 
-![Comparatif des temps d'exécution Vortex v1.0.0 vs 10 langages](docs/assets/bench_execution_time.svg)
-
-![Taille du binaire et temps de compilation Vortex v1.0.0 vs 10 langages](docs/assets/bench_binary_size_and_compile.svg)
-
-| Langage | Compilation / Démarrage | T1 : Riemann `f32` (100M) | T2 : Tableau `i64` (50M) | T3 : Structs `Node` (1M) | T4 : `fib(40)` + 100M calls | T5 : Grille 12 threads | Binaire / Runtime |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Vortex v1.0.0 (`--release`) — `#1`** | **`72.30 ms`** | 🏆 **`10.15 ms`** | 🥉 **`111.16 ms`** | 🏆 **`10.75 ms`** | 🏆 **`257.19 ms`** | `12.56 ms` | **`205.5 Ko`** *(autonome)* |
-| **C++ (`Clang++ 23 -O3`) — `#2`** | `2 508.83 ms` | `74.91 ms` | `149.83 ms` | `41.12 ms` | `269.35 ms` | **`7.90 ms`** | `76.5 Ko` |
-| **Rust (`rustc 1.99 -O3`) — `#3`** | `2 393.49 ms` | `84.12 ms` | **`110.19 ms`** | `60.39 ms` | `314.14 ms` | `10.07 ms` | `4 309.5 Ko` |
-| **C (`Clang 23 -O3`) — `#4`** | `1 436.69 ms` | `74.98 ms` | `143.16 ms` | `66.41 ms` | `322.40 ms` | `9.82 ms` | `68.5 Ko` |
-| **Go 1.23\*** *(étalonné Zen 3)* | `420.00 ms`\* | `88.00 ms`\* | `135.00 ms`\* | `62.00 ms`\* | `360.00 ms`\* | `10.50 ms`\* | `2 100.0 Ko`\* |
-| **Java (HotSpot 17)** | `900.22 ms` | `246.42 ms` | `125.88 ms` | 🥈 `15.73 ms` | `326.25 ms` | `29.66 ms` | `3.8 Ko` *(+ 12,5 Mo JVM)* |
-| **C# (.NET v4.8)** | `654.86 ms` | `82.89 ms` | `110.59 ms` | `77.05 ms` | `636.31 ms` | `16.87 ms` | `5.0 Ko` *(+ .NET CLR)* |
-| **JavaScript (Node v26)** | `344.55 ms` | `264.85 ms` | `199.86 ms` | `78.11 ms` | `983.10 ms` | `62.97 ms` | `97 751.8 Ko` (`node.exe`) |
-| **LuaJIT 2.1\*** *(étalonné Zen 3)* | `12.00 ms`\* | `115.00 ms`\* | `165.00 ms`\* | `28.00 ms`\* | `1 930.00 ms`\* | `180.00 ms`\* | `520.0 Ko`\* |
-| **Python 3.12 (CPython)** | `403.10 ms` | `6 599.29 ms` | `7 379.21 ms` | `627.99 ms` | `22 069.13 ms` | `5 292.36 ms` | `6 885.0 Ko` |
-
-- 📄 **Rapport complet & protocole** : [`benchmarks/BENCHMARK_REPORT_v1.0.0.md`](benchmarks/BENCHMARK_REPORT_v1.0.0.md)
-- 🚀 **Feuille de route "Road to #1" (Inlining, LICM, SIB/LEA, FMA3, Peephole)** : [`docs/OPTIMIZATION_ROADMAP.md`](docs/OPTIMIZATION_ROADMAP.md)
-
----
-
-## Quick Start
-
-### Build from Source
-
-**Windows (Clang):**
 ```bat
+:: Windows (Clang)
 build.bat
 ```
 
-**Linux / macOS (Clang or GCC):**
 ```sh
-make          # Auto-detects Linux/Darwin (X11 on Linux if available, headless on macOS)
-make headless # Without X11 dependency (-DVORTEX_NO_X11)
-make release  # Stripped LTO CLI executable (< 200 KB)
+# Linux / macOS (Clang ou GCC)
+make            # Détection automatique OS / X11
+make headless   # Sans dépendance X11 (-DVORTEX_NO_X11)
+make release    # Binaire LTO strippé
 ```
 
-### Run Scripts, Interactive REPL & Standalone Builds
+### Utilisation CLI & REPL
 
 ```sh
-# Launch the interactive Vortex REPL terminal (also default when double-clicking vortex.exe)
+# Lancer le REPL interactif (:help, :vars, :structs, :time, :run, :exit)
 ./vortex
 
-# Execute a script (or add --release / --headless)
-./vortex run benchmarks/benchmark.vx
-./vortex --headless run --release benchmarks/suite_10_langs/bench_vortex.vx
+# Exécuter un script en mode haute performance ou headless
+./vortex run --release benchmarks/suite_10_langs/bench_vortex.vx
+./vortex --headless run --release script.vx
 
-# Evaluate inline Vortex code
+# Évaluer une expression en ligne ou packager un binaire autonome
 ./vortex eval "let mut x = 21; x = x * 2; print(x);"
-
-# Package a self-contained single-file executable
 ./vortex build examples/app_3d.vx -o app_3d.exe
 ```
 
-Inside the REPL terminal, use `:help`, `:vars`, `:structs`, `:time <expr>`, `:run <file.vx>`, `:reset`, `:cls`, and `:exit`.
-
-### Run Automated Tests
+### Suite de tests automatisés
 
 ```bat
-tests\run_tests.bat   # Windows
+tests\run_tests.bat   :: Windows (tests unitaires, sécurité, ARM64, Jalon 3)
+```
+
+```sh
 ./tests/run_tests.sh  # Linux / macOS
 ```
 
 ---
 
-## Documentation
+## Documentation & Structure du Dépôt
 
-Full syntax, type rules, IR & AVX2 pipeline mechanics, builtin runtime APIs, C FFI marshalling, benchmarks, and optimization plans are documented in:
-
-- **[Vortex Language Reference & Technical Specification](docs/VORTEX_SPEC.md)**
-- **[Rapport Officiel de Benchmarks v1.0.0 (10 Langages)](benchmarks/BENCHMARK_REPORT_v1.0.0.md)**
-- **[Feuille de Route d'Optimisation "Road to #1"](docs/OPTIMIZATION_ROADMAP.md)**
-
----
-
-## Repository Structure
+- **[Spécification Technique du Langage](docs/VORTEX_SPEC.md)** — syntaxe, système de types, pipeline IR/AVX2, FFI et API standard.
+- **[Rapport Officiel de Benchmarks v1.0.0](benchmarks/BENCHMARK_REPORT_v1.0.0.md)** — protocole complet, sommes de contrôle et analyse par épreuve.
+- **[Feuille de Route d'Optimisation](docs/OPTIMIZATION_ROADMAP.md)** — historique et chantiers d'optimisation bas niveau.
 
 ```text
 .
-├── .github/workflows/   # GitHub Actions CI & multi-OS CLI release workflow (Win/Linux/macOS)
-├── src/
-│   ├── vortex.h         # Shared types, IR opcodes, ABI & module interfaces
-│   ├── arena.c          # 2MB paged region arena, scopes, Vec, Map, UTF-8 strings
-│   ├── lexer_parser.c   # Lexer, C struct layouts, recursive-descent IR frontend
-│   ├── ir_opt.c         # Generic AVX2 loop vectorizer, liveness, Linear-Scan RegAlloc
-│   ├── jit_x64.c        # Dual-ABI x86-64/AVX2 & ARM64 emitter + dynamic C FFI codegen
-│   ├── runtime.c        # Win32/X11/Headless GUI, thread pool, builtins, standalone packager
-│   └── main.c           # CLI driver & interactive REPL shell
-├── releases/v1.0.0/     # Official standalone CLI release binary (vortex-windows-x64.exe < 200 Ko)
-├── examples/            # Real-time 3D & native GUI showcase demos (.vx)
-├── benchmarks/          # Benchmark report, AVX2 benchmarks & 10-language suite (suite_10_langs/)
-├── tests/               # Regression tests & cross-platform test runners
-├── docs/                # VORTEX_SPEC.md, OPTIMIZATION_ROADMAP.md & SVG benchmark charts (assets/)
-├── build.bat            # Windows C99 build script (clang -O2 -Wall -Wextra)
-└── Makefile             # Cross-platform Linux/macOS Makefile (default, headless & release targets)
+├── .github/workflows/   # CI multi-OS (release.yml) & versionnage SemVer auto (auto-version.yml)
+├── src/                 # Compilateur C99 modulaire (lexer/parser, IR/opt, JIT x64/ARM64, runtime)
+├── releases/v1.0.0/     # Binaire CLI autonome Windows (vortex-windows-x64.exe)
+├── benchmarks/          # Banc d'essai 10 langages (suite_10_langs/) & rapport officiel
+├── docs/                # Spécification, feuille de route & graphiques SVG (assets/)
+├── examples/            # Démonstrations 3D et GUI natives (.vx)
+├── tests/               # Tests de régression, sécurité mémoire, ARM64 & outillage
+├── VERSION              # Version courante SemVer (gérée automatiquement)
+├── build.bat            # Script de compilation Windows
+└── Makefile             # Build multiplateforme Linux / macOS
 ```
