@@ -1,0 +1,83 @@
+// Test Jalon 1: unsafe blocks/functions, raw pointers, slices, bounds & region lifetimes
+
+struct Pixel {
+    r: i32,
+    g: i32,
+    b: i32,
+    a: i32
+}
+
+unsafe fn write_raw_i32(base: *i32, idx: i64, val: i64) -> i64 {
+    let addr = (base as i64) + (idx * 4);
+    let p = addr as *i32;
+    *p = val;
+    return *p;
+}
+
+fn compute_slice_sum(n: i64) -> i64 {
+    let arr = slice_i64(n);
+    for i in 0..n {
+        arr[i] = i * 2 + 1;
+    }
+    let mut sum = 0;
+    let lim = slice_len(arr);
+    for j in 0..lim {
+        sum = sum + arr[j];
+    }
+    return sum;
+}
+
+// Forward call to unsafe fn declared later
+fn safe_wrapper(v: i64) -> i64 {
+    unsafe {
+        return forward_unsafe_add(v, 100);
+    }
+}
+
+unsafe fn forward_unsafe_add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+// Outer slice + inner temporary scope_push/scope_pop that does not escape
+let outer_arr = slice_i32(8);
+let outer_len = slice_len(outer_arr);
+print(outer_len);
+
+let m = scope_push();
+let temp_f = slice_f32(16);
+for k in 0..16 {
+    temp_f[k] = (k as f32) * 1.5;
+}
+let f_check = temp_f[4];
+print(f_check);
+scope_pop(m);
+
+// After scope_pop(m), outer_arr is STILL live and safe
+for i in 0..8 {
+    outer_arr[i] = i * 10;
+}
+print(outer_arr[5]);
+
+// Raw pointer arithmetic, hex literals, deref, and framebuffer-like writes inside unsafe
+unsafe {
+    let fb = slice_i32(16);
+    let prev = write_raw_i32(fb, 3, 0x123456);
+    print(prev);
+    print(fb[3]);
+
+    let raw_addr = fb as i64;
+    let cell_addr = raw_addr + 8 * 4;
+    ptr_write32(cell_addr, 777);
+    print(ptr_read32(cell_addr));
+    print(fb[8]);
+}
+
+let s = compute_slice_sum(10);
+print(s);
+print(safe_wrapper(23));
+
+// Cast float <-> int outside unsafe (value cast is safe!)
+let fx = (42 as f32) + 0.5;
+let ix = fx as i64;
+print(fx);
+print(ix);

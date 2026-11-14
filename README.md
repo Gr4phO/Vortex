@@ -6,6 +6,28 @@ Vortex compiles source scripts and interactive REPL sessions directly into nativ
 
 ---
 
+## Télécharger Vortex CLI v1.0.0 (Exécutable Autonome < 200 Ko)
+
+Uniquement le compilateur/CLI autonome `vortex` (zéro dépendance externe, aucune application de démo empaquetée) :
+
+| Plateforme | Architecture | Lien Direct (Dépôt / GitHub Releases) | Taille | Exécution Rapide |
+| :--- | :--- | :--- | :---: | :--- |
+| **Windows** | `x86-64` | **[`vortex-windows-x64.exe` (local)](releases/v1.0.0/vortex-windows-x64.exe)** · [GitHub Release](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-windows-x64.exe) | **169 Ko** (`173 056` o) | `.\vortex-windows-x64.exe run --release script.vx` |
+| **Linux** | `x86-64` (headless) | **[`vortex-linux-x64` (GitHub Release)](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-linux-x64)** | `< 200 Ko` (CI `ubuntu-latest`) | `chmod +x vortex-linux-x64 && ./vortex-linux-x64 --headless run --release script.vx` |
+| **macOS** | `x86-64` (Darwin) | **[`vortex-macos-x64` (GitHub Release)](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-macos-x64)** | `< 200 Ko` (CI `macos-latest`) | `chmod +x vortex-macos-x64 && ./vortex-macos-x64 --headless run --release script.vx` |
+
+> *Note* : Le binaire Windows est versionné directement dans [`releases/v1.0.0/`](releases/v1.0.0/). Les binaires Linux et macOS (ainsi que la publication GitHub Releases complète) sont compilés et testés automatiquement sur les runners natifs par [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+```sh
+# Lancer un script en mode haute performance (--release désactive les vérifications runtime)
+./vortex run --release benchmarks/suite_10_langs/bench_vortex.vx
+
+# Exécuter sans interface graphique (serveurs / CI Linux & macOS)
+./vortex --headless run --release mon_script.vx   # ou VORTEX_HEADLESS=1 ./vortex run mon_script.vx
+```
+
+---
+
 ## Architecture Pipeline
 
 ```text
@@ -48,17 +70,29 @@ Vortex compiles source scripts and interactive REPL sessions directly into nativ
 
 ---
 
-## Verified Benchmark Results
+## Benchmarks Officiels (Vortex v1.0.0 vs 10 Langages)
 
-Measured on Windows x64 (12 logical CPU cores) using `.\vortex.exe run <benchmark>`:
+Campagne exécutée sur **AMD Ryzen 5 5500** (`6C/12T @ 3,60 GHz`, Windows 11 x64, `32 Go RAM`), médiane sur **5 exécutions** sur [`benchmarks/suite_10_langs/`](benchmarks/suite_10_langs/) (8 langages mesurés localement, 2 marqués `*` étalonnés sur référence Zen 3) :
 
-| Benchmark | Workload | Observed Time | Highlight |
-| :--- | :--- | :--- | :--- |
-| `benchmarks/benchmark.vx` | Riemann $\pi$ approximation (`100,000,000` terms) | **8.88 ms** (`8,879 µs`) | 16-way unrolled AVX2 YMM reduction |
-| `benchmarks/test_avx2_generic.vx` | Generic AVX2 reduction loop (`50,000,000` steps) | **4.56 ms** (`4,559 µs`) | Auto-vectorized `IR_VEC_LOOP` pass |
-| `benchmarks/test_parallel.vx` | `parallel_for` compute (`10,000,000` iterations, 12 threads) | **1.11 ms** (`1,107 µs`) | Persistent OS thread pool + JIT worker kernels |
-| `benchmarks/test_parallel_alloc.vx` | Parallel allocations (`1,000,000` `Particle` structs, 12 threads) | **3.82 ms** (`3,817 µs`) | Zero-lock thread-local 2 MiB arenas |
-| `tests/test_memory_1m.vx` | Scoped single-thread `1,000,000` `Vertex3D` allocations | **8–9 ms** | `scope_push` / `scope_pop` instant region reuse |
+![Comparatif des temps d'exécution Vortex v1.0.0 vs 10 langages](docs/assets/bench_execution_time.svg)
+
+![Taille du binaire et temps de compilation Vortex v1.0.0 vs 10 langages](docs/assets/bench_binary_size_and_compile.svg)
+
+| Langage | Compilation / Démarrage | T1 : Riemann `f32` (100M) | T2 : Tableau `i64` (50M) | T3 : Structs `Node` (1M) | T4 : `fib(40)` + 100M calls | T5 : Grille 12 threads | Binaire / Runtime |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Vortex v1.0.0 (`--release`)** | **`67.95 ms`** | 🏆 **`8.91 ms`** | `209.58 ms` | 🥈 **`20.02 ms`** | `1 573.51 ms` | `16.23 ms` | **`169 Ko`** *(autonome)* |
+| **C (`Clang 23 -O3`)** | `797.17 ms` | `73.36 ms` | `137.70 ms` | `57.97 ms` | `320.84 ms` | **`7.72 ms`** | `68.5 Ko` |
+| **C++ (`Clang++ 23 -O3`)** | `1 782.97 ms` | `73.09 ms` | `144.70 ms` | `40.92 ms` | **`270.37 ms`** | `8.32 ms` | `76.5 Ko` |
+| **Rust (`rustc 1.99 -O3`)** | `932.97 ms` | `83.32 ms` | **`111.37 ms`** | `60.01 ms` | `311.57 ms` | `11.27 ms` | `4 309.5 Ko` |
+| **Go 1.23\*** *(étalonné Zen 3)* | `420.00 ms`\* | `88.00 ms`\* | `135.00 ms`\* | `62.00 ms`\* | `360.00 ms`\* | `10.50 ms`\* | `2 100.0 Ko`\* |
+| **C# (.NET v4.8)** | `310.81 ms` | `82.59 ms` | `121.49 ms` | `84.57 ms` | `650.57 ms` | `18.65 ms` | `5.0 Ko` *(+ .NET CLR)* |
+| **Java (HotSpot 17)** | `751.94 ms` | `245.93 ms` | `121.83 ms` | **`16.93 ms`** | `338.83 ms` | `32.68 ms` | `3.8 Ko` *(+ 12,5 Mo JVM)* |
+| **JavaScript (Node v26)** | `358.72 ms` | `263.94 ms` | `193.84 ms` | `77.59 ms` | `954.69 ms` | `57.25 ms` | `97 751.8 Ko` (`node.exe`) |
+| **LuaJIT 2.1\*** *(étalonné Zen 3)* | `12.00 ms`\* | `115.00 ms`\* | `165.00 ms`\* | `28.00 ms`\* | `1 930.00 ms`\* | `180.00 ms`\* | `520.0 Ko`\* |
+| **Python 3.12 (CPython)** | `1 187.28 ms` | `6 467.54 ms` | `7 118.88 ms` | `616.05 ms` | `19 969.74 ms` | `4 183.79 ms` | `6 953.7 Ko` |
+
+- 📄 **Rapport complet & protocole** : [`benchmarks/BENCHMARK_REPORT_v1.0.0.md`](benchmarks/BENCHMARK_REPORT_v1.0.0.md)
+- 🚀 **Feuille de route "Road to #1" (Inlining, LICM, SIB/LEA, FMA3, Peephole)** : [`docs/OPTIMIZATION_ROADMAP.md`](docs/OPTIMIZATION_ROADMAP.md)
 
 ---
 
@@ -73,8 +107,9 @@ build.bat
 
 **Linux / macOS (Clang or GCC):**
 ```sh
-make          # With X11 GUI support (-pthread -lX11 -ldl -lm)
+make          # Auto-detects Linux/Darwin (X11 on Linux if available, headless on macOS)
 make headless # Without X11 dependency (-DVORTEX_NO_X11)
+make release  # Stripped LTO CLI executable (< 200 KB)
 ```
 
 ### Run Scripts, Interactive REPL & Standalone Builds
@@ -83,9 +118,9 @@ make headless # Without X11 dependency (-DVORTEX_NO_X11)
 # Launch the interactive Vortex REPL terminal (also default when double-clicking vortex.exe)
 ./vortex
 
-# Execute a script
+# Execute a script (or add --release / --headless)
 ./vortex run benchmarks/benchmark.vx
-./vortex run examples/app_3d.vx
+./vortex --headless run --release benchmarks/suite_10_langs/bench_vortex.vx
 
 # Evaluate inline Vortex code
 ./vortex eval "let mut x = 21; x = x * 2; print(x);"
@@ -107,9 +142,11 @@ tests\run_tests.bat   # Windows
 
 ## Documentation
 
-Full syntax, type rules, IR & AVX2 pipeline mechanics, builtin runtime APIs, C FFI marshalling, and packaging binary layout are documented in the official specification:
+Full syntax, type rules, IR & AVX2 pipeline mechanics, builtin runtime APIs, C FFI marshalling, benchmarks, and optimization plans are documented in:
 
 - **[Vortex Language Reference & Technical Specification](docs/VORTEX_SPEC.md)**
+- **[Rapport Officiel de Benchmarks v1.0.0 (10 Langages)](benchmarks/BENCHMARK_REPORT_v1.0.0.md)**
+- **[Feuille de Route d'Optimisation "Road to #1"](docs/OPTIMIZATION_ROADMAP.md)**
 
 ---
 
@@ -117,18 +154,20 @@ Full syntax, type rules, IR & AVX2 pipeline mechanics, builtin runtime APIs, C F
 
 ```text
 .
+├── .github/workflows/   # GitHub Actions CI & multi-OS CLI release workflow (Win/Linux/macOS)
 ├── src/
 │   ├── vortex.h         # Shared types, IR opcodes, ABI & module interfaces
 │   ├── arena.c          # 2MB paged region arena, scopes, Vec, Map, UTF-8 strings
 │   ├── lexer_parser.c   # Lexer, C struct layouts, recursive-descent IR frontend
 │   ├── ir_opt.c         # Generic AVX2 loop vectorizer, liveness, Linear-Scan RegAlloc
-│   ├── jit_x64.c        # Dual-ABI x86-64/AVX2 emitter & dynamic C FFI codegen
-│   ├── runtime.c        # Win32/X11 GUI, thread pool, builtins, standalone packager
+│   ├── jit_x64.c        # Dual-ABI x86-64/AVX2 & ARM64 emitter + dynamic C FFI codegen
+│   ├── runtime.c        # Win32/X11/Headless GUI, thread pool, builtins, standalone packager
 │   └── main.c           # CLI driver & interactive REPL shell
+├── releases/v1.0.0/     # Official standalone CLI release binary (vortex-windows-x64.exe < 200 Ko)
 ├── examples/            # Real-time 3D & native GUI showcase demos (.vx)
-├── benchmarks/          # Official AVX2 & parallel_for throughput benchmarks (.vx)
+├── benchmarks/          # Benchmark report, AVX2 benchmarks & 10-language suite (suite_10_langs/)
 ├── tests/               # Regression tests & cross-platform test runners
-├── docs/                # VORTEX_SPEC.md language & internals specification
+├── docs/                # VORTEX_SPEC.md, OPTIMIZATION_ROADMAP.md & SVG benchmark charts (assets/)
 ├── build.bat            # Windows C99 build script (clang -O2 -Wall -Wextra)
-└── Makefile             # Linux/macOS Makefile (full X11 & headless targets)
+└── Makefile             # Cross-platform Linux/macOS Makefile (default, headless & release targets)
 ```

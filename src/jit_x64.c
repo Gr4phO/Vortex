@@ -36,6 +36,25 @@ void* vortex_load_dynlib(const char* lib_name) {
     }
 #else
     handle = dlopen(lib_name, RTLD_NOW | RTLD_GLOBAL);
+#ifdef __APPLE__
+    if (!handle && (strcmp(lib_name, "msvcrt") == 0 || strcmp(lib_name, "c") == 0 || strcmp(lib_name, "m") == 0)) {
+        handle = dlopen("libSystem.B.dylib", RTLD_NOW | RTLD_GLOBAL);
+    }
+    if (!handle && !strstr(lib_name, ".dylib")) {
+        char alt_name[140];
+        if (strncmp(lib_name, "lib", 3) != 0) {
+            snprintf(alt_name, sizeof(alt_name), "lib%s.dylib", lib_name);
+        } else {
+            snprintf(alt_name, sizeof(alt_name), "%s.dylib", lib_name);
+        }
+        handle = dlopen(alt_name, RTLD_NOW | RTLD_GLOBAL);
+    }
+#else
+    if (!handle && (strcmp(lib_name, "msvcrt") == 0 || strcmp(lib_name, "c") == 0)) {
+        handle = dlopen("libc.so.6", RTLD_NOW | RTLD_GLOBAL);
+    } else if (!handle && strcmp(lib_name, "m") == 0) {
+        handle = dlopen("libm.so.6", RTLD_NOW | RTLD_GLOBAL);
+    }
     if (!handle && !strstr(lib_name, ".so")) {
         char alt_name[140];
         if (strncmp(lib_name, "lib", 3) != 0) {
@@ -45,6 +64,7 @@ void* vortex_load_dynlib(const char* lib_name) {
         }
         handle = dlopen(alt_name, RTLD_NOW | RTLD_GLOBAL);
     }
+#endif
 #endif
 
     if (!handle) return NULL;
@@ -127,27 +147,19 @@ int64_t vortex_ffi_call4(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3, int
     return ((fn4_t)fn_ptr)(a1, a2, a3, a4);
 }
 
-/* ========================================================================= */
-/* EXECUTABLE MEMORY & LOW-LEVEL X86-64 / AVX2 EMITTER                       */
-/* ========================================================================= */
-
-void* alloc_exec_page(size_t size) {
-#ifdef _WIN32
-    return VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-#else
-    void* p = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    return (p == MAP_FAILED) ? NULL : p;
-#endif
+int64_t vortex_ffi_call5(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5) {
+    typedef int64_t (*fn5_t)(int64_t, int64_t, int64_t, int64_t, int64_t);
+    return ((fn5_t)fn_ptr)(a1, a2, a3, a4, a5);
 }
 
-void free_exec_page(void* ptr, size_t size) {
-#ifdef _WIN32
-    (void)size;
-    VirtualFree(ptr, 0, MEM_RELEASE);
-#else
-    munmap(ptr, size);
-#endif
+int64_t vortex_ffi_call6(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+    typedef int64_t (*fn6_t)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+    return ((fn6_t)fn_ptr)(a1, a2, a3, a4, a5, a6);
 }
+
+/* ========================================================================= */
+/* LOW-LEVEL X86-64 / AVX2 EMITTER                                           */
+/* ========================================================================= */
 
 static void emit_u8(JITBuffer* j, uint8_t b) {
     if (j->size >= j->capacity) {
@@ -216,19 +228,32 @@ void emit_epilogue(JITBuffer* j, int frame_size) {
     emit_u8(j, 0xC3);                                     /* ret */
 }
 
+static void emit_store_mem_offset(JITBuffer* j, int base, int32_t offset, int src);
+
 void emit_func_prologue(JITBuffer* j, int frame_size) {
     emit_u8(j, 0x55);                                     /* push rbp */
     emit_u8(j, 0x48); emit_u8(j, 0x89); emit_u8(j, 0xE5); /* mov rbp, rsp */
-    /* Home argument registers into caller shadow space */
-    emit_u8(j, 0x48); emit_u8(j, 0x89); emit_u8(j, 0x4D); emit_u8(j, 0x10); /* mov [rbp+16], rcx */
-    emit_u8(j, 0x48); emit_u8(j, 0x89); emit_u8(j, 0x55); emit_u8(j, 0x18); /* mov [rbp+24], rdx */
-    emit_u8(j, 0x4C); emit_u8(j, 0x89); emit_u8(j, 0x45); emit_u8(j, 0x20); /* mov [rbp+32], r8 */
-    emit_u8(j, 0x4C); emit_u8(j, 0x89); emit_u8(j, 0x4D); emit_u8(j, 0x28); /* mov [rbp+40], r9 */
+    if (g_target_abi != VORTEX_ABI_SYSV64) {
+        /* Home Win64 argument registers into caller shadow space */
+        emit_u8(j, 0x48); emit_u8(j, 0x89); emit_u8(j, 0x4D); emit_u8(j, 0x10); /* mov [rbp+16], rcx */
+        emit_u8(j, 0x48); emit_u8(j, 0x89); emit_u8(j, 0x55); emit_u8(j, 0x18); /* mov [rbp+24], rdx */
+        emit_u8(j, 0x4C); emit_u8(j, 0x89); emit_u8(j, 0x45); emit_u8(j, 0x20); /* mov [rbp+32], r8 */
+        emit_u8(j, 0x4C); emit_u8(j, 0x89); emit_u8(j, 0x4D); emit_u8(j, 0x28); /* mov [rbp+40], r9 */
+    }
     emit_u8(j, 0x53); emit_u8(j, 0x56); emit_u8(j, 0x57); /* push rbx, rsi, rdi */
     emit_u8(j, 0x41); emit_u8(j, 0x54); emit_u8(j, 0x41); emit_u8(j, 0x55); /* push r12, r13 */
     emit_u8(j, 0x41); emit_u8(j, 0x56); emit_u8(j, 0x41); emit_u8(j, 0x57); /* push r14, r15 */
     emit_u8(j, 0x48); emit_u8(j, 0x81); emit_u8(j, 0xEC); /* sub rsp, frame_size */
     emit_u32(j, (uint32_t)frame_size);
+    if (g_target_abi == VORTEX_ABI_SYSV64) {
+        /* Home SysV64 argument registers (rdi..r9) into private frame home area [rbp-64..-104] */
+        emit_store_mem_offset(j, PREG_RBP, -64,  PREG_RDI);
+        emit_store_mem_offset(j, PREG_RBP, -72,  PREG_RSI);
+        emit_store_mem_offset(j, PREG_RBP, -80,  PREG_RDX);
+        emit_store_mem_offset(j, PREG_RBP, -88,  PREG_RCX);
+        emit_store_mem_offset(j, PREG_RBP, -96,  PREG_R8);
+        emit_store_mem_offset(j, PREG_RBP, -104, PREG_R9);
+    }
 }
 
 void emit_func_epilogue(JITBuffer* j, int frame_size) {
@@ -449,7 +474,27 @@ static void emit_loadss_offset(JITBuffer* j, int dst_xmm, int base, int32_t offs
     if (rex != 0x40) emit_u8(j, rex);
     emit_u8(j, 0x0F);
     emit_u8(j, 0x10);
-    emit_u8(j, (uint8_t)(0x80 | ((dst_xmm & 7) << 3) | (base & 7)));
+    if (base == PREG_RSP || base == PREG_R12) {
+        emit_u8(j, (uint8_t)(0x84 | ((dst_xmm & 7) << 3)));
+        emit_u8(j, 0x24);
+    } else {
+        emit_u8(j, (uint8_t)(0x80 | ((dst_xmm & 7) << 3) | (base & 7)));
+    }
+    emit_u32(j, (uint32_t)offset);
+}
+
+static void emit_loadsd_offset(JITBuffer* j, int dst_xmm, int base, int32_t offset) {
+    emit_u8(j, 0xF2);
+    uint8_t rex = 0x40 | ((dst_xmm >= 8 ? 4 : 0) | (base >= 8 ? 1 : 0));
+    if (rex != 0x40) emit_u8(j, rex);
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x10);
+    if (base == PREG_RSP || base == PREG_R12) {
+        emit_u8(j, (uint8_t)(0x84 | ((dst_xmm & 7) << 3)));
+        emit_u8(j, 0x24);
+    } else {
+        emit_u8(j, (uint8_t)(0x80 | ((dst_xmm & 7) << 3) | (base & 7)));
+    }
     emit_u32(j, (uint32_t)offset);
 }
 
@@ -459,8 +504,86 @@ static void emit_storess_offset(JITBuffer* j, int base, int32_t offset, int src_
     if (rex != 0x40) emit_u8(j, rex);
     emit_u8(j, 0x0F);
     emit_u8(j, 0x11);
-    emit_u8(j, (uint8_t)(0x80 | ((src_xmm & 7) << 3) | (base & 7)));
+    if (base == PREG_RSP || base == PREG_R12) {
+        emit_u8(j, (uint8_t)(0x84 | ((src_xmm & 7) << 3)));
+        emit_u8(j, 0x24);
+    } else {
+        emit_u8(j, (uint8_t)(0x80 | ((src_xmm & 7) << 3) | (base & 7)));
+    }
     emit_u32(j, (uint32_t)offset);
+}
+
+static void emit_load_mem32s_offset(JITBuffer* j, int dst, int base, int32_t offset) {
+    uint8_t rex = 0x48 | ((dst >= 8 ? 4 : 0) | (base >= 8 ? 1 : 0));
+    emit_u8(j, rex);
+    emit_u8(j, 0x63); /* movsxd r64, dword [base + offset] */
+    if (base == PREG_RSP || base == PREG_R12) {
+        emit_u8(j, (uint8_t)(0x84 | ((dst & 7) << 3)));
+        emit_u8(j, 0x24);
+    } else {
+        emit_u8(j, (uint8_t)(0x80 | ((dst & 7) << 3) | (base & 7)));
+    }
+    emit_u32(j, (uint32_t)offset);
+}
+
+static void emit_store_mem32_offset(JITBuffer* j, int base, int32_t offset, int src) {
+    uint8_t rex = 0x40 | ((src >= 8 ? 4 : 0) | (base >= 8 ? 1 : 0));
+    if (rex != 0x40) emit_u8(j, rex);
+    emit_u8(j, 0x89);
+    if (base == PREG_RSP || base == PREG_R12) {
+        emit_u8(j, (uint8_t)(0x84 | ((src & 7) << 3)));
+        emit_u8(j, 0x24);
+    } else {
+        emit_u8(j, (uint8_t)(0x80 | ((src & 7) << 3) | (base & 7)));
+    }
+    emit_u32(j, (uint32_t)offset);
+}
+
+static void emit_load_mem32s_array(JITBuffer* j, int dst, int base, int idx, int scale) {
+    uint8_t rex = 0x48 | ((dst >= 8 ? 4 : 0) | (idx >= 8 ? 2 : 0) | (base >= 8 ? 1 : 0));
+    emit_u8(j, rex);
+    emit_u8(j, 0x63);
+    uint8_t scale_bits = (scale == 4) ? 0x80 : 0xC0;
+    emit_u8(j, (uint8_t)(0x44 | ((dst & 7) << 3)));
+    emit_u8(j, (uint8_t)(scale_bits | ((idx & 7) << 3) | (base & 7)));
+    emit_u8(j, 0x00);
+}
+
+static void emit_store_mem32_array(JITBuffer* j, int base, int idx, int src, int scale) {
+    uint8_t rex = 0x40 | ((src >= 8 ? 4 : 0) | (idx >= 8 ? 2 : 0) | (base >= 8 ? 1 : 0));
+    if (rex != 0x40) emit_u8(j, rex);
+    emit_u8(j, 0x89);
+    uint8_t scale_bits = (scale == 4) ? 0x80 : 0xC0;
+    emit_u8(j, (uint8_t)(0x44 | ((src & 7) << 3)));
+    emit_u8(j, (uint8_t)(scale_bits | ((idx & 7) << 3) | (base & 7)));
+    emit_u8(j, 0x00);
+}
+
+static void emit_cvtsi2ss_xr(JITBuffer* j, int dst_xmm, int src_gpr) {
+    emit_u8(j, 0xF3);
+    uint8_t rex = 0x48 | ((dst_xmm >= 8 ? 4 : 0) | (src_gpr >= 8 ? 1 : 0));
+    emit_u8(j, rex);
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x2A);
+    emit_u8(j, (uint8_t)(0xC0 | ((dst_xmm & 7) << 3) | (src_gpr & 7)));
+}
+
+static void emit_cvttss2si_rx(JITBuffer* j, int dst_gpr, int src_xmm) {
+    emit_u8(j, 0xF3);
+    uint8_t rex = 0x48 | ((dst_gpr >= 8 ? 4 : 0) | (src_xmm >= 8 ? 1 : 0));
+    emit_u8(j, rex);
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x2C);
+    emit_u8(j, (uint8_t)(0xC0 | ((dst_gpr & 7) << 3) | (src_xmm & 7)));
+}
+
+static void emit_sub_rsp(JITBuffer* j, int32_t bytes) {
+    if (bytes <= 0) return;
+    if (bytes <= 127) {
+        emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xEC); emit_u8(j, (uint8_t)bytes);
+    } else {
+        emit_u8(j, 0x48); emit_u8(j, 0x81); emit_u8(j, 0xEC); emit_u32(j, (uint32_t)bytes);
+    }
 }
 
 static void emit_load_mem_array(JITBuffer* j, int dst, int base, int idx, int scale) {
@@ -958,6 +1081,7 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
 
     for (int ip = 0; ip < ir->count; ip++) {
         IRInstruction* ins = &ir->instrs[ip];
+        size_t ins_start_off = j->size;
         switch (ins->op) {
             case IR_NOP: break;
 
@@ -1111,12 +1235,32 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                 break;
             }
 
+            case IR_CAST_I64_TO_F32: {
+                int rs = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
+                int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
+                emit_cvtsi2ss_xr(j, xd, rs);
+                commit_vreg_float_reg(ir, ins->dest, xd, j);
+                break;
+            }
+
+            case IR_CAST_F32_TO_I64: {
+                int xs = get_vreg_float_reg(ir, ins->src1, 4, j);
+                int rd = ir->vregs[ins->dest].is_spilled ? PREG_R10 : ir->vregs[ins->dest].preg;
+                emit_cvttss2si_rx(j, rd, xs);
+                commit_vreg_int_reg(ir, ins->dest, rd, j);
+                break;
+            }
+
             case IR_LOAD_OFFSET: {
                 int r_base = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
                 if (ins->type == TYPE_F32) {
                     int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
                     emit_loadss_offset(j, xd, r_base, ins->offset);
                     commit_vreg_float_reg(ir, ins->dest, xd, j);
+                } else if (ins->type == TYPE_I32) {
+                    int rd = ir->vregs[ins->dest].is_spilled ? PREG_R10 : ir->vregs[ins->dest].preg;
+                    emit_load_mem32s_offset(j, rd, r_base, ins->offset);
+                    commit_vreg_int_reg(ir, ins->dest, rd, j);
                 } else {
                     int rd = ir->vregs[ins->dest].is_spilled ? PREG_R10 : ir->vregs[ins->dest].preg;
                     emit_load_mem_offset(j, rd, r_base, ins->offset);
@@ -1130,6 +1274,9 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                 if (ins->type == TYPE_F32) {
                     int xs = get_vreg_float_reg(ir, ins->src2, 4, j);
                     emit_storess_offset(j, r_base, ins->offset, xs);
+                } else if (ins->type == TYPE_I32) {
+                    int rs = get_vreg_int_reg(ir, ins->src2, PREG_R11, j);
+                    emit_store_mem32_offset(j, r_base, ins->offset, rs);
                 } else {
                     int rs = get_vreg_int_reg(ir, ins->src2, PREG_R11, j);
                     emit_store_mem_offset(j, r_base, ins->offset, rs);
@@ -1140,11 +1287,15 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
             case IR_LOAD_ARRAY: {
                 int r_base = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
                 int r_idx = get_vreg_int_reg(ir, ins->src2, PREG_R11, j);
-                int scale = (ins->type == TYPE_F32) ? 4 : 8;
+                int scale = (ins->type == TYPE_F32 || ins->type == TYPE_I32) ? 4 : 8;
                 if (ins->type == TYPE_F32) {
                     int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
                     emit_loadss_array(j, xd, r_base, r_idx, scale);
                     commit_vreg_float_reg(ir, ins->dest, xd, j);
+                } else if (ins->type == TYPE_I32) {
+                    int rd = ir->vregs[ins->dest].is_spilled ? PREG_R10 : ir->vregs[ins->dest].preg;
+                    emit_load_mem32s_array(j, rd, r_base, r_idx, scale);
+                    commit_vreg_int_reg(ir, ins->dest, rd, j);
                 } else {
                     int rd = ir->vregs[ins->dest].is_spilled ? PREG_R10 : ir->vregs[ins->dest].preg;
                     emit_load_mem_array(j, rd, r_base, r_idx, scale);
@@ -1156,14 +1307,130 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
             case IR_STORE_ARRAY: {
                 int r_base = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
                 int r_idx = get_vreg_int_reg(ir, ins->src2, PREG_R11, j);
-                int scale = (ins->type == TYPE_F32) ? 4 : 8;
+                int scale = (ins->type == TYPE_F32 || ins->type == TYPE_I32) ? 4 : 8;
                 if (ins->type == TYPE_F32) {
                     int xs = get_vreg_float_reg(ir, ins->src3, 4, j);
                     emit_storess_array(j, r_base, r_idx, xs, scale);
+                } else if (ins->type == TYPE_I32) {
+                    int rs = get_vreg_int_reg(ir, ins->src3, PREG_RAX, j);
+                    emit_store_mem32_array(j, r_base, r_idx, rs, scale);
                 } else {
                     int rs = get_vreg_int_reg(ir, ins->src3, PREG_RAX, j);
                     emit_store_mem_array(j, r_base, r_idx, rs, scale);
                 }
+                break;
+            }
+
+            case IR_LOAD_DEREF: {
+                int r_ptr = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
+                if (ins->type == TYPE_F32) {
+                    int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
+                    emit_loadss_offset(j, xd, r_ptr, 0);
+                    commit_vreg_float_reg(ir, ins->dest, xd, j);
+                } else if (ins->type == TYPE_I32) {
+                    int rd = ir->vregs[ins->dest].is_spilled ? PREG_R10 : ir->vregs[ins->dest].preg;
+                    emit_load_mem32s_offset(j, rd, r_ptr, 0);
+                    commit_vreg_int_reg(ir, ins->dest, rd, j);
+                } else {
+                    int rd = ir->vregs[ins->dest].is_spilled ? PREG_R10 : ir->vregs[ins->dest].preg;
+                    emit_load_mem_offset(j, rd, r_ptr, 0);
+                    commit_vreg_int_reg(ir, ins->dest, rd, j);
+                }
+                break;
+            }
+
+            case IR_STORE_DEREF: {
+                int r_ptr = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
+                if (ins->type == TYPE_F32) {
+                    int xs = get_vreg_float_reg(ir, ins->src2, 4, j);
+                    emit_storess_offset(j, r_ptr, 0, xs);
+                } else if (ins->type == TYPE_I32) {
+                    int rs = get_vreg_int_reg(ir, ins->src2, PREG_RAX, j);
+                    emit_store_mem32_offset(j, r_ptr, 0, rs);
+                } else {
+                    int rs = get_vreg_int_reg(ir, ins->src2, PREG_RAX, j);
+                    emit_store_mem_offset(j, r_ptr, 0, rs);
+                }
+                break;
+            }
+
+            case IR_PTR_CHECK: {
+                emit_vzeroupper(j);
+                int rp = get_vreg_int_reg(ir, ins->src1, PREG_RAX, j);
+                emit_push_r(j, rp);
+                emit_mov_ri64(j, PREG_RAX, (int64_t)(uintptr_t)vortex_intern_cstr(ins->file ? ins->file : "<unknown>"));
+                emit_push_r(j, PREG_RAX);
+                emit_mov_ri64(j, PREG_RAX, (int64_t)ins->line);
+                emit_push_r(j, PREG_RAX);
+                emit_call_with_args(j, (void*)vortex_safe_check_ptr, 3);
+                break;
+            }
+
+            case IR_BOUNDS_CHECK: {
+                emit_vzeroupper(j);
+                int rb = get_vreg_int_reg(ir, ins->src1, PREG_RAX, j);
+                emit_push_r(j, rb);
+                int ri = get_vreg_int_reg(ir, ins->src2, PREG_RAX, j);
+                emit_push_r(j, ri);
+                if (ins->src3 != VREG_NONE) {
+                    int rl = get_vreg_int_reg(ir, ins->src3, PREG_RAX, j);
+                    emit_push_r(j, rl);
+                } else {
+                    emit_mov_ri64(j, PREG_RAX, ins->known_len);
+                    emit_push_r(j, PREG_RAX);
+                }
+                emit_mov_ri64(j, PREG_RAX, (int64_t)ins->offset);
+                emit_push_r(j, PREG_RAX);
+                emit_mov_ri64(j, PREG_RAX, (int64_t)(uintptr_t)vortex_intern_cstr(ins->file ? ins->file : "<unknown>"));
+                emit_push_r(j, PREG_RAX);
+                emit_mov_ri64(j, PREG_RAX, (int64_t)ins->line);
+                emit_push_r(j, PREG_RAX);
+                emit_call_with_args(j, (void*)vortex_safe_check_bounds, 6);
+                break;
+            }
+
+            case IR_RANGE_CHECK: {
+                emit_vzeroupper(j);
+                int rb = get_vreg_int_reg(ir, ins->src1, PREG_RAX, j);
+                emit_push_r(j, rb);
+                int rs = get_vreg_int_reg(ir, ins->src2, PREG_RAX, j);
+                emit_push_r(j, rs);
+                int re = get_vreg_int_reg(ir, ins->src3, PREG_RAX, j);
+                emit_push_r(j, re);
+                if (ins->src4 != VREG_NONE) {
+                    int rl = get_vreg_int_reg(ir, ins->src4, PREG_RAX, j);
+                    emit_push_r(j, rl);
+                } else {
+                    emit_mov_ri64(j, PREG_RAX, ins->known_len);
+                    emit_push_r(j, PREG_RAX);
+                }
+                emit_mov_ri64(j, PREG_RAX, (int64_t)ins->offset);
+                emit_push_r(j, PREG_RAX);
+                emit_mov_ri64(j, PREG_RAX, (int64_t)(uintptr_t)vortex_intern_cstr(ins->file ? ins->file : "<unknown>"));
+                emit_push_r(j, PREG_RAX);
+                emit_mov_ri64(j, PREG_RAX, (int64_t)ins->line);
+                emit_push_r(j, PREG_RAX);
+                emit_call_with_args(j, (void*)vortex_safe_check_range, 7);
+                break;
+            }
+
+            case IR_FFI_CHECK: {
+                emit_vzeroupper(j);
+                int rv = get_vreg_int_reg(ir, ins->src1, PREG_RAX, j);
+                emit_push_r(j, rv);
+                emit_mov_ri64(j, PREG_RAX, (int64_t)ins->type);
+                emit_push_r(j, PREG_RAX);
+                emit_mov_ri64(j, PREG_RAX, ins->imm);
+                emit_push_r(j, PREG_RAX);
+                emit_mov_ri64(j, PREG_RAX, (int64_t)(uintptr_t)vortex_intern_cstr(ins->func_name[0] ? ins->func_name : "<ffi>"));
+                emit_push_r(j, PREG_RAX);
+                emit_mov_ri64(j, PREG_RAX, (int64_t)ins->offset);
+                emit_push_r(j, PREG_RAX);
+                emit_mov_ri64(j, PREG_RAX, (int64_t)(uintptr_t)vortex_intern_cstr(ins->file ? ins->file : "<unknown>"));
+                emit_push_r(j, PREG_RAX);
+                emit_mov_ri64(j, PREG_RAX, (int64_t)ins->line);
+                emit_push_r(j, PREG_RAX);
+                emit_call_with_args(j, (void*)vortex_safe_check_ffi_arg, 7);
                 break;
             }
 
@@ -1248,37 +1515,71 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
             case IR_CALL_USER: {
                 int num_args = ins->arg_count;
                 for (int a = 0; a < num_args; a++) {
-                    int r = get_vreg_int_reg(ir, ins->args[a], PREG_RAX, j);
-                    emit_push_r(j, r);
+                    if (ir->vregs[ins->args[a]].is_float) {
+                        int xr = get_vreg_float_reg(ir, ins->args[a], 0, j);
+                        /* MOVD/MOVQ EAX/RAX, XMM_xr */
+                        emit_u8(j, 0x66);
+                        if (ir->vregs[ins->args[a]].type == TYPE_F64) {
+                            emit_u8(j, (xr >= 8) ? 0x4C : 0x48);
+                        } else if (xr >= 8) {
+                            emit_u8(j, 0x44);
+                        }
+                        emit_u8(j, 0x0F); emit_u8(j, 0x7E);
+                        emit_u8(j, (uint8_t)(0xC0 | ((xr & 7) << 3)));
+                        emit_push_r(j, PREG_RAX);
+                    } else {
+                        int r = get_vreg_int_reg(ir, ins->args[a], PREG_RAX, j);
+                        emit_push_r(j, r);
+                    }
                 }
 
-                int min_space = (num_args <= 4) ? 32 : (32 + (num_args - 4) * 8);
-                int alloc_space = min_space;
-                if ((num_args * 8 + alloc_space) % 16 != 0) alloc_space += 8;
-                emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xEC); emit_u8(j, (uint8_t)alloc_space);
+                int alloc_space = 0;
+                if (g_target_abi == VORTEX_ABI_SYSV64) {
+                    alloc_space = (num_args > 6) ? (num_args - 6) * 8 : 0;
+                    if ((num_args * 8 + alloc_space) % 16 != 0) alloc_space += 8;
+                    emit_sub_rsp(j, alloc_space);
 
-                for (int k = 4; k < num_args; k++) {
-                    int src_off = alloc_space + (num_args - 1 - k) * 8;
-                    int dst_off = 32 + (k - 4) * 8;
-                    emit_u8(j, 0x4C); emit_u8(j, 0x8B); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)src_off);
-                    emit_u8(j, 0x4C); emit_u8(j, 0x89); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)dst_off);
-                }
+                    for (int k = 6; k < num_args; k++) {
+                        int src_off = alloc_space + (num_args - 1 - k) * 8;
+                        int dst_off = (k - 6) * 8;
+                        emit_load_mem_offset(j, PREG_R10, PREG_RSP, src_off);
+                        emit_store_mem_offset(j, PREG_RSP, dst_off, PREG_R10);
+                    }
 
-                if (num_args > 0) {
-                    int off0 = alloc_space + (num_args - 1) * 8;
-                    emit_u8(j, 0x48); emit_u8(j, 0x8B); emit_u8(j, 0x4C); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off0);
-                }
-                if (num_args > 1) {
-                    int off1 = alloc_space + (num_args - 2) * 8;
-                    emit_u8(j, 0x48); emit_u8(j, 0x8B); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off1);
-                }
-                if (num_args > 2) {
-                    int off2 = alloc_space + (num_args - 3) * 8;
-                    emit_u8(j, 0x4C); emit_u8(j, 0x8B); emit_u8(j, 0x44); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off2);
-                }
-                if (num_args > 3) {
-                    int off3 = alloc_space + (num_args - 4) * 8;
-                    emit_u8(j, 0x4C); emit_u8(j, 0x8B); emit_u8(j, 0x4C); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off3);
+                    static const int sysv_uargs[6] = { PREG_RDI, PREG_RSI, PREG_RDX, PREG_RCX, PREG_R8, PREG_R9 };
+                    for (int k = 0; k < num_args && k < 6; k++) {
+                        int off = alloc_space + (num_args - 1 - k) * 8;
+                        emit_load_mem_offset(j, sysv_uargs[k], PREG_RSP, off);
+                    }
+                } else {
+                    int min_space = (num_args <= 4) ? 32 : (32 + (num_args - 4) * 8);
+                    alloc_space = min_space;
+                    if ((num_args * 8 + alloc_space) % 16 != 0) alloc_space += 8;
+                    emit_sub_rsp(j, alloc_space);
+
+                    for (int k = 4; k < num_args; k++) {
+                        int src_off = alloc_space + (num_args - 1 - k) * 8;
+                        int dst_off = 32 + (k - 4) * 8;
+                        emit_load_mem_offset(j, PREG_R10, PREG_RSP, src_off);
+                        emit_store_mem_offset(j, PREG_RSP, dst_off, PREG_R10);
+                    }
+
+                    if (num_args > 0) {
+                        int off0 = alloc_space + (num_args - 1) * 8;
+                        emit_load_mem_offset(j, PREG_RCX, PREG_RSP, off0);
+                    }
+                    if (num_args > 1) {
+                        int off1 = alloc_space + (num_args - 2) * 8;
+                        emit_load_mem_offset(j, PREG_RDX, PREG_RSP, off1);
+                    }
+                    if (num_args > 2) {
+                        int off2 = alloc_space + (num_args - 3) * 8;
+                        emit_load_mem_offset(j, PREG_R8, PREG_RSP, off2);
+                    }
+                    if (num_args > 3) {
+                        int off3 = alloc_space + (num_args - 4) * 8;
+                        emit_load_mem_offset(j, PREG_R9, PREG_RSP, off3);
+                    }
                 }
 
                 emit_u8(j, 0xE8);
@@ -1293,6 +1594,9 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                     ufr->patch_pos = call_pos;
                     strncpy(ufr->name, ins->func_name, sizeof(ufr->name) - 1);
                     ufr->name[sizeof(ufr->name) - 1] = '\0';
+                    ufr->called_in_unsafe = (ins->imm != 0);
+                    ufr->call_line = ins->line;
+                    ufr->call_file = vortex_intern_cstr(ins->file ? ins->file : "<unknown>");
                 }
 
                 if (ins->dest != VREG_NONE) {
@@ -1333,53 +1637,24 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                 int min_space = (num_args <= 4) ? 32 : (32 + (num_args - 4) * 8);
                 int alloc_space = min_space;
                 if ((num_args * 8 + alloc_space) % 16 != 0) alloc_space += 8;
-                emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xEC); emit_u8(j, (uint8_t)alloc_space);
+                emit_sub_rsp(j, alloc_space);
 
                 for (int k = 4; k < num_args; k++) {
                     int src_off = alloc_space + (num_args - 1 - k) * 8;
                     int dst_off = 32 + (k - 4) * 8;
-                    emit_u8(j, 0x4C); emit_u8(j, 0x8B); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)src_off);
-                    emit_u8(j, 0x4C); emit_u8(j, 0x89); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)dst_off);
+                    emit_load_mem_offset(j, PREG_R10, PREG_RSP, src_off);
+                    emit_store_mem_offset(j, PREG_RSP, dst_off, PREG_R10);
                 }
 
-                if (num_args > 0) {
-                    int off0 = alloc_space + (num_args - 1) * 8;
-                    if (ins->arg_types[0] == TYPE_F64) {
-                        emit_u8(j, 0xF2); emit_u8(j, 0x0F); emit_u8(j, 0x10); emit_u8(j, 0x44); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off0);
-                    } else if (ins->arg_types[0] == TYPE_F32) {
-                        emit_u8(j, 0xF3); emit_u8(j, 0x0F); emit_u8(j, 0x10); emit_u8(j, 0x44); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off0);
+                static const int win_arg_gprs[4] = { PREG_RCX, PREG_RDX, PREG_R8, PREG_R9 };
+                for (int k = 0; k < 4 && k < num_args; k++) {
+                    int offk = alloc_space + (num_args - 1 - k) * 8;
+                    if (ins->arg_types[k] == TYPE_F64) {
+                        emit_loadsd_offset(j, k, PREG_RSP, offk);
+                    } else if (ins->arg_types[k] == TYPE_F32) {
+                        emit_loadss_offset(j, k, PREG_RSP, offk);
                     } else {
-                        emit_u8(j, 0x48); emit_u8(j, 0x8B); emit_u8(j, 0x4C); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off0);
-                    }
-                }
-                if (num_args > 1) {
-                    int off1 = alloc_space + (num_args - 2) * 8;
-                    if (ins->arg_types[1] == TYPE_F64) {
-                        emit_u8(j, 0xF2); emit_u8(j, 0x0F); emit_u8(j, 0x10); emit_u8(j, 0x4C); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off1);
-                    } else if (ins->arg_types[1] == TYPE_F32) {
-                        emit_u8(j, 0xF3); emit_u8(j, 0x0F); emit_u8(j, 0x10); emit_u8(j, 0x4C); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off1);
-                    } else {
-                        emit_u8(j, 0x48); emit_u8(j, 0x8B); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off1);
-                    }
-                }
-                if (num_args > 2) {
-                    int off2 = alloc_space + (num_args - 3) * 8;
-                    if (ins->arg_types[2] == TYPE_F64) {
-                        emit_u8(j, 0xF2); emit_u8(j, 0x0F); emit_u8(j, 0x10); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off2);
-                    } else if (ins->arg_types[2] == TYPE_F32) {
-                        emit_u8(j, 0xF3); emit_u8(j, 0x0F); emit_u8(j, 0x10); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off2);
-                    } else {
-                        emit_u8(j, 0x4C); emit_u8(j, 0x8B); emit_u8(j, 0x44); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off2);
-                    }
-                }
-                if (num_args > 3) {
-                    int off3 = alloc_space + (num_args - 4) * 8;
-                    if (ins->arg_types[3] == TYPE_F64) {
-                        emit_u8(j, 0xF2); emit_u8(j, 0x0F); emit_u8(j, 0x10); emit_u8(j, 0x5C); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off3);
-                    } else if (ins->arg_types[3] == TYPE_F32) {
-                        emit_u8(j, 0xF3); emit_u8(j, 0x0F); emit_u8(j, 0x10); emit_u8(j, 0x5C); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off3);
-                    } else {
-                        emit_u8(j, 0x4C); emit_u8(j, 0x8B); emit_u8(j, 0x4C); emit_u8(j, 0x24); emit_u8(j, (uint8_t)off3);
+                        emit_load_mem_offset(j, win_arg_gprs[k], PREG_RSP, offk);
                     }
                 }
 
@@ -1406,43 +1681,35 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
 
                 int alloc_space = stack_arg_count * 8;
                 if ((num_args * 8 + alloc_space) % 16 != 0) alloc_space += 8;
-                if (alloc_space > 0) {
-                    emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xEC); emit_u8(j, (uint8_t)alloc_space);
-                }
+                emit_sub_rsp(j, alloc_space);
 
                 int cur_int = 0;
                 int cur_flt = 0;
                 int cur_stack = 0;
+                static const int sysv_gprs[6] = { PREG_RDI, PREG_RSI, PREG_RDX, PREG_RCX, PREG_R8, PREG_R9 };
                 for (int k = 0; k < num_args; k++) {
                     int src_off = alloc_space + (num_args - 1 - k) * 8;
                     bool is_flt = (ins->arg_types[k] == TYPE_F32 || ins->arg_types[k] == TYPE_F64);
                     if (is_flt) {
                         if (cur_flt < 8) {
-                            uint8_t pfx = (ins->arg_types[k] == TYPE_F64) ? 0xF2 : 0xF3;
-                            emit_u8(j, pfx); emit_u8(j, 0x0F); emit_u8(j, 0x10);
-                            emit_u8(j, (uint8_t)(0x44 | (cur_flt << 3)));
-                            emit_u8(j, 0x24); emit_u8(j, (uint8_t)src_off);
+                            if (ins->arg_types[k] == TYPE_F64) emit_loadsd_offset(j, cur_flt, PREG_RSP, src_off);
+                            else emit_loadss_offset(j, cur_flt, PREG_RSP, src_off);
                             cur_flt++;
                         } else {
                             int dst_off = cur_stack * 8;
                             cur_stack++;
-                            emit_u8(j, 0x4C); emit_u8(j, 0x8B); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)src_off);
-                            emit_u8(j, 0x4C); emit_u8(j, 0x89); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)dst_off);
+                            emit_load_mem_offset(j, PREG_R10, PREG_RSP, src_off);
+                            emit_store_mem_offset(j, PREG_RSP, dst_off, PREG_R10);
                         }
                     } else {
                         if (cur_int < 6) {
-                            static const uint8_t sysv_modrm[6] = { 0x7C, 0x74, 0x54, 0x4C, 0x44, 0x4C };
-                            static const uint8_t sysv_rex[6]   = { 0x48, 0x48, 0x48, 0x48, 0x4C, 0x4C };
-                            emit_u8(j, sysv_rex[cur_int]);
-                            emit_u8(j, 0x8B);
-                            emit_u8(j, sysv_modrm[cur_int]);
-                            emit_u8(j, 0x24); emit_u8(j, (uint8_t)src_off);
+                            emit_load_mem_offset(j, sysv_gprs[cur_int], PREG_RSP, src_off);
                             cur_int++;
                         } else {
                             int dst_off = cur_stack * 8;
                             cur_stack++;
-                            emit_u8(j, 0x4C); emit_u8(j, 0x8B); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)src_off);
-                            emit_u8(j, 0x4C); emit_u8(j, 0x89); emit_u8(j, 0x54); emit_u8(j, 0x24); emit_u8(j, (uint8_t)dst_off);
+                            emit_load_mem_offset(j, PREG_R10, PREG_RSP, src_off);
+                            emit_store_mem_offset(j, PREG_RSP, dst_off, PREG_R10);
                         }
                     }
                 }
@@ -1474,9 +1741,28 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
 
             case IR_LOAD_PARAM: {
                 int param_idx = (int)ins->imm;
-                int rd = ir->vregs[ins->dest].is_spilled ? PREG_R10 : ir->vregs[ins->dest].preg;
-                emit_load_mem_offset(j, rd, PREG_RBP, 16 + 8 * param_idx);
-                commit_vreg_int_reg(ir, ins->dest, rd, j);
+                int disp = (g_target_abi == VORTEX_ABI_SYSV64)
+                         ? ((param_idx < 6) ? -(64 + 8 * param_idx) : (16 + 8 * (param_idx - 6)))
+                         : (16 + 8 * param_idx);
+                if (ir->vregs[ins->dest].is_float) {
+                    int xrd = (ir->vregs[ins->dest].is_spilled || ir->vregs[ins->dest].preg == PREG_NONE)
+                              ? 0 : ir->vregs[ins->dest].preg;
+                    emit_u8(j, (ir->vregs[ins->dest].type == TYPE_F64) ? 0xF2 : 0xF3);
+                    if (xrd >= 8) emit_u8(j, 0x44);
+                    emit_u8(j, 0x0F); emit_u8(j, 0x10);
+                    if (disp >= -128 && disp <= 127) {
+                        emit_u8(j, (uint8_t)(0x45 | ((xrd & 7) << 3)));
+                        emit_u8(j, (uint8_t)disp);
+                    } else {
+                        emit_u8(j, (uint8_t)(0x85 | ((xrd & 7) << 3)));
+                        emit_u32(j, (uint32_t)disp);
+                    }
+                    commit_vreg_float_reg(ir, ins->dest, xrd, j);
+                } else {
+                    int rd = ir->vregs[ins->dest].is_spilled ? PREG_R10 : ir->vregs[ins->dest].preg;
+                    emit_load_mem_offset(j, rd, PREG_RBP, disp);
+                    commit_vreg_int_reg(ir, ins->dest, rd, j);
+                }
                 break;
             }
 
@@ -1501,6 +1787,9 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                 break;
             }
         }
+        if (ins->line > 0 && j->size > ins_start_off) {
+            debug_info_record_line(ins_start_off, j->size, ins->line, ins->file ? ins->file : g_current_filename);
+        }
     }
 
     for (int p = 0; p < patch_count; p++) {
@@ -1513,3 +1802,22 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
     free(label_offsets);
     free(patches);
 }
+
+static void patch_call_rel_x64(JITBuffer* j, size_t patch_pos, size_t target_offset) {
+    int32_t rel = (int32_t)(target_offset - (patch_pos + 4));
+    memcpy(&j->code[patch_pos], &rel, 4);
+}
+
+const VortexJITBackend g_backend_x64 = {
+    VORTEX_ARCH_X86_64,
+    "x86_64-avx2",
+    compute_frame_size,
+    emit_prologue,
+    emit_epilogue,
+    emit_func_prologue,
+    emit_func_epilogue,
+    emit_jmp_placeholder,
+    patch_jump,
+    patch_call_rel_x64,
+    ir_codegen_x86_64
+};

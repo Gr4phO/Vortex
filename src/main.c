@@ -16,6 +16,7 @@ static const char* vortex_type_name(VortexType t, int struct_id) {
         case TYPE_PTR:    return "ptr";
         case TYPE_PTR_I64: return "*i64";
         case TYPE_PTR_F32: return "*f32";
+        case TYPE_PTR_I32: return "*i32";
         case TYPE_STRUCT: {
             VortexStructType* st = (struct_id >= 0) ? struct_type_find_by_id(struct_id) : NULL;
             if (st) {
@@ -37,8 +38,16 @@ static const char* vortex_type_name(VortexType t, int struct_id) {
 }
 
 static void print_version(void) {
-    printf("Vortex v%s (x86-64 AVX2 JIT Compiler & Native Paged-Arena Runtime)\n", VORTEX_VERSION);
-    printf("Targets : Windows x64 / Linux System V AMD64 | Backend: Linear-Scan + AVX2 SIMD\n");
+    const VortexTargetDesc* td = vortex_get_target_desc();
+    const VortexJITBackend* bk = vortex_get_backend();
+    const char* simd_str = (td->simd_caps & VORTEX_SIMD_AVX2) ? "AVX2 256-bit"
+                         : ((td->simd_caps & VORTEX_SIMD_NEON) ? "NEON 128-bit" : "Scalar");
+    printf("Vortex v%s (%s JIT Compiler & Native Paged-Arena Runtime)\n", VORTEX_VERSION, bk->backend_name);
+    printf("Active  : %s | SIMD: %s (%d x f32) | Regs: %d GPR / %d FPR\n",
+           td->name, simd_str, td->simd_lanes_f32,
+           td->int_callee_count + td->int_scratch_count,
+           td->float_callee_count + td->float_scratch_count);
+    printf("Targets : x86_64-windows, x86_64-linux, x86_64-darwin, arm64-linux, arm64-darwin\n");
 }
 
 static void print_usage(const char* exe_name) {
@@ -48,16 +57,26 @@ static void print_usage(const char* exe_name) {
     printf("USAGE:\n");
     printf("  %s                          Open interactive Vortex REPL terminal\n", exe_name);
     printf("  %s repl | -i                Open interactive Vortex REPL terminal\n", exe_name);
-    printf("  %s <script.vx>              JIT-compile and run a Vortex file\n", exe_name);
-    printf("  %s run <script.vx>          JIT-compile and run a Vortex file\n", exe_name);
-    printf("  %s eval \"<code>\"            JIT-compile and evaluate inline code\n", exe_name);
-    printf("  %s build <in.vx> [-o out]   Package standalone single-file executable\n", exe_name);
+    printf("  %s [flags] <script.vx>      JIT-compile and run a Vortex file\n", exe_name);
+    printf("  %s run [flags] <script.vx>  JIT-compile and run a Vortex file\n", exe_name);
+    printf("  %s eval [flags] \"<code>\"    JIT-compile and evaluate inline code\n", exe_name);
+    printf("  %s build [flags] <in.vx> [-o out] Package standalone executable\n", exe_name);
     printf("  %s --version | -v           Display version and architecture info\n", exe_name);
-    printf("  %s --help | -h              Display this help message\n\n", exe_name);
+    printf("  %s --help | -h              Display this help message\n", exe_name);
+    printf("  %s pkg <subcmd>             Package manager (init, add, install, verify, run, build)\n", exe_name);
+    printf("  %s lsp                      Start Language Server Protocol (JSON-RPC over stdio)\n\n", exe_name);
+    printf("FLAGS / MODES:\n");
+    printf("  --safe             (Default) Bounds, arena epoch & FFI boundary validation\n");
+    printf("  --release          Range check elimination / LICM + max SIMD throughput\n");
+    printf("  --headless         Disable GUI/X11 window creation (or set VORTEX_HEADLESS=1)\n");
+    printf("  --target <triple>  Target ABI/arch (x86_64-windows, x86_64-linux, arm64-linux, arm64-darwin)\n");
+    printf("  --dump-jit <file>  Write raw JIT machine code bytes to <file>\n");
+    printf("  --dump-debug <f>   Write DWARF v4 ELF debug symbols to <f>\n\n");
     printf("EXAMPLES:\n");
     printf("  %s run examples/app_3d.vx\n", exe_name);
     printf("  %s eval \"let x = 21; print(x * 2);\"\n", exe_name);
-    printf("  %s build examples/app_3d.vx -o app_3d.exe\n\n", exe_name);
+    printf("  %s build examples/app_3d.vx -o app_3d.exe\n", exe_name);
+    printf("  %s build benchmarks/benchmark.vx --release --target arm64-darwin -o bench_arm64\n\n", exe_name);
 }
 
 static bool has_top_level_assign(const char* s) {
@@ -126,9 +145,11 @@ static bool repl_eval_snippet(const char* snippet, char* session_code, size_t se
     char to_eval[65536];
     bool is_decl = (strncmp(snippet, "let ", 4) == 0 ||
                     strncmp(snippet, "fn ", 3) == 0 ||
+                    strncmp(snippet, "unsafe fn ", 10) == 0 ||
                     strncmp(snippet, "struct ", 7) == 0 ||
                     strncmp(snippet, "extern ", 7) == 0);
     bool is_stmt = (is_decl ||
+                    strncmp(snippet, "unsafe", 6) == 0 ||
                     strncmp(snippet, "print", 5) == 0 ||
                     strncmp(snippet, "for ", 4) == 0 ||
                     strncmp(snippet, "parallel_for ", 13) == 0 ||
@@ -291,54 +312,110 @@ static void vortex_repl(void) {
 }
 
 int main(int argc, char** argv) {
+    g_pkg_import_hook = pkg_resolve_import;
     if (check_and_run_embedded_payload(argc, argv)) {
         return 0;
     }
 
-    if (argc == 1) {
+    char* filtered_argv[128];
+    int filtered_argc = 0;
+    filtered_argv[filtered_argc++] = argv[0];
+    for (int i = 1; i < argc && filtered_argc < 127; i++) {
+        if (strcmp(argv[i], "--release") == 0) {
+            g_compile_mode = VORTEX_MODE_RELEASE;
+        } else if (strcmp(argv[i], "--safe") == 0) {
+            g_compile_mode = VORTEX_MODE_SAFE;
+        } else if (strcmp(argv[i], "--headless") == 0) {
+            g_headless_mode = true;
+        } else if (strcmp(argv[i], "--target") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "[VORTEX ERROR] Missing target triple after --target\n");
+                return 1;
+            }
+            const char* tname = argv[++i];
+            if (!vortex_set_target_name(tname)) {
+                fprintf(stderr, "[VORTEX ERROR] Unknown target '%s' (supported: x86_64-windows, x86_64-linux, arm64-linux, arm64-darwin)\n", tname);
+                return 1;
+            }
+        } else if (strncmp(argv[i], "--target=", 9) == 0) {
+            const char* tname = argv[i] + 9;
+            if (!vortex_set_target_name(tname)) {
+                fprintf(stderr, "[VORTEX ERROR] Unknown target '%s' (supported: x86_64-windows, x86_64-linux, arm64-linux, arm64-darwin)\n", tname);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--dump-jit") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "[VORTEX ERROR] Missing file path after --dump-jit\n");
+                return 1;
+            }
+            g_dump_jit_path = argv[++i];
+        } else if (strncmp(argv[i], "--dump-jit=", 11) == 0) {
+            g_dump_jit_path = argv[i] + 11;
+        } else if (strcmp(argv[i], "--dump-debug") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "[VORTEX ERROR] Missing file path after --dump-debug\n");
+                return 1;
+            }
+            g_dump_debug_path = argv[++i];
+        } else if (strncmp(argv[i], "--dump-debug=", 13) == 0) {
+            g_dump_debug_path = argv[i] + 13;
+        } else {
+            filtered_argv[filtered_argc++] = argv[i];
+        }
+    }
+    filtered_argv[filtered_argc] = NULL;
+
+    if (filtered_argc == 1) {
         vortex_repl();
         return 0;
     }
 
-    if (strcmp(argv[1], "repl") == 0 || strcmp(argv[1], "-i") == 0) {
+    const char* arg1 = filtered_argv[1];
+    if (strcmp(arg1, "repl") == 0 || strcmp(arg1, "-i") == 0) {
         vortex_repl();
         return 0;
     }
-    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
-        print_usage(argv[0]);
+    if (strcmp(arg1, "--help") == 0 || strcmp(arg1, "-h") == 0) {
+        print_usage(filtered_argv[0]);
         return 0;
     }
-    if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) {
+    if (strcmp(arg1, "--version") == 0 || strcmp(arg1, "-v") == 0) {
         print_version();
         return 0;
     }
-    if (strcmp(argv[1], "build") == 0) {
-        return vortex_cmd_build(argc, argv);
+    if (strcmp(arg1, "build") == 0) {
+        return vortex_cmd_build(filtered_argc, filtered_argv);
     }
-    if (strcmp(argv[1], "eval") == 0) {
-        if (argc < 3) {
+    if (strcmp(arg1, "pkg") == 0) {
+        return vortex_cmd_pkg(filtered_argc, filtered_argv);
+    }
+    if (strcmp(arg1, "lsp") == 0) {
+        return vortex_cmd_lsp(filtered_argc, filtered_argv);
+    }
+    if (strcmp(arg1, "eval") == 0) {
+        if (filtered_argc < 3) {
             fprintf(stderr, "[VORTEX ERROR] Missing code string after 'eval'.\n\n");
-            print_usage(argv[0]);
+            print_usage(filtered_argv[0]);
             return 1;
         }
-        return execute_vortex_source(argv[2]);
+        return execute_vortex_source(filtered_argv[2]);
     }
-    if (strcmp(argv[1], "run") == 0) {
-        if (argc < 3) {
+    if (strcmp(arg1, "run") == 0) {
+        if (filtered_argc < 3) {
             fprintf(stderr, "[VORTEX ERROR] Missing script path after 'run'.\n\n");
-            print_usage(argv[0]);
+            print_usage(filtered_argv[0]);
             return 1;
         }
-        return execute_vortex_file(argv[2]);
+        return execute_vortex_file(filtered_argv[2]);
     }
 
-    FILE* f = fopen(argv[1], "rb");
+    FILE* f = fopen(arg1, "rb");
     if (f) {
         fclose(f);
-        return execute_vortex_file(argv[1]);
+        return execute_vortex_file(arg1);
     }
 
-    fprintf(stderr, "[VORTEX ERROR] Unknown command or missing file: '%s'\n\n", argv[1]);
-    print_usage(argv[0]);
+    fprintf(stderr, "[VORTEX ERROR] Unknown command or missing file: '%s'\n\n", arg1);
+    print_usage(filtered_argv[0]);
     return 1;
 }

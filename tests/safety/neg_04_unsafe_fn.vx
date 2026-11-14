@@ -1,0 +1,4 @@
+unsafe fn danger() -> i64 {
+    return 1;
+}
+print(danger());

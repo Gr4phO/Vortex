@@ -1,0 +1,2 @@
+let a = slice_i64(4);
+print(a[-1]);

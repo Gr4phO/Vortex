@@ -17,7 +17,7 @@ echo "========================================================"
 PASSED=0
 FAILED=0
 
-for t in test_struct.vx test_vec_struct.vx test_fib.vx test_ffi.vx test_memory_1m.vx; do
+for t in test_struct.vx test_vec_struct.vx test_fib.vx test_ffi.vx test_memory_1m.vx test_safety_pass.vx; do
     echo ""
     echo "--- [RUN] $t ---"
     if "$VORTEX_BIN" "$SCRIPT_DIR/$t"; then
@@ -28,6 +28,33 @@ for t in test_struct.vx test_vec_struct.vx test_fib.vx test_ffi.vx test_memory_1
         FAILED=$((FAILED + 1))
     fi
 done
+
+echo ""
+if bash "$SCRIPT_DIR/run_safety_checks.sh"; then
+    echo "[PASS] run_safety_checks.sh"
+    PASSED=$((PASSED + 1))
+else
+    echo "[FAIL] run_safety_checks.sh"
+    FAILED=$((FAILED + 1))
+fi
+
+echo ""
+if bash "$SCRIPT_DIR/run_arm64_checks.sh"; then
+    echo "[PASS] run_arm64_checks.sh"
+    PASSED=$((PASSED + 1))
+else
+    echo "[FAIL] run_arm64_checks.sh"
+    FAILED=$((FAILED + 1))
+fi
+
+echo ""
+if bash "$SCRIPT_DIR/run_jalon3_checks.sh"; then
+    echo "[PASS] run_jalon3_checks.sh"
+    PASSED=$((PASSED + 1))
+else
+    echo "[FAIL] run_jalon3_checks.sh"
+    FAILED=$((FAILED + 1))
+fi
 
 echo ""
 echo "========================================================"

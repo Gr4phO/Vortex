@@ -1,0 +1,3 @@
+fn bad_arith(p: *i64) -> *i64 {
+    return p + 8;
+}

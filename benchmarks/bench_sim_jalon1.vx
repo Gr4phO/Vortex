@@ -1,0 +1,30 @@
+// Benchmark intensif Jalon 1: Simulation 1D sur slices allouées sur arène (50M d'accès)
+// Prouve le hoisting / Range Check Elimination (RCE + LICM) en mode --release.
+
+let n = 100000;
+let rounds = 250;
+
+let pos = slice_f32(n);
+let vel = slice_f32(n);
+
+for i in 0..n {
+    pos[i] = (i as f32) * 0.001;
+    vel[i] = 0.01;
+}
+
+let t0 = time_us();
+let mut checksum = 0.0;
+for r in 0..rounds {
+    for i in 0..n {
+        let v = vel[i];
+        let p = pos[i] + v;
+        pos[i] = p;
+        checksum = checksum + p;
+    }
+}
+let dt = time_us() - t0;
+
+print_str("SLICE_SIM_CHECKSUM:");
+print(checksum);
+print_str("SLICE_SIM_TIME_US:");
+print(dt);

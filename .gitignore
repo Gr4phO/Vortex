@@ -4,6 +4,7 @@ vortex
 *.out
 *.o
 *.obj
+*.class
 *.pdb
 *.ilk
 *.lib
@@ -15,7 +16,16 @@ build/
 dist/
 target/
 
-# Temporary logs, backups, and IDE files
+# Official standalone CLI releases & SVG benchmark assets
+!releases/
+!releases/v1.0.0/
+!releases/v1.0.0/vortex-*
+!docs/
+!docs/assets/
+!docs/assets/*.svg
+
+# Temporary logs, backups, benchmark scratch, and IDE files
+benchmarks/suite_10_langs/results_*.json
 *.log
 *.tmp
 *.bak

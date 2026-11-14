@@ -1,0 +1,5 @@
+let v = vec_new();
+let m = scope_push();
+let s = slice_i64(4);
+vec_push(v, s);
+scope_pop(m);

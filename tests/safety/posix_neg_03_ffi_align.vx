@@ -1,0 +1,4 @@
+extern "libc.so.6" fn memcpy(dst: *i64, src: *i64, n: i64) -> ptr;
+unsafe {
+    memcpy(0x1003 as *i64, 0x2000 as *i64, 8);
+}

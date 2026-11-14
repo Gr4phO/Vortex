@@ -1,0 +1,4 @@
+extern "kernel32" fn QueryPerformanceCounter(lp: *i64) -> i32;
+unsafe {
+    QueryPerformanceCounter(0x1003 as *i64);
+}

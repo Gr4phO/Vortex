@@ -1,0 +1,439 @@
+// Vortex Standard Library: std/net
+// Cross-platform non-blocking TCP sockets via native OS libraries (ws2_32.dll / libc)
+
+fn net_i32_sext(v: i64) -> i64 {
+    let m = v % 4294967296;
+    let mut u = m;
+    if u < 0 { u = u + 4294967296; }
+    if u >= 2147483648 { return u - 4294967296; }
+    return u;
+}
+
+fn net_parse_ipv4_octets(ip: str, out_sa: i64, off: i64) -> i64 {
+    if str_eq(ip, "localhost") == 1 {
+        unsafe {
+            ptr_write8(out_sa + off + 0, 127);
+            ptr_write8(out_sa + off + 1, 0);
+            ptr_write8(out_sa + off + 2, 0);
+            ptr_write8(out_sa + off + 3, 1);
+        }
+        return 1;
+    }
+    if str_len(ip) == 0 {
+        unsafe {
+            ptr_write32(out_sa + off, 0);
+        }
+        return 1;
+    }
+    let mut cur = 0;
+    let mut oct_idx = 0;
+    let mut acc = 0;
+    let n = str_len(ip);
+    while cur <= n {
+        let mut ch = 46;
+        if cur < n { ch = str_byte(ip, cur); }
+        if ch == 46 {
+            if oct_idx < 4 {
+                unsafe { ptr_write8(out_sa + off + oct_idx, acc); }
+            }
+            oct_idx = oct_idx + 1;
+            acc = 0;
+        } else {
+            if ch >= 48 {
+                if ch <= 57 {
+                    acc = acc * 10 + (ch - 48);
+                }
+            }
+        }
+        cur = cur + 1;
+    }
+    if oct_idx == 4 { return 1; }
+    return 0;
+}
+
+#[cfg(windows)]
+fn net_ws_lib() -> i64 {
+    unsafe { return ffi_load("ws2_32.dll"); }
+}
+
+#[cfg(linux)]
+fn net_libc() -> i64 {
+    unsafe {
+        let mut h = ffi_load("libc.so.6");
+        if h == 0 { h = ffi_load("libc.so"); }
+        return h;
+    }
+}
+
+#[cfg(macos)]
+fn net_libc() -> i64 {
+    unsafe { return ffi_load("libSystem.B.dylib"); }
+}
+
+#[cfg(windows)]
+fn net_init() -> i64 {
+    unsafe {
+        let lib = net_ws_lib();
+        if lib == 0 { return -1; }
+        let p_wsa = ffi_symbol(lib, "WSAStartup");
+        if p_wsa == 0 { return -1; }
+        let buf = alloc(512) as i64;
+        let rc = net_i32_sext(ffi_call2(p_wsa, 514, buf));
+        return rc;
+    }
+}
+
+#[cfg(unix)]
+fn net_init() -> i64 {
+    return 0;
+}
+
+#[cfg(windows)]
+fn net_fill_sockaddr(sa: i64, ip: str, port: i64) -> i64 {
+    unsafe {
+        ptr_write64(sa, 0);
+        ptr_write64(sa + 8, 0);
+        ptr_write8(sa + 0, 2); // AF_INET
+        ptr_write8(sa + 1, 0);
+        ptr_write8(sa + 2, (port / 256) % 256);
+        ptr_write8(sa + 3, port % 256);
+    }
+    return net_parse_ipv4_octets(ip, sa, 4);
+}
+
+#[cfg(linux)]
+fn net_fill_sockaddr(sa: i64, ip: str, port: i64) -> i64 {
+    unsafe {
+        ptr_write64(sa, 0);
+        ptr_write64(sa + 8, 0);
+        ptr_write8(sa + 0, 2); // AF_INET
+        ptr_write8(sa + 1, 0);
+        ptr_write8(sa + 2, (port / 256) % 256);
+        ptr_write8(sa + 3, port % 256);
+    }
+    return net_parse_ipv4_octets(ip, sa, 4);
+}
+
+#[cfg(macos)]
+fn net_fill_sockaddr(sa: i64, ip: str, port: i64) -> i64 {
+    unsafe {
+        ptr_write64(sa, 0);
+        ptr_write64(sa + 8, 0);
+        ptr_write8(sa + 0, 16); // sin_len
+        ptr_write8(sa + 1, 2);  // AF_INET
+        ptr_write8(sa + 2, (port / 256) % 256);
+        ptr_write8(sa + 3, port % 256);
+    }
+    return net_parse_ipv4_octets(ip, sa, 4);
+}
+
+#[cfg(windows)]
+fn net_set_nonblocking(sock: i64, nonblocking: i64) -> i64 {
+    unsafe {
+        let lib = net_ws_lib();
+        let p_ioctl = ffi_symbol(lib, "ioctlsocket");
+        if p_ioctl == 0 { return -1; }
+        let mode_ptr = alloc(8) as i64;
+        let mut mv = 0;
+        if nonblocking != 0 { mv = 1; }
+        ptr_write32(mode_ptr, mv);
+        // FIONBIO = 0x8004667E
+        return net_i32_sext(ffi_call3(p_ioctl, sock, 0x8004667E, mode_ptr));
+    }
+}
+
+#[cfg(linux)]
+fn net_set_nonblocking(sock: i64, nonblocking: i64) -> i64 {
+    unsafe {
+        let lib = net_libc();
+        let p_fcntl = ffi_symbol(lib, "fcntl");
+        if p_fcntl == 0 { return -1; }
+        let flags = net_i32_sext(ffi_call2(p_fcntl, sock, 3)); // F_GETFL
+        if flags < 0 { return -1; }
+        let has_nb = (flags / 2048) % 2; // O_NONBLOCK = 0x800 = 2048 on Linux
+        let mut nflags = flags;
+        if nonblocking != 0 {
+            if has_nb == 0 { nflags = flags + 2048; }
+        } else {
+            if has_nb != 0 { nflags = flags - 2048; }
+        }
+        return net_i32_sext(ffi_call3(p_fcntl, sock, 4, nflags)); // F_SETFL
+    }
+}
+
+#[cfg(macos)]
+fn net_set_nonblocking(sock: i64, nonblocking: i64) -> i64 {
+    unsafe {
+        let lib = net_libc();
+        let p_fcntl = ffi_symbol(lib, "fcntl");
+        if p_fcntl == 0 { return -1; }
+        let flags = net_i32_sext(ffi_call2(p_fcntl, sock, 3));
+        if flags < 0 { return -1; }
+        let has_nb = (flags / 4) % 2; // O_NONBLOCK = 0x0004 on macOS
+        let mut nflags = flags;
+        if nonblocking != 0 {
+            if has_nb == 0 { nflags = flags + 4; }
+        } else {
+            if has_nb != 0 { nflags = flags - 4; }
+        }
+        return net_i32_sext(ffi_call3(p_fcntl, sock, 4, nflags));
+    }
+}
+
+#[cfg(windows)]
+fn net_socket_create() -> i64 {
+    net_init();
+    unsafe {
+        let lib = net_ws_lib();
+        let p_sock = ffi_symbol(lib, "socket");
+        if p_sock == 0 { return -1; }
+        let s = ffi_call3(p_sock, 2, 1, 6);
+        return s;
+    }
+}
+
+#[cfg(unix)]
+fn net_socket_create() -> i64 {
+    unsafe {
+        let lib = net_libc();
+        let p_sock = ffi_symbol(lib, "socket");
+        if p_sock == 0 { return -1; }
+        return net_i32_sext(ffi_call3(p_sock, 2, 1, 6));
+    }
+}
+
+#[cfg(windows)]
+fn net_close(sock: i64) -> i64 {
+    if sock < 0 { return 0; }
+    unsafe {
+        let lib = net_ws_lib();
+        let p_cls = ffi_symbol(lib, "closesocket");
+        if p_cls == 0 { return -1; }
+        return net_i32_sext(ffi_call1(p_cls, sock));
+    }
+}
+
+#[cfg(unix)]
+fn net_close(sock: i64) -> i64 {
+    if sock < 0 { return 0; }
+    unsafe {
+        let lib = net_libc();
+        let p_cls = ffi_symbol(lib, "close");
+        if p_cls == 0 { return -1; }
+        return net_i32_sext(ffi_call1(p_cls, sock));
+    }
+}
+
+#[cfg(windows)]
+fn net_sock_lib() -> i64 { return net_ws_lib(); }
+#[cfg(unix)]
+fn net_sock_lib() -> i64 { return net_libc(); }
+
+#[cfg(windows)]
+fn net_sol_socket() -> i64 { return 65535; }
+#[cfg(linux)]
+fn net_sol_socket() -> i64 { return 1; }
+#[cfg(macos)]
+fn net_sol_socket() -> i64 { return 65535; }
+
+#[cfg(windows)]
+fn net_so_reuseaddr() -> i64 { return 4; }
+#[cfg(linux)]
+fn net_so_reuseaddr() -> i64 { return 2; }
+#[cfg(macos)]
+fn net_so_reuseaddr() -> i64 { return 4; }
+
+fn net_tcp_listen(port: i64, nonblocking: i64) -> i64 {
+    let sock = net_socket_create();
+    if sock == -1 { return -1; }
+    unsafe {
+        let lib = net_sock_lib();
+        let sol = net_sol_socket();
+        let reuse = net_so_reuseaddr();
+        let p_setsock = ffi_symbol(lib, "setsockopt");
+        let p_bind = ffi_symbol(lib, "bind");
+        let p_listen = ffi_symbol(lib, "listen");
+        if p_setsock != 0 {
+            let one = alloc(8) as i64;
+            ptr_write32(one, 1);
+            ffi_call5(p_setsock, sock, sol, reuse, one, 4);
+        }
+        let sa = alloc(32) as i64;
+        net_fill_sockaddr(sa, "127.0.0.1", port);
+        if net_i32_sext(ffi_call3(p_bind, sock, sa, 16)) != 0 {
+            net_close(sock);
+            return -1;
+        }
+        if net_i32_sext(ffi_call2(p_listen, sock, 64)) != 0 {
+            net_close(sock);
+            return -1;
+        }
+    }
+    if nonblocking != 0 {
+        net_set_nonblocking(sock, 1);
+    }
+    return sock;
+}
+
+fn net_bound_port(sock: i64) -> i64 {
+    if sock < 0 { return -1; }
+    unsafe {
+        let mut lib = 0;
+        #[cfg(windows)]
+        lib = net_ws_lib();
+        #[cfg(unix)]
+        lib = net_libc();
+        let p_gsn = ffi_symbol(lib, "getsockname");
+        if p_gsn == 0 { return -1; }
+        let sa = alloc(32) as i64;
+        let lenp = alloc(8) as i64;
+        ptr_write64(sa, 0);
+        ptr_write64(sa + 8, 0);
+        ptr_write32(lenp, 16);
+        let rc = net_i32_sext(ffi_call3(p_gsn, sock, sa, lenp));
+        if rc != 0 { return -1; }
+        let hi = ptr_read8(sa + 2);
+        let lo = ptr_read8(sa + 3);
+        return hi * 256 + lo;
+    }
+}
+
+#[cfg(windows)]
+fn net_poll_event(sock: i64, want_write: i64, timeout_ms: i64) -> i64 {
+    if sock < 0 { return -1; }
+    unsafe {
+        let lib = net_ws_lib();
+        let p_poll = ffi_symbol(lib, "WSAPoll");
+        if p_poll == 0 { return 1; }
+        let pfd = alloc(16) as i64;
+        ptr_write64(pfd + 0, sock);
+        let mut ev = 256; // POLLRDNORM = 0x0100
+        if want_write != 0 { ev = 16; } // POLLWRNORM = 0x0010
+        ptr_write32(pfd + 8, ev);
+        return net_i32_sext(ffi_call3(p_poll, pfd, 1, timeout_ms));
+    }
+}
+
+#[cfg(unix)]
+fn net_poll_event(sock: i64, want_write: i64, timeout_ms: i64) -> i64 {
+    if sock < 0 { return -1; }
+    unsafe {
+        let lib = net_libc();
+        let p_poll = ffi_symbol(lib, "poll");
+        if p_poll == 0 { return 1; }
+        let pfd = alloc(16) as i64;
+        ptr_write32(pfd + 0, sock);
+        let mut ev = 1; // POLLIN
+        if want_write != 0 { ev = 4; } // POLLOUT
+        ptr_write32(pfd + 4, ev);
+        return net_i32_sext(ffi_call3(p_poll, pfd, 1, timeout_ms));
+    }
+}
+
+fn net_poll_read(sock: i64, timeout_ms: i64) -> i64 {
+    return net_poll_event(sock, 0, timeout_ms);
+}
+
+fn net_poll_write(sock: i64, timeout_ms: i64) -> i64 {
+    return net_poll_event(sock, 1, timeout_ms);
+}
+
+fn net_tcp_accept(listen_sock: i64, nonblocking: i64) -> i64 {
+    if listen_sock < 0 { return -1; }
+    unsafe {
+        let mut lib = 0;
+        #[cfg(windows)]
+        lib = net_ws_lib();
+        #[cfg(unix)]
+        lib = net_libc();
+        let p_acc = ffi_symbol(lib, "accept");
+        if p_acc == 0 { return -1; }
+        let raw = ffi_call3(p_acc, listen_sock, 0, 0);
+        let mut cli = raw;
+        #[cfg(unix)]
+        cli = net_i32_sext(raw);
+        if cli < 0 { return -1; }
+        if nonblocking != 0 {
+            net_set_nonblocking(cli, 1);
+        }
+        return cli;
+    }
+}
+
+fn net_tcp_connect(host: str, port: i64, nonblocking: i64) -> i64 {
+    let sock = net_socket_create();
+    if sock < 0 { return -1; }
+    if nonblocking != 0 {
+        net_set_nonblocking(sock, 1);
+    }
+    unsafe {
+        let mut lib = 0;
+        #[cfg(windows)]
+        lib = net_ws_lib();
+        #[cfg(unix)]
+        lib = net_libc();
+        let p_conn = ffi_symbol(lib, "connect");
+        if p_conn == 0 {
+            net_close(sock);
+            return -1;
+        }
+        let sa = alloc(32) as i64;
+        net_fill_sockaddr(sa, host, port);
+        let rc = net_i32_sext(ffi_call3(p_conn, sock, sa, 16));
+        if rc != 0 {
+            if nonblocking != 0 {
+                // Non-blocking connect completes once writable
+                let ready = net_poll_write(sock, 2000);
+                if ready <= 0 {
+                    net_close(sock);
+                    return -1;
+                }
+            } else {
+                net_close(sock);
+                return -1;
+            }
+        }
+    }
+    return sock;
+}
+
+fn net_send(sock: i64, data: str) -> i64 {
+    if sock < 0 { return -1; }
+    let dlen = str_len(data);
+    unsafe {
+        let mut lib = 0;
+        #[cfg(windows)]
+        lib = net_ws_lib();
+        #[cfg(unix)]
+        lib = net_libc();
+        let p_send = ffi_symbol(lib, "send");
+        if p_send == 0 { return -1; }
+        return net_i32_sext(ffi_call4(p_send, sock, data as i64, dlen, 0));
+    }
+}
+
+fn net_recv(sock: i64, max_bytes: i64) -> str {
+    if sock < 0 { return ""; }
+    if max_bytes <= 0 { return ""; }
+    unsafe {
+        let mut lib = 0;
+        #[cfg(windows)]
+        lib = net_ws_lib();
+        #[cfg(unix)]
+        lib = net_libc();
+        let p_recv = ffi_symbol(lib, "recv");
+        if p_recv == 0 { return ""; }
+        let buf = alloc(max_bytes + 1) as i64;
+        let got = net_i32_sext(ffi_call4(p_recv, sock, buf, max_bytes, 0));
+        if got <= 0 { return ""; }
+        ptr_write8(buf + got, 0);
+        return ptr_to_str(buf);
+    }
+}
+
+fn net_recv_wait(sock: i64, max_bytes: i64, timeout_ms: i64) -> str {
+    if net_poll_read(sock, timeout_ms) <= 0 {
+        return "";
+    }
+    return net_recv(sock, max_bytes);
+}

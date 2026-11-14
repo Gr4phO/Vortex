@@ -1,0 +1,11 @@
+unsafe fn launder(x: i64) -> i64 {
+    return x + 0;
+}
+let mut leaked = 0;
+unsafe {
+    let m = scope_push();
+    let s = slice_i64(4);
+    leaked = launder(s as i64);
+    scope_pop(m);
+    print(slice_len(leaked as ptr));
+}

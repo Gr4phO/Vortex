@@ -1,0 +1,4 @@
+extern "libc.so.6" fn puts(s: str) -> i32;
+unsafe {
+    puts(0);
+}

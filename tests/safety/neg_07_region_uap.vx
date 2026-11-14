@@ -1,0 +1,4 @@
+let m = scope_push();
+let s = slice_i64(4);
+scope_pop(m);
+s[0] = 1;

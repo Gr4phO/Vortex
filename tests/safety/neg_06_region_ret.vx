@@ -1,0 +1,8 @@
+fn bad() -> ptr {
+    let m = scope_push();
+    let s = slice_i64(4);
+    scope_pop(m);
+    return s;
+}
+let r = bad();
+print(r);

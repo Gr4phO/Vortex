@@ -7,6 +7,11 @@
 #define VORTEX_H
 
 #ifndef _WIN32
+#ifdef __APPLE__
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE
+#endif
+#endif
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -35,6 +40,22 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+#ifdef __APPLE__
+#include <libkern/OSCacheControl.h>
+#include <mach/mach_time.h>
+#ifndef MAP_JIT
+#define MAP_JIT 0x0800
+#endif
+#if !defined(VORTEX_ENABLE_X11) && !defined(VORTEX_NO_X11)
+#define VORTEX_NO_X11
+#endif
+#endif
+#if defined(VORTEX_HEADLESS) && !defined(VORTEX_NO_X11)
+#define VORTEX_NO_X11
+#endif
 #ifndef VORTEX_NO_X11
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -48,9 +69,16 @@
 /* 1. MEMORY ARCHITECTURE CONSTANTS & TYPES                                  */
 /* ========================================================================= */
 
-#define VORTEX_PAGE_SIZE   (2 * 1024 * 1024) /* 2 MB Huge Pages */
-#define VORTEX_ALIGNMENT   64                /* 64-byte alignment (Cache line & AVX-512) */
-#define MAX_JIT_CODE_SIZE  (256 * 1024)
+#define VORTEX_PAGE_SIZE       (2 * 1024 * 1024) /* 2 MB Huge Pages */
+#define VORTEX_ALIGNMENT       64                /* 64-byte alignment (Cache line & AVX-512) */
+#define MAX_JIT_CODE_SIZE      (1024 * 1024)
+#define VORTEX_MAX_SCOPE_DEPTH 256
+#define VORTEX_SAFE_MAGIC      0x5654585341464531ULL /* "VTXSAFE1" */
+
+typedef enum {
+    VORTEX_MODE_SAFE = 0,
+    VORTEX_MODE_RELEASE = 1
+} VortexBuildMode;
 
 typedef struct VortexPage {
     uint8_t* base;
@@ -64,7 +92,25 @@ typedef struct {
     VortexPage* current;
     size_t current_page_index;
     size_t total_pages;
+    uint32_t scope_depth;
+    uint64_t next_epoch;
+    uint64_t scope_stack[VORTEX_MAX_SCOPE_DEPTH];
 } VortexRegionArena;
+
+typedef struct {
+    uint64_t magic;
+    VortexRegionArena* owner_arena;
+    uint64_t epoch;
+    uint64_t byte_size;
+    uint64_t elem_count;
+    uint32_t scope_depth;
+    uint32_t elem_size;
+    uint32_t page_idx;
+    uint32_t page_offset;
+    uint64_t reserved;
+} VortexSafeHeader;
+
+typedef char vortex_assert_safe_hdr_size[(sizeof(VortexSafeHeader) == 64) ? 1 : -1];
 
 typedef struct {
     int64_t* data;
@@ -141,6 +187,8 @@ typedef enum {
     TOK_RETURN,
     TOK_STRUCT,
     TOK_EXTERN,
+    TOK_UNSAFE,
+    TOK_AS,
     TOK_ARROW,
     TOK_I64_KW,
     TOK_F32_KW,
@@ -170,7 +218,10 @@ typedef enum {
     TOK_RBRACKET,
     TOK_SEMI,
     TOK_COMMA,
-    TOK_COLON
+    TOK_COLON,
+    TOK_QUESTION,
+    TOK_IMPORT,
+    TOK_HASH
 } VortexTokenType;
 
 typedef struct {
@@ -201,6 +252,7 @@ typedef enum {
     TYPE_STR,
     TYPE_PTR,
     TYPE_PTR_I64,
+    TYPE_PTR_I32,
     TYPE_PTR_F32,
     TYPE_STRUCT,
     TYPE_PTR_STRUCT
@@ -213,16 +265,29 @@ typedef struct {
     int stack_offset;
     bool is_mut;
     int vreg;
+    /* Jalon 1: Static Region & Bounds Metadata */
+    bool is_ref;
+    bool holds_refs;
+    bool is_region_mark;
+    bool is_slice_ptr;
+    int region_id;
+    int region_depth;
+    int elem_region_id;
+    int elem_region_depth;
+    int len_vreg;
+    int64_t known_len;
 } Symbol;
 
 #define MAX_FIELDS 16
-#define MAX_STRUCT_TYPES 32
-#define MAX_SYMBOLS 256
-#define MAX_USER_FUNCS 64
-#define MAX_USER_FUNC_RELOCS 256
-#define MAX_DYN_LIBS 64
-#define MAX_FFI_FUNCS 128
-#define MAX_LITERAL_STRINGS 256
+#define MAX_STRUCT_TYPES 128
+#define MAX_SYMBOLS 512
+#define MAX_USER_FUNCS 512
+#define MAX_USER_FUNC_RELOCS 2048
+#define MAX_DYN_LIBS 128
+#define MAX_FFI_FUNCS 512
+#define MAX_LITERAL_STRINGS 1024
+#define MAX_CALL_ARGS 16
+#define MAX_COMPILE_REGIONS 64
 
 typedef struct {
     char name[64];
@@ -252,12 +317,21 @@ typedef struct {
     char name[64];
     size_t code_offset;
     int param_count;
-    char param_names[8][64];
+    char param_names[MAX_CALL_ARGS][64];
+    VortexType param_types[MAX_CALL_ARGS];
+    int param_struct_ids[MAX_CALL_ARGS];
+    VortexType ret_type;
+    int ret_struct_id;
+    bool is_unsafe;
+    bool returns_ref;
 } UserFunc;
 
 typedef struct {
     size_t patch_pos;
     char name[64];
+    bool called_in_unsafe;
+    int call_line;
+    const char* call_file;
 } UserFuncReloc;
 
 typedef struct {
@@ -277,8 +351,10 @@ typedef struct {
     void* func_ptr;
     VortexType ret_type;
     int param_count;
-    char param_names[8][64];
-    VortexType param_types[8];
+    char param_names[MAX_CALL_ARGS][64];
+    VortexType param_types[MAX_CALL_ARGS];
+    bool param_nullable[MAX_CALL_ARGS];
+    bool is_variadic;
 } FFIFunc;
 
 /* ========================================================================= */
@@ -311,6 +387,54 @@ typedef enum {
     PREG_NONE = -1
 } PReg;
 
+typedef enum {
+    A64_X0  = 0,  A64_X1  = 1,  A64_X2  = 2,  A64_X3  = 3,
+    A64_X4  = 4,  A64_X5  = 5,  A64_X6  = 6,  A64_X7  = 7,
+    A64_X8  = 8,  A64_X9  = 9,  A64_X10 = 10, A64_X11 = 11,
+    A64_X12 = 12, A64_X13 = 13, A64_X14 = 14, A64_X15 = 15,
+    A64_X16 = 16, A64_X17 = 17, A64_X18 = 18, A64_X19 = 19,
+    A64_X20 = 20, A64_X21 = 21, A64_X22 = 22, A64_X23 = 23,
+    A64_X24 = 24, A64_X25 = 25, A64_X26 = 26, A64_X27 = 27,
+    A64_X28 = 28, A64_FP  = 29, A64_LR  = 30, A64_XZR = 31
+} A64Reg;
+
+typedef enum {
+    VORTEX_ARCH_X86_64 = 0,
+    VORTEX_ARCH_ARM64  = 1
+} VortexTargetArch;
+
+typedef enum {
+    VORTEX_ABI_WIN64    = 0,
+    VORTEX_ABI_SYSV64   = 1,
+    VORTEX_ABI_AAPCS64  = 2,
+    VORTEX_ABI_DARWIN64 = 3
+} VortexTargetABI;
+
+typedef enum {
+    VORTEX_SIMD_NONE = 0,
+    VORTEX_SIMD_AVX2 = 1, /* 256-bit AVX2 (8 x f32) */
+    VORTEX_SIMD_NEON = 2, /* 128-bit ASIMD/NEON (4 x f32) */
+    VORTEX_SIMD_SVE  = 4  /* Scalable Vector Extension (optional) */
+} VortexSIMDCap;
+
+typedef struct {
+    VortexTargetArch arch;
+    VortexTargetABI abi;
+    const char* name;
+    uint32_t simd_caps;
+    int simd_width_bits;
+    int simd_lanes_f32;
+    int spill_base_offset;
+    int int_callee_regs[16];
+    int int_callee_count;
+    int int_scratch_regs[16];
+    int int_scratch_count;
+    int float_callee_regs[16];
+    int float_callee_count;
+    int float_scratch_regs[16];
+    int float_scratch_count;
+} VortexTargetDesc;
+
 #define MAX_IR_INSTRS 65536
 #define MAX_VREGS 16384
 #define MAX_LABELS 4096
@@ -341,10 +465,18 @@ typedef enum {
     IR_FLE,
     IR_FGT,
     IR_FGE,
+    IR_CAST_I64_TO_F32,
+    IR_CAST_F32_TO_I64,
     IR_LOAD_OFFSET,
     IR_STORE_OFFSET,
     IR_LOAD_ARRAY,
     IR_STORE_ARRAY,
+    IR_LOAD_DEREF,
+    IR_STORE_DEREF,
+    IR_BOUNDS_CHECK,
+    IR_RANGE_CHECK,
+    IR_PTR_CHECK,
+    IR_FFI_CHECK,
     IR_LABEL,
     IR_JMP,
     IR_JZ,
@@ -368,15 +500,25 @@ typedef struct IRInstruction {
     VReg src1;
     VReg src2;
     VReg src3;
+    VReg src4;
     int64_t imm;
     float fimm;
     int32_t offset;
     void* func_ptr;
     char func_name[64];
     int arg_count;
-    VReg args[8];
+    VReg args[MAX_CALL_ARGS];
     VortexType ret_type;
-    VortexType arg_types[8];
+    VortexType arg_types[MAX_CALL_ARGS];
+    bool is_variadic;
+    int fixed_param_count;
+    /* Source location & region safety metadata */
+    int line;
+    const char* file;
+    int region_id;
+    int region_depth;
+    bool is_ref_result;
+    int64_t known_len;
     /* Vector / Riemann loop fields */
     VReg i_vreg;
     VReg lim_vreg;
@@ -400,6 +542,13 @@ typedef struct {
     int preg;
     int spill_offset;
     bool is_spilled;
+    /* Static region & bounds metadata */
+    bool is_ref;
+    int region_id;
+    int region_depth;
+    int len_vreg;
+    int64_t known_len;
+    bool is_slice_ptr;
 } VRegInfo;
 
 typedef struct {
@@ -420,11 +569,29 @@ typedef struct {
 } LiveInterval;
 
 typedef struct {
+    int region_id;
+    int depth;
+    char mark_name[64];
+    bool active;
+} CompileRegion;
+
+typedef struct {
     Lexer* lex;
     SymbolTable* st;
     JITBuffer* j;
     IRBuffer* ir;
     int last_struct_id;
+    /* Jalon 1: Unsafe & Static Arena Region tracking */
+    int unsafe_depth;
+    int region_counter;
+    int current_region_depth;
+    int current_region_id;
+    CompileRegion region_stack[MAX_COMPILE_REGIONS];
+    int popped_regions[256];
+    int popped_region_count;
+    bool current_fn_is_unsafe;
+    bool in_function;
+    bool block_returned;
 } Compiler;
 
 /* ========================================================================= */
@@ -434,12 +601,13 @@ typedef struct {
 #define VORTEX_PACK_MAGIC_HEADER "VRTX"
 #define VORTEX_PACK_MAGIC_FOOTER "VTXPACK1"
 #define VORTEX_PACK_VERSION 1
+#define VORTEX_PACK_FLAG_RELEASE 1
 
 #pragma pack(push, 1)
 typedef struct {
     char header_magic[4];     /* "VRTX" */
     uint32_t version;         /* 1 */
-    uint32_t flags;           /* 0 */
+    uint32_t flags;           /* bit 0: release mode */
     uint32_t num_structs;
     uint32_t num_constants;
     uint32_t source_len;
@@ -457,6 +625,13 @@ typedef struct {
 
 extern jmp_buf g_error_jmp;
 extern bool g_in_repl;
+extern VortexBuildMode g_compile_mode;
+extern VortexTargetArch g_target_arch;
+extern VortexTargetABI g_target_abi;
+extern const char* g_current_filename;
+extern const char* g_dump_jit_path;
+extern const char* g_dump_debug_path;
+extern bool g_lsp_capture_errors;
 
 extern VortexStructType g_struct_types[MAX_STRUCT_TYPES];
 extern int g_struct_type_count;
@@ -482,18 +657,37 @@ extern bool g_has_last_symtab;
 
 /* --- src/arena.c --- */
 VortexPage* arena_page_create(size_t min_capacity);
+void arena_register(VortexRegionArena* ar);
 void arena_init(void);
 void arena_set_thread_local(VortexRegionArena* ar);
 void* arena_alloc_fast(size_t bytes);
 void* arena_alloc(size_t bytes);
 int64_t vortex_alloc_struct(int64_t size);
+int64_t vortex_alloc_slice_i64(int64_t len);
+int64_t vortex_alloc_slice_f32(int64_t len);
+int64_t vortex_alloc_slice_i32(int64_t len);
+int64_t vortex_slice_len(int64_t ptr_val);
 int64_t vortex_scope_push(void);
 int64_t vortex_scope_pop(int64_t mark);
+
+void vortex_safe_check_ptr(int64_t ptr_val, int64_t file_ptr, int64_t line);
+void vortex_safe_check_bounds(int64_t ptr_val, int64_t idx, int64_t len_override, int64_t elem_size, int64_t file_ptr, int64_t line);
+void vortex_safe_check_range(int64_t ptr_val, int64_t start, int64_t lim, int64_t len_override, int64_t elem_size, int64_t file_ptr, int64_t line);
+void vortex_safe_check_ffi_arg(int64_t val, int64_t type_code, int64_t align_and_flags, int64_t fn_name_ptr, int64_t arg_idx, int64_t file_ptr, int64_t line);
+
+int64_t vortex_ptr_read8(int64_t ptr_val);
+int64_t vortex_ptr_write8(int64_t ptr_val, int64_t val);
+int64_t vortex_ptr_read32(int64_t ptr_val);
+int64_t vortex_ptr_write32(int64_t ptr_val, int64_t val);
+int64_t vortex_ptr_read64(int64_t ptr_val);
+int64_t vortex_ptr_write64(int64_t ptr_val, int64_t val);
 
 int64_t vortex_vec_new(void);
 int64_t vortex_vec_push(int64_t vec_ptr, int64_t val);
 int64_t vortex_vec_get(int64_t vec_ptr, int64_t idx);
 int64_t vortex_vec_set(int64_t vec_ptr, int64_t idx, int64_t val);
+int64_t vortex_vec_get_safe(int64_t vec_ptr, int64_t idx, int64_t file_ptr, int64_t line);
+int64_t vortex_vec_set_safe(int64_t vec_ptr, int64_t idx, int64_t val, int64_t file_ptr, int64_t line);
 int64_t vortex_vec_len(int64_t vec_ptr);
 
 int64_t vortex_map_new(void);
@@ -507,6 +701,12 @@ int64_t vortex_str_len(int64_t s_ptr);
 int64_t vortex_str_sub(int64_t s_ptr, int64_t start, int64_t len);
 int64_t vortex_str_from_i64(int64_t n);
 int64_t vortex_str_from_f32(int64_t f_bits);
+int64_t vortex_str_byte(int64_t s_ptr, int64_t idx);
+int64_t vortex_str_from_byte(int64_t ch);
+int64_t vortex_str_eq(int64_t s1_ptr, int64_t s2_ptr);
+int64_t vortex_str_find(int64_t haystack_ptr, int64_t needle_ptr, int64_t start_idx);
+int64_t vortex_str_to_i64(int64_t s_ptr);
+int64_t vortex_ptr_to_str(int64_t ptr_val);
 
 /* --- src/lexer_parser.c --- */
 void lexer_init(Lexer* lex, const char* source);
@@ -530,10 +730,16 @@ void ir_emit_const_i64(IRBuffer* ir, VReg dest, int64_t val);
 void ir_emit_const_f32(IRBuffer* ir, VReg dest, float val);
 void ir_emit_mov(IRBuffer* ir, VReg dest, VReg src);
 void ir_emit_binop(IRBuffer* ir, IROpcode op, VReg dest, VReg s1, VReg s2, VortexType t);
+void ir_emit_cast(IRBuffer* ir, IROpcode op, VReg dest, VReg src, VortexType t);
 void ir_emit_load_offset(IRBuffer* ir, VReg dest, VReg base, int32_t offset, VortexType t);
 void ir_emit_store_offset(IRBuffer* ir, VReg base, int32_t offset, VReg val, VortexType t);
 void ir_emit_load_array(IRBuffer* ir, VReg dest, VReg base, VReg idx, VortexType t);
 void ir_emit_store_array(IRBuffer* ir, VReg base, VReg idx, VReg val, VortexType t);
+void ir_emit_load_deref(IRBuffer* ir, VReg dest, VReg ptr_vreg, VortexType t);
+void ir_emit_store_deref(IRBuffer* ir, VReg ptr_vreg, VReg val, VortexType t);
+void ir_emit_bounds_check(IRBuffer* ir, VReg base, VReg idx, VReg len_vreg, int64_t known_len, int32_t elem_size, const char* file, int line);
+void ir_emit_ptr_check(IRBuffer* ir, VReg ptr_vreg, const char* file, int line);
+void ir_emit_ffi_check(IRBuffer* ir, VReg val, VortexType expected_t, int64_t align_and_flags, const char* fn_name, int arg_idx, const char* file, int line);
 void ir_emit_label(IRBuffer* ir, int lbl);
 void ir_emit_jmp(IRBuffer* ir, int lbl);
 void ir_emit_jz(IRBuffer* ir, VReg cond, int lbl);
@@ -542,13 +748,44 @@ void ir_emit_call_user(IRBuffer* ir, VReg dest, const char* name, VReg* args, in
 void ir_emit_call_ffi(IRBuffer* ir, VReg dest, FFIFunc* ff, VReg* args, int num_args, VortexType ret_t);
 void ir_emit_load_param(IRBuffer* ir, VReg dest, int param_idx);
 void ir_emit_ret(IRBuffer* ir, VReg val, VortexType t);
+void ir_region_verify(IRBuffer* ir);
+void ir_optimize_bounds_and_licm(IRBuffer* ir);
 void ir_liveness_analysis(IRBuffer* ir);
 void ir_loop_vectorize(IRBuffer* ir);
 void ir_linear_scan_allocate(IRBuffer* ir);
 
-/* --- src/jit_x64.c --- */
+/* --- Target Abstraction & JIT Backends (src/jit_x64.c, src/jit_arm64.c) --- */
+typedef struct {
+    VortexTargetArch arch;
+    const char* backend_name;
+    int (*compute_frame_size)(int total_spill_bytes);
+    void (*emit_prologue)(JITBuffer* j, int frame_size);
+    void (*emit_epilogue)(JITBuffer* j, int frame_size);
+    void (*emit_func_prologue)(JITBuffer* j, int frame_size);
+    void (*emit_func_epilogue)(JITBuffer* j, int frame_size);
+    size_t (*emit_jmp_placeholder)(JITBuffer* j);
+    void (*patch_jump)(JITBuffer* j, size_t patch_pos);
+    void (*patch_call_rel)(JITBuffer* j, size_t patch_pos, size_t target_offset);
+    void (*ir_codegen)(IRBuffer* ir, JITBuffer* j);
+} VortexJITBackend;
+
+const VortexTargetDesc* vortex_get_target_desc(void);
+const VortexTargetDesc* vortex_get_target_desc_for(VortexTargetArch arch, VortexTargetABI abi);
+const VortexJITBackend* vortex_get_backend(void);
+bool vortex_set_target_name(const char* name);
+bool vortex_is_cross_target(void);
+const char* vortex_intern_cstr(const char* s);
+void vortex_get_self_path(char* out, size_t cap, const char* argv0);
+
+/* Executable page & Apple Silicon / Linux W^X helpers (src/runtime.c) */
 void* alloc_exec_page(size_t size);
 void free_exec_page(void* ptr, size_t size);
+void jit_write_protect(void* ptr, size_t size, bool writable);
+
+extern const VortexJITBackend g_backend_x64;
+extern const VortexJITBackend g_backend_arm64;
+
+/* Compatibility & Backend entry points */
 size_t emit_jmp_placeholder(JITBuffer* j);
 void patch_jump(JITBuffer* j, size_t patch_pos);
 int compute_frame_size(int total_spill_bytes);
@@ -557,6 +794,7 @@ void emit_epilogue(JITBuffer* j, int frame_size);
 void emit_func_prologue(JITBuffer* j, int frame_size);
 void emit_func_epilogue(JITBuffer* j, int frame_size);
 void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j);
+void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j);
 
 void* vortex_load_dynlib(const char* lib_name);
 void* vortex_resolve_symbol(void* handle, const char* sym_name);
@@ -568,6 +806,8 @@ int64_t vortex_ffi_call1(int64_t fn_ptr, int64_t a1);
 int64_t vortex_ffi_call2(int64_t fn_ptr, int64_t a1, int64_t a2);
 int64_t vortex_ffi_call3(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3);
 int64_t vortex_ffi_call4(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3, int64_t a4);
+int64_t vortex_ffi_call5(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5);
+int64_t vortex_ffi_call6(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6);
 
 /* --- src/runtime.c --- */
 void vortex_error(const char* msg);
@@ -601,5 +841,57 @@ int execute_vortex_source(const char* source);
 int execute_vortex_file(const char* filename);
 bool check_and_run_embedded_payload(int argc, char** argv);
 int vortex_cmd_build(int argc, char** argv);
+
+/* --- src/debug_info.c (Stacktraces, DWARF / GDB-LLDB JIT, Win64 Unwind) --- */
+typedef struct {
+    size_t start_offset;
+    size_t end_offset;
+    int line;
+    const char* file;
+    const char* func_name;
+} VortexDebugLineEntry;
+
+typedef struct {
+    char name[64];
+    size_t start_offset;
+    size_t end_offset;
+    int frame_size;
+    bool is_main;
+    int line;
+    const char* file;
+} VortexDebugFuncInfo;
+
+void debug_info_reset(void);
+void debug_info_set_current_func(const char* name);
+void debug_info_record_func(const char* name, size_t start_off, size_t end_off, int frame_size, bool is_main, const char* file, int line);
+void debug_info_record_line(size_t start_off, size_t end_off, int line, const char* file);
+void debug_info_set_jit_image(void* base, size_t size, JITBuffer* jit_opt);
+void debug_info_unregister_jit_image(void);
+bool debug_write_dwarf_elf(const char* path);
+const VortexDebugLineEntry* debug_info_lookup_addr(uintptr_t addr, const char** out_func_name);
+void vortex_print_stacktrace(void* native_ctx);
+void vortex_crash_guard_enter(void);
+void vortex_crash_guard_leave(void);
+
+/* --- Module imports, bundling & Package / LSP Hooks --- */
+typedef bool (*VortexImportHookFn)(const char* spec, const char* importer_file, char* out_path, size_t cap);
+extern VortexImportHookFn g_pkg_import_hook;
+void lexer_reset_imports(void);
+bool vortex_resolve_import(const char* spec, const char* importer_file, char* out_path, size_t cap);
+char* vortex_bundle_source(const char* entry_path, const char* entry_src, size_t* out_len);
+
+/* --- src/pkg.c (Package Manager, vortex.toml / vortex.lock, SHA-256, Cache) --- */
+void vortex_sha256_hex(const uint8_t* data, size_t len, char out_hex[65]);
+bool pkg_resolve_import(const char* spec, const char* importer_file, char* out_path, size_t cap);
+int vortex_cmd_pkg(int argc, char** argv);
+
+/* --- src/lsp.c & Diagnostics Capture (Language Server Protocol over stdio) --- */
+void vortex_diag_emit(FILE* stream, const char* fmt, ...);
+bool vortex_frontend_check(const char* source, const char* file_path, char* diag_out, size_t diag_cap);
+void ir_free_all_active(void);
+int vortex_cmd_lsp(int argc, char** argv);
+
+extern const char* g_dump_jit_path;
+extern bool g_headless_mode;
 
 #endif /* VORTEX_H */

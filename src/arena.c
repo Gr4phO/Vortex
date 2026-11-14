@@ -1,7 +1,8 @@
 /*
  * VORTEX MEMORY ARCHITECTURE & ZERO-GC DATA STRUCTURES
  * - 2 MB Paged Region Arena (64-byte aligned, Thread-Local zero-lock)
- * - Hierarchical Scope-Arena (scope_push / scope_pop)
+ * - Hierarchical Scope-Arena (scope_push / scope_pop) with Epoch Safety Verification
+ * - Safe Typed Slices, Bounds/Epoch/FFI Boundary Validators
  * - Resizable Dynamic Vectors (VortexVec) & Flat Open-Addressing Hash Maps (VortexMap)
  * - UTF-8 String Primitives
  */
@@ -9,16 +10,36 @@
 #include "vortex.h"
 
 static VortexRegionArena g_arena;
+static VortexRegionArena* g_registered_arenas[VORTEX_MAX_THREADS + 4];
+static int g_registered_arena_count = 0;
 
 #ifdef _MSC_VER
 static __declspec(thread) VortexRegionArena* tl_current_arena = NULL;
+static __declspec(thread) uint64_t tl_rewind_seq = 1;
+static __declspec(thread) const char* tl_last_str_s = NULL;
+static __declspec(thread) size_t tl_last_str_len = 0;
+static __declspec(thread) uint64_t tl_last_str_seq = 0;
 #else
 static __thread VortexRegionArena* tl_current_arena = NULL;
+static __thread uint64_t tl_rewind_seq = 1;
+static __thread const char* tl_last_str_s = NULL;
+static __thread size_t tl_last_str_len = 0;
+static __thread uint64_t tl_last_str_seq = 0;
 #endif
 
 static inline VortexRegionArena* get_active_arena(void) {
     if (tl_current_arena) return tl_current_arena;
     return &g_arena;
+}
+
+void arena_register(VortexRegionArena* ar) {
+    if (!ar) return;
+    for (int i = 0; i < g_registered_arena_count; i++) {
+        if (g_registered_arenas[i] == ar) return;
+    }
+    if (g_registered_arena_count < VORTEX_MAX_THREADS + 4) {
+        g_registered_arenas[g_registered_arena_count++] = ar;
+    }
 }
 
 void arena_set_thread_local(VortexRegionArena* ar) {
@@ -72,13 +93,14 @@ void arena_init(void) {
         ar->current = ar->head;
         ar->current_page_index = 0;
     }
+    ar->scope_depth = 0;
+    ar->scope_stack[0] = 1;
+    ar->next_epoch = 2;
+    tl_rewind_seq++;
+    arena_register(ar);
 }
 
-void* arena_alloc_fast(size_t bytes) {
-    size_t aligned = (bytes + (VORTEX_ALIGNMENT - 1)) & ~(size_t)(VORTEX_ALIGNMENT - 1);
-    if (aligned == 0) aligned = VORTEX_ALIGNMENT;
-
-    VortexRegionArena* ar = get_active_arena();
+static void* arena_bump_raw(VortexRegionArena* ar, size_t total_aligned) {
     VortexPage* cur = ar->current;
     if (!cur) {
         arena_init();
@@ -86,9 +108,9 @@ void* arena_alloc_fast(size_t bytes) {
     }
 
     /* Fast path: 1-cycle pointer bump in 2MB page with 64-byte alignment */
-    if (cur->cursor + aligned <= cur->capacity) {
+    if (cur->cursor + total_aligned <= cur->capacity) {
         void* ptr = (void*)(cur->base + cur->cursor);
-        cur->cursor += aligned;
+        cur->cursor += total_aligned;
         return ptr;
     }
 
@@ -98,7 +120,7 @@ void* arena_alloc_fast(size_t bytes) {
         ar->current_page_index++;
         ar->current->cursor = 0;
     } else {
-        VortexPage* new_page = arena_page_create(aligned);
+        VortexPage* new_page = arena_page_create(total_aligned);
         cur->next = new_page;
         ar->current = new_page;
         ar->current_page_index++;
@@ -106,8 +128,47 @@ void* arena_alloc_fast(size_t bytes) {
     }
 
     void* ptr = (void*)(ar->current->base + ar->current->cursor);
-    ar->current->cursor += aligned;
+    ar->current->cursor += total_aligned;
     return ptr;
+}
+
+static void* arena_alloc_with_header(size_t bytes, uint64_t elem_count, uint32_t elem_size) {
+    size_t aligned = (bytes + (VORTEX_ALIGNMENT - 1)) & ~(size_t)(VORTEX_ALIGNMENT - 1);
+    if (aligned == 0) aligned = VORTEX_ALIGNMENT;
+
+    VortexRegionArena* ar = get_active_arena();
+    if (!ar->current) {
+        arena_init();
+    }
+
+    uint8_t* raw = (uint8_t*)arena_bump_raw(ar, sizeof(VortexSafeHeader) + aligned);
+    uint8_t* user_ptr = raw + sizeof(VortexSafeHeader);
+
+    VortexSafeHeader* hdr = (VortexSafeHeader*)raw;
+    hdr->magic = VORTEX_SAFE_MAGIC;
+    hdr->owner_arena = ar;
+    hdr->epoch = (ar->scope_depth < VORTEX_MAX_SCOPE_DEPTH) ? ar->scope_stack[ar->scope_depth] : 1;
+    hdr->byte_size = (uint64_t)bytes;
+    hdr->elem_count = elem_count;
+    hdr->scope_depth = ar->scope_depth;
+    hdr->elem_size = elem_size;
+    hdr->page_idx = (uint32_t)ar->current_page_index;
+    hdr->page_offset = (uint32_t)(user_ptr - ar->current->base);
+    hdr->reserved = 0;
+
+    return (void*)user_ptr;
+}
+
+void* arena_alloc_fast(size_t bytes) {
+    if (g_compile_mode == VORTEX_MODE_SAFE) {
+        return arena_alloc_with_header(bytes, 0, 0);
+    }
+
+    size_t aligned = (bytes + (VORTEX_ALIGNMENT - 1)) & ~(size_t)(VORTEX_ALIGNMENT - 1);
+    if (aligned == 0) aligned = VORTEX_ALIGNMENT;
+
+    VortexRegionArena* ar = get_active_arena();
+    return arena_bump_raw(ar, aligned);
 }
 
 void* arena_alloc(size_t bytes) {
@@ -115,22 +176,160 @@ void* arena_alloc(size_t bytes) {
 }
 
 int64_t vortex_alloc_struct(int64_t size) {
-    return (int64_t)arena_alloc_fast((size_t)size);
+    if (g_compile_mode == VORTEX_MODE_RELEASE) {
+        size_t aligned = ((size_t)size + (VORTEX_ALIGNMENT - 1)) & ~(size_t)(VORTEX_ALIGNMENT - 1);
+        if (aligned == 0) aligned = VORTEX_ALIGNMENT;
+        return (int64_t)arena_bump_raw(get_active_arena(), aligned);
+    }
+    return (int64_t)arena_alloc_with_header((size_t)size, 0, 0);
+}
+
+static int64_t vortex_alloc_slice_common(int64_t len, uint32_t elem_size) {
+    if (len < 0 || len > 1000000000LL) {
+        fprintf(stderr, "[VORTEX SAFETY ERROR] Invalid slice length %lld\n", (long long)len);
+        vortex_error("");
+    }
+    size_t bytes = (size_t)len * (size_t)elem_size;
+    void* ptr = arena_alloc_with_header(bytes, (uint64_t)len, elem_size);
+    if (bytes > 0) {
+        memset(ptr, 0, bytes);
+    }
+    return (int64_t)ptr;
+}
+
+int64_t vortex_alloc_slice_i64(int64_t len) {
+    return vortex_alloc_slice_common(len, 8);
+}
+
+int64_t vortex_alloc_slice_f32(int64_t len) {
+    return vortex_alloc_slice_common(len, 4);
+}
+
+int64_t vortex_alloc_slice_i32(int64_t len) {
+    return vortex_alloc_slice_common(len, 4);
+}
+
+static VortexSafeHeader* find_arena_header_internal(const void* ptr,
+                                                    VortexRegionArena** out_arena,
+                                                    VortexPage** out_page,
+                                                    size_t* out_page_idx,
+                                                    size_t* out_offset,
+                                                    bool* out_in_arena) {
+    const uint8_t* p_addr = (const uint8_t*)ptr;
+    if (out_in_arena) *out_in_arena = false;
+    if (!p_addr) return NULL;
+
+    for (int a = 0; a < g_registered_arena_count; a++) {
+        VortexRegionArena* ar = g_registered_arenas[a];
+        if (!ar) continue;
+        VortexPage* page = ar->head;
+        size_t p_idx = 0;
+        while (page) {
+            if (p_addr >= page->base && p_addr < page->base + page->capacity) {
+                size_t off = (size_t)(p_addr - page->base);
+                if (out_arena) *out_arena = ar;
+                if (out_page) *out_page = page;
+                if (out_page_idx) *out_page_idx = p_idx;
+                if (out_offset) *out_offset = off;
+                if (out_in_arena) *out_in_arena = true;
+                if (off >= sizeof(VortexSafeHeader)) {
+                    VortexSafeHeader* hdr = (VortexSafeHeader*)(p_addr - sizeof(VortexSafeHeader));
+                    if (hdr->magic == VORTEX_SAFE_MAGIC) {
+                        return hdr;
+                    }
+                }
+                return NULL;
+            }
+            page = page->next;
+            p_idx++;
+        }
+    }
+    return NULL;
+}
+
+static bool is_arena_pointer_alive(const void* ptr,
+                                   VortexSafeHeader** out_hdr,
+                                   bool* out_in_arena,
+                                   const char** out_reason) {
+    VortexRegionArena* ar = NULL;
+    VortexPage* page = NULL;
+    size_t p_idx = 0;
+    size_t off = 0;
+    bool in_arena = false;
+
+    VortexSafeHeader* hdr = find_arena_header_internal(ptr, &ar, &page, &p_idx, &off, &in_arena);
+    if (out_hdr) *out_hdr = hdr;
+    if (out_in_arena) *out_in_arena = in_arena;
+
+    if (!in_arena) {
+        return true;
+    }
+
+    if (p_idx > ar->current_page_index ||
+        (p_idx == ar->current_page_index && off >= ar->current->cursor)) {
+        if (out_reason) *out_reason = "Use-after-pop: pointer refers to popped arena region beyond active cursor";
+        return false;
+    }
+
+    if (hdr) {
+        if (hdr->owner_arena != ar) {
+            if (out_reason) *out_reason = "Invalid arena ownership metadata";
+            return false;
+        }
+        if (hdr->scope_depth > ar->scope_depth ||
+            hdr->scope_depth >= VORTEX_MAX_SCOPE_DEPTH ||
+            ar->scope_stack[hdr->scope_depth] != hdr->epoch) {
+            if (out_reason) *out_reason = "Use-after-pop: arena scope epoch mismatch (dangling reference)";
+            return false;
+        }
+    }
+    return true;
+}
+
+int64_t vortex_slice_len(int64_t ptr_val) {
+    if (!ptr_val) return 0;
+    VortexSafeHeader* hdr = NULL;
+    bool in_arena = false;
+    const char* reason = NULL;
+    if (!is_arena_pointer_alive((const void*)ptr_val, &hdr, &in_arena, &reason)) {
+        fprintf(stderr, "[VORTEX MEMORY ERROR] %s in slice_len()\n", reason ? reason : "Invalid slice");
+        vortex_error("");
+    }
+    if (hdr) {
+        if (hdr->elem_count > 0) return (int64_t)hdr->elem_count;
+        if (hdr->elem_size > 0) return (int64_t)(hdr->byte_size / hdr->elem_size);
+        return (int64_t)(hdr->byte_size / 8);
+    }
+    return 0;
 }
 
 int64_t vortex_scope_push(void) {
     VortexRegionArena* ar = get_active_arena();
+    uint64_t prev_depth = (uint64_t)ar->scope_depth;
     uint64_t page_idx = (uint64_t)ar->current_page_index;
     uint64_t cursor = (uint64_t)(ar->current ? ar->current->cursor : 0);
-    return (int64_t)((page_idx << 32) | (cursor & 0xFFFFFFFFULL));
+
+    if (ar->scope_depth + 1 < VORTEX_MAX_SCOPE_DEPTH) {
+        ar->scope_depth++;
+        ar->scope_stack[ar->scope_depth] = ar->next_epoch++;
+    }
+
+    return (int64_t)(((prev_depth & 0xFFFULL) << 52) |
+                     ((page_idx & 0xFFFFFULL) << 32) |
+                     (cursor & 0xFFFFFFFFULL));
 }
 
 int64_t vortex_scope_pop(int64_t mark) {
     uint64_t u_mark = (uint64_t)mark;
-    size_t target_page_idx = (size_t)(u_mark >> 32);
+    uint32_t target_depth = (uint32_t)((u_mark >> 52) & 0xFFFULL);
+    size_t target_page_idx = (size_t)((u_mark >> 32) & 0xFFFFFULL);
     size_t target_cursor = (size_t)(u_mark & 0xFFFFFFFFULL);
 
     VortexRegionArena* ar = get_active_arena();
+    if (target_depth < VORTEX_MAX_SCOPE_DEPTH) {
+        ar->scope_depth = target_depth;
+    }
+
     VortexPage* p = ar->head;
     size_t idx = 0;
     while (p && idx < target_page_idx) {
@@ -149,7 +348,157 @@ int64_t vortex_scope_pop(int64_t mark) {
             next_page = next_page->next;
         }
     }
+    tl_rewind_seq++;
     return 0;
+}
+
+/* ========================================================================= */
+/* SAFE RUNTIME VALIDATION HELPERS (--safe MODE & HOISTED CHECKS)            */
+/* ========================================================================= */
+
+void vortex_safe_check_ptr(int64_t ptr_val, int64_t file_ptr, int64_t line) {
+    const char* file = file_ptr ? (const char*)file_ptr : "<unknown>";
+    if (ptr_val == 0) {
+        fprintf(stderr, "[VORTEX SAFETY ERROR] Null pointer dereference at %s:%lld\n",
+                file, (long long)line);
+        vortex_error("");
+    }
+    VortexSafeHeader* hdr = NULL;
+    bool in_arena = false;
+    const char* reason = NULL;
+    if (!is_arena_pointer_alive((const void*)ptr_val, &hdr, &in_arena, &reason)) {
+        fprintf(stderr, "[VORTEX MEMORY ERROR] %s at %s:%lld\n",
+                reason ? reason : "Use-after-pop detected", file, (long long)line);
+        vortex_error("");
+    }
+    if (!in_arena) {
+        uintptr_t addr = (uintptr_t)ptr_val;
+        if (addr < 4096 || (addr & 3) != 0) {
+            fprintf(stderr, "[VORTEX MEMORY ERROR] Invalid or unaligned pointer 0x%llx at %s:%lld\n",
+                    (unsigned long long)addr, file, (long long)line);
+            vortex_error("");
+        }
+    }
+}
+
+void vortex_safe_check_bounds(int64_t ptr_val, int64_t idx, int64_t len_override,
+                              int64_t elem_size, int64_t file_ptr, int64_t line) {
+    const char* file = file_ptr ? (const char*)file_ptr : "<unknown>";
+    if (ptr_val == 0) {
+        fprintf(stderr, "[VORTEX BOUNDS ERROR] Null slice/array pointer at %s:%lld\n",
+                file, (long long)line);
+        vortex_error("");
+    }
+
+    VortexSafeHeader* hdr = NULL;
+    bool in_arena = false;
+    const char* reason = NULL;
+    if (!is_arena_pointer_alive((const void*)ptr_val, &hdr, &in_arena, &reason)) {
+        fprintf(stderr, "[VORTEX MEMORY ERROR] %s at %s:%lld\n",
+                reason ? reason : "Use-after-pop on array/slice", file, (long long)line);
+        vortex_error("");
+    }
+
+    int64_t len = len_override;
+    if (len < 0 && hdr) {
+        if (hdr->elem_count > 0) {
+            len = (int64_t)hdr->elem_count;
+        } else if (hdr->byte_size > 0) {
+            int64_t esz = (elem_size > 0) ? elem_size : 8;
+            len = (int64_t)(hdr->byte_size / (size_t)esz);
+        }
+    }
+
+    if (len >= 0) {
+        if (idx < 0 || idx >= len) {
+            fprintf(stderr, "[VORTEX BOUNDS ERROR] Index %lld out of bounds [0..%lld) at %s:%lld\n",
+                    (long long)idx, (long long)len, file, (long long)line);
+            vortex_error("");
+        }
+    } else if (g_compile_mode == VORTEX_MODE_SAFE) {
+        fprintf(stderr, "[VORTEX BOUNDS ERROR] Untracked raw pointer indexing outside 'unsafe' at %s:%lld\n",
+                file, (long long)line);
+        vortex_error("");
+    }
+}
+
+void vortex_safe_check_range(int64_t ptr_val, int64_t start, int64_t lim,
+                             int64_t len_override, int64_t elem_size,
+                             int64_t file_ptr, int64_t line) {
+    if (start >= lim) {
+        return; /* Loop executes 0 times; no element accessed */
+    }
+    const char* file = file_ptr ? (const char*)file_ptr : "<unknown>";
+    vortex_safe_check_bounds(ptr_val, start, len_override, elem_size, file_ptr, line);
+    vortex_safe_check_bounds(ptr_val, lim - 1, len_override, elem_size, file_ptr, line);
+    (void)file;
+}
+
+void vortex_safe_check_ffi_arg(int64_t val, int64_t type_code, int64_t align_and_flags,
+                               int64_t fn_name_ptr, int64_t arg_idx,
+                               int64_t file_ptr, int64_t line) {
+    const char* file = file_ptr ? (const char*)file_ptr : "<unknown>";
+    const char* fn_name = fn_name_ptr ? (const char*)fn_name_ptr : "<ffi>";
+    bool nullable = ((align_and_flags >> 16) & 1) != 0;
+    int64_t req_align = align_and_flags & 0xFFFF;
+    (void)type_code;
+
+    if (val == 0) {
+        if (!nullable) {
+            fprintf(stderr,
+                    "[VORTEX FFI ERROR] Null pointer passed to argument #%lld of extern fn '%s' at %s:%lld\n",
+                    (long long)(arg_idx + 1), fn_name, file, (long long)line);
+            vortex_error("");
+        }
+        return;
+    }
+
+    if (req_align > 1 && ((uintptr_t)val & (uintptr_t)(req_align - 1)) != 0) {
+        fprintf(stderr,
+                "[VORTEX FFI ERROR] Unaligned pointer 0x%llx (requires %lld-byte alignment) for argument #%lld of extern fn '%s' at %s:%lld\n",
+                (unsigned long long)(uintptr_t)val, (long long)req_align,
+                (long long)(arg_idx + 1), fn_name, file, (long long)line);
+        vortex_error("");
+    }
+
+    VortexSafeHeader* hdr = NULL;
+    bool in_arena = false;
+    const char* reason = NULL;
+    if (!is_arena_pointer_alive((const void*)val, &hdr, &in_arena, &reason)) {
+        fprintf(stderr,
+                "[VORTEX FFI ERROR] %s passed to argument #%lld of extern fn '%s' at %s:%lld\n",
+                reason ? reason : "Dangling arena pointer",
+                (long long)(arg_idx + 1), fn_name, file, (long long)line);
+        vortex_error("");
+    }
+}
+
+/* --- Low-level unsafe pointer access helpers --- */
+int64_t vortex_ptr_read8(int64_t ptr_val) {
+    return (int64_t)(*(const volatile uint8_t*)(uintptr_t)ptr_val);
+}
+
+int64_t vortex_ptr_write8(int64_t ptr_val, int64_t val) {
+    *(volatile uint8_t*)(uintptr_t)ptr_val = (uint8_t)val;
+    return val;
+}
+
+int64_t vortex_ptr_read32(int64_t ptr_val) {
+    return (int64_t)(*(const volatile int32_t*)(uintptr_t)ptr_val);
+}
+
+int64_t vortex_ptr_write32(int64_t ptr_val, int64_t val) {
+    *(volatile int32_t*)(uintptr_t)ptr_val = (int32_t)val;
+    return val;
+}
+
+int64_t vortex_ptr_read64(int64_t ptr_val) {
+    return *(const volatile int64_t*)(uintptr_t)ptr_val;
+}
+
+int64_t vortex_ptr_write64(int64_t ptr_val, int64_t val) {
+    *(volatile int64_t*)(uintptr_t)ptr_val = val;
+    return val;
 }
 
 /* ========================================================================= */
@@ -189,6 +538,31 @@ int64_t vortex_vec_set(int64_t vec_ptr, int64_t idx, int64_t val) {
     if (v && idx >= 0 && idx < v->len) {
         v->data[idx] = val;
     }
+    return val;
+}
+
+int64_t vortex_vec_get_safe(int64_t vec_ptr, int64_t idx, int64_t file_ptr, int64_t line) {
+    const char* file = file_ptr ? (const char*)file_ptr : "<unknown>";
+    vortex_safe_check_ptr(vec_ptr, file_ptr, line);
+    VortexVec* v = (VortexVec*)vec_ptr;
+    if (idx < 0 || idx >= v->len) {
+        fprintf(stderr, "[VORTEX BOUNDS ERROR] vec_get index %lld out of bounds [0..%lld) at %s:%lld\n",
+                (long long)idx, (long long)v->len, file, (long long)line);
+        vortex_error("");
+    }
+    return v->data[idx];
+}
+
+int64_t vortex_vec_set_safe(int64_t vec_ptr, int64_t idx, int64_t val, int64_t file_ptr, int64_t line) {
+    const char* file = file_ptr ? (const char*)file_ptr : "<unknown>";
+    vortex_safe_check_ptr(vec_ptr, file_ptr, line);
+    VortexVec* v = (VortexVec*)vec_ptr;
+    if (idx < 0 || idx >= v->len) {
+        fprintf(stderr, "[VORTEX BOUNDS ERROR] vec_set index %lld out of bounds [0..%lld) at %s:%lld\n",
+                (long long)idx, (long long)v->len, file, (long long)line);
+        vortex_error("");
+    }
+    v->data[idx] = val;
     return val;
 }
 
@@ -338,4 +712,62 @@ int64_t vortex_str_from_f32(int64_t f_bits) {
     char* buf = (char*)arena_alloc(32);
     snprintf(buf, 32, "%.4f", (double)f);
     return (int64_t)buf;
+}
+
+int64_t vortex_str_byte(int64_t s_ptr, int64_t idx) {
+    const char* s = (const char*)s_ptr;
+    if (!s || idx < 0) return -1;
+    if (s != tl_last_str_s || tl_last_str_seq != tl_rewind_seq) {
+        tl_last_str_s = s;
+        tl_last_str_len = strlen(s);
+        tl_last_str_seq = tl_rewind_seq;
+    }
+    if ((size_t)idx >= tl_last_str_len) return -1;
+    return (int64_t)(unsigned char)s[idx];
+}
+
+int64_t vortex_str_from_byte(int64_t ch) {
+    char* buf = (char*)arena_alloc(2);
+    buf[0] = (char)(ch & 0xFF);
+    buf[1] = '\0';
+    return (int64_t)buf;
+}
+
+int64_t vortex_str_eq(int64_t s1_ptr, int64_t s2_ptr) {
+    const char* a = (const char*)s1_ptr;
+    const char* b = (const char*)s2_ptr;
+    if (!a && !b) return 1;
+    if (!a || !b) return 0;
+    return (strcmp(a, b) == 0) ? 1 : 0;
+}
+
+int64_t vortex_str_find(int64_t haystack_ptr, int64_t needle_ptr, int64_t start_idx) {
+    const char* h = (const char*)haystack_ptr;
+    const char* n = (const char*)needle_ptr;
+    if (!h || !n) return -1;
+    if (start_idx < 0) start_idx = 0;
+    size_t hlen = strlen(h);
+    if ((size_t)start_idx > hlen) return -1;
+    if (n[0] == '\0') return start_idx;
+    const char* found = strstr(h + start_idx, n);
+    return found ? (int64_t)(found - h) : -1;
+}
+
+int64_t vortex_str_to_i64(int64_t s_ptr) {
+    const char* s = (const char*)s_ptr;
+    if (!s) return 0;
+    return (int64_t)strtoll(s, NULL, 10);
+}
+
+int64_t vortex_ptr_to_str(int64_t ptr_val) {
+    const char* s = (const char*)ptr_val;
+    if (!s) {
+        char* empty = (char*)arena_alloc(1);
+        empty[0] = '\0';
+        return (int64_t)empty;
+    }
+    size_t len = strlen(s);
+    char* copy = (char*)arena_alloc(len + 1);
+    memcpy(copy, s, len + 1);
+    return (int64_t)copy;
 }

@@ -1,0 +1,2 @@
+let p = 0x1000 as *i64;
+print(p);

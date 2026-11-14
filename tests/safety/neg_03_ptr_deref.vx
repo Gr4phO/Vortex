@@ -1,0 +1,3 @@
+fn deref_outside(p: *i64) -> i64 {
+    return *p;
+}

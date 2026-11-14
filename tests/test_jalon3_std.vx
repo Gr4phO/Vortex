@@ -1,0 +1,138 @@
+// Jalon 3 Modular Stdlib Integration Test
+// Exercises std/json, std/crypto, std/net, std/http, std/db, std/gpu.
+
+import "std/json";
+import "std/crypto";
+import "std/net";
+import "std/http";
+import "std/db";
+import "std/gpu";
+
+let mut passed = 0;
+let mut failed = 0;
+
+// 1. std/json inside arena scope (zero allocation per object across scope_pop)
+let mark = scope_push();
+let doc = json_parse("{\"lang\":\"vortex\",\"ver\":3,\"ok\":true,\"arr\":[10,20,30]}");
+let ser = json_stringify(doc);
+let lang_node = json_get(doc, "lang");
+let arr_node = json_get(doc, "arr");
+let el1 = json_at(arr_node, 1);
+if doc.kind == 6 {
+    if str_eq(lang_node.str_val, "vortex") == 1 {
+        if el1.int_val == 20 {
+            if str_find(ser, "\"ver\":3", 0) >= 0 {
+                passed = passed + 1;
+            } else { failed = failed + 1; print_str("[FAIL] json ser\n"); }
+        } else { failed = failed + 1; print_str("[FAIL] json arr\n"); }
+    } else { failed = failed + 1; print_str("[FAIL] json str\n"); }
+} else { failed = failed + 1; print_str("[FAIL] json kind\n"); }
+scope_pop(mark);
+
+// 2. std/crypto (OS CNG/OpenSSL SHA-256 + CSPRNG + TLS probe)
+let h_abc = crypto_sha256_hex("abc");
+let rnd = crypto_random_hex(16);
+let tls_ok = crypto_tls_available();
+let ch_len = crypto_tls_probe_client_hello("localhost");
+if str_eq(h_abc, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") == 1 {
+    passed = passed + 1;
+} else {
+    failed = failed + 1;
+    print_str("[FAIL] crypto sha256: "); print_str(h_abc); print_str("\n");
+}
+if str_len(rnd) == 32 {
+    passed = passed + 1;
+} else {
+    failed = failed + 1;
+    print_str("[FAIL] crypto random\n");
+}
+if tls_ok == 1 {
+    if ch_len > 0 {
+        passed = passed + 1;
+    } else {
+        failed = failed + 1;
+        print_str("[FAIL] crypto tls probe\n");
+    }
+} else {
+    print_str("[SKIP] tls lib unavailable\n");
+}
+
+// 3. std/net + std/http non-blocking loopback roundtrip
+let ni = net_init();
+let srv = net_tcp_listen(0, 1);
+let port = net_bound_port(srv);
+let cli = net_tcp_connect("127.0.0.1", port, 1);
+let sr_ready = net_poll_read(srv, 1000);
+let acc = net_tcp_accept(srv, 1);
+let cw_ready = net_poll_write(cli, 1000);
+let req_wire = http_format_request("GET", "127.0.0.1", "/api/v3", "");
+let sent_req = net_send(cli, req_wire);
+let req_raw = net_recv_wait(acc, 4096, 1000);
+let parsed_req = http_parse_request(req_raw);
+let resp_wire = http_format_response(200, "OK", "application/json", "{\"status\":\"ok\",\"n\":42}");
+let sent_resp = net_send(acc, resp_wire);
+let resp_raw = net_recv_wait(cli, 4096, 1000);
+let parsed_resp = http_parse_response(resp_raw);
+net_close(acc);
+net_close(cli);
+net_close(srv);
+
+let rjson = json_parse(parsed_resp.body);
+let rn_node = json_get(rjson, "n");
+if ni == 0 {
+    if port > 0 {
+        if str_eq(parsed_req.path, "/api/v3") == 1 {
+            if parsed_resp.status == 200 {
+                if rn_node.int_val == 42 {
+                    passed = passed + 1;
+                } else { failed = failed + 1; print_str("[FAIL] http json n\n"); }
+            } else { failed = failed + 1; print_str("[FAIL] http status\n"); }
+        } else { failed = failed + 1; print_str("[FAIL] http req path\n"); }
+    } else { failed = failed + 1; print_str("[FAIL] net port\n"); }
+} else { failed = failed + 1; print_str("[FAIL] net init\n"); }
+
+// 4. std/db (SQLite native FFI)
+let sq_avail = db_sqlite_available();
+let _pg_avail = db_postgres_available();
+if sq_avail == 1 {
+    let db = db_open_sqlite(":memory:");
+    let rc1 = db_exec(db, "CREATE TABLE items (id INT, name TEXT);");
+    let rc2 = db_exec(db, "INSERT INTO items VALUES (1, 'vortex_db');");
+    let qres = db_query_scalar_str(db, "SELECT name FROM items WHERE id = 1;");
+    let _rc3 = db_close(db);
+    if db.open == 1 {
+        if rc1 == 0 {
+            if rc2 == 0 {
+                if str_eq(qres, "vortex_db") == 1 {
+                    passed = passed + 1;
+                } else { failed = failed + 1; print_str("[FAIL] db query scalar\n"); }
+            } else { failed = failed + 1; print_str("[FAIL] db insert\n"); }
+        } else { failed = failed + 1; print_str("[FAIL] db create\n"); }
+    } else { failed = failed + 1; print_str("[FAIL] db open\n"); }
+} else {
+    print_str("[SKIP] sqlite lib unavailable\n");
+}
+
+// 5. std/gpu (Vulkan/DX12/Metal probe + SIMD SAXPY compute kernel)
+let ginfo = gpu_probe();
+let y = slice_f32(4);
+let x = slice_f32(4);
+x[0] = 2.0; x[1] = 4.0; x[2] = 6.0; x[3] = 8.0;
+y[0] = 1.0; y[1] = 1.0; y[2] = 1.0; y[3] = 1.0;
+let gcnt = gpu_compute_saxpy(y, 3.0, x, 4);
+if str_len(ginfo.backend) > 0 {
+    if gcnt == 4 {
+        if y[2] > 18.9 {
+            if y[2] < 19.1 {
+                passed = passed + 1;
+            } else { failed = failed + 1; print_str("[FAIL] gpu saxpy upper\n"); }
+        } else { failed = failed + 1; print_str("[FAIL] gpu saxpy lower\n"); }
+    } else { failed = failed + 1; print_str("[FAIL] gpu count\n"); }
+} else { failed = failed + 1; print_str("[FAIL] gpu backend empty\n"); }
+
+print_str("STD_CHECKS_PASSED="); print(passed);
+if failed == 0 {
+    if passed >= 5 {
+        print_str("JALON3_STD_ALL_OK\n");
+    }
+}

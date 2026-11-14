@@ -1,0 +1,290 @@
+// Vortex Standard Library: std/crypto
+// Native OS Cryptography & TLS Bindings:
+// - Windows: CNG (bcrypt.dll) + Schannel SSPI TLS (secur32.dll)
+// - Linux/macOS: OpenSSL (libcrypto / libssl)
+
+fn crypto_hex_nibble(n: i64) -> str {
+    if n < 10 { return str_from_byte(48 + n); }
+    return str_from_byte(87 + n); // 'a'..'f'
+}
+
+fn crypto_bytes_to_hex(buf_addr: i64, len: i64) -> str {
+    let mut out = "";
+    let mut i = 0;
+    while i < len {
+        let mut b = 0;
+        unsafe { b = ptr_read8(buf_addr + i); }
+        let hi = (b / 16) % 16;
+        let lo = b % 16;
+        out = str_concat(out, str_concat(crypto_hex_nibble(hi), crypto_hex_nibble(lo)));
+        i = i + 1;
+    }
+    return out;
+}
+
+#[cfg(windows)]
+extern "secur32.dll" fn AcquireCredentialsHandleA(
+    principal: ptr?,
+    pkg: str,
+    cred_use: i64,
+    logon_id: ptr?,
+    auth_data: ptr?,
+    get_key_fn: ptr?,
+    get_key_arg: ptr?,
+    cred_handle: ptr,
+    expiry: ptr?
+) -> i64;
+
+#[cfg(windows)]
+extern "secur32.dll" fn InitializeSecurityContextA(
+    cred: ptr,
+    ctx_in: ptr?,
+    target_name: str,
+    ctx_req: i64,
+    reserved1: i64,
+    data_rep: i64,
+    in_desc: ptr?,
+    reserved2: i64,
+    new_ctx: ptr,
+    out_desc: ptr,
+    out_attr: ptr,
+    expiry: ptr?
+) -> i64;
+
+#[cfg(windows)]
+extern "secur32.dll" fn FreeContextBuffer(buf: ptr) -> i64;
+
+#[cfg(windows)]
+extern "secur32.dll" fn DeleteSecurityContext(ctx: ptr) -> i64;
+
+#[cfg(windows)]
+extern "secur32.dll" fn FreeCredentialsHandle(cred: ptr) -> i64;
+
+#[cfg(windows)]
+extern "bcrypt.dll" fn BCryptOpenAlgorithmProvider(ph_alg: ptr, alg_id: ptr, impl_name: ptr?, flags: i64) -> i32;
+#[cfg(windows)]
+extern "bcrypt.dll" fn BCryptCloseAlgorithmProvider(h_alg: i64, flags: i64) -> i32;
+#[cfg(windows)]
+extern "bcrypt.dll" fn BCryptCreateHash(h_alg: i64, ph_hash: ptr, pb_obj: ptr?, cb_obj: i64, pb_sec: ptr?, cb_sec: i64, flags: i64) -> i32;
+#[cfg(windows)]
+extern "bcrypt.dll" fn BCryptHashData(h_hash: i64, pb_in: str, cb_in: i64, flags: i64) -> i32;
+#[cfg(windows)]
+extern "bcrypt.dll" fn BCryptFinishHash(h_hash: i64, pb_out: ptr, cb_out: i64, flags: i64) -> i32;
+#[cfg(windows)]
+extern "bcrypt.dll" fn BCryptDestroyHash(h_hash: i64) -> i32;
+
+#[cfg(windows)]
+fn crypto_sha256_hex(msg: str) -> str {
+    let mlen = str_len(msg);
+    unsafe {
+        // UTF-16LE "SHA256\0"
+        let alg_w = alloc(16) as i64;
+        ptr_write8(alg_w + 0, 83);  ptr_write8(alg_w + 1, 0);
+        ptr_write8(alg_w + 2, 72);  ptr_write8(alg_w + 3, 0);
+        ptr_write8(alg_w + 4, 65);  ptr_write8(alg_w + 5, 0);
+        ptr_write8(alg_w + 6, 50);  ptr_write8(alg_w + 7, 0);
+        ptr_write8(alg_w + 8, 53);  ptr_write8(alg_w + 9, 0);
+        ptr_write8(alg_w + 10, 54); ptr_write8(alg_w + 11, 0);
+        ptr_write8(alg_w + 12, 0);  ptr_write8(alg_w + 13, 0);
+
+        let ph_alg = alloc(8) as i64;
+        let ph_hash = alloc(8) as i64;
+        let digest = alloc(32) as i64;
+        ptr_write64(ph_alg, 0);
+        ptr_write64(ph_hash, 0);
+
+        if BCryptOpenAlgorithmProvider(ph_alg as ptr, alg_w as ptr, 0 as ptr, 0) != 0 {
+            return "";
+        }
+        let h_alg = ptr_read64(ph_alg);
+        if BCryptCreateHash(h_alg, ph_hash as ptr, 0 as ptr, 0, 0 as ptr, 0, 0) != 0 {
+            BCryptCloseAlgorithmProvider(h_alg, 0);
+            return "";
+        }
+        let h_hash = ptr_read64(ph_hash);
+        if mlen > 0 {
+            BCryptHashData(h_hash, msg, mlen, 0);
+        }
+        let rc = BCryptFinishHash(h_hash, digest as ptr, 32, 0);
+        BCryptDestroyHash(h_hash);
+        BCryptCloseAlgorithmProvider(h_alg, 0);
+        if rc != 0 { return ""; }
+        return crypto_bytes_to_hex(digest, 32);
+    }
+}
+
+#[cfg(unix)]
+fn crypto_find_openssl_libcrypto() -> i64 {
+    unsafe {
+        let mut h = ffi_load("libcrypto.so.3");
+        if h == 0 { h = ffi_load("libcrypto.so"); }
+        if h == 0 { h = ffi_load("libcrypto.dylib"); }
+        return h;
+    }
+}
+
+#[cfg(unix)]
+fn crypto_find_openssl_libssl() -> i64 {
+    unsafe {
+        let mut h = ffi_load("libssl.so.3");
+        if h == 0 { h = ffi_load("libssl.so"); }
+        if h == 0 { h = ffi_load("libssl.dylib"); }
+        return h;
+    }
+}
+
+#[cfg(unix)]
+fn crypto_sha256_hex(msg: str) -> str {
+    let mlen = str_len(msg);
+    unsafe {
+        let h = crypto_find_openssl_libcrypto();
+        if h == 0 { return ""; }
+        let p_sha = ffi_symbol(h, "SHA256");
+        if p_sha == 0 { return ""; }
+        let digest = alloc(32) as i64;
+        ffi_call3(p_sha, msg as i64, mlen, digest);
+        return crypto_bytes_to_hex(digest, 32);
+    }
+}
+
+#[cfg(windows)]
+fn crypto_random_hex(byte_count: i64) -> str {
+    if byte_count <= 0 { return ""; }
+    unsafe {
+        let bcr = ffi_load("bcrypt.dll");
+        if bcr == 0 { return ""; }
+        let p_rng = ffi_symbol(bcr, "BCryptGenRandom");
+        if p_rng == 0 { return ""; }
+        let buf = alloc(byte_count) as i64;
+        // BCRYPT_USE_SYSTEM_PREFERRED_RNG = 2
+        if ffi_call4(p_rng, 0, buf, byte_count, 2) != 0 {
+            return "";
+        }
+        return crypto_bytes_to_hex(buf, byte_count);
+    }
+}
+
+#[cfg(unix)]
+fn crypto_random_hex(byte_count: i64) -> str {
+    if byte_count <= 0 { return ""; }
+    unsafe {
+        let h = crypto_find_openssl_libcrypto();
+        if h == 0 { return ""; }
+        let p_rng = ffi_symbol(h, "RAND_bytes");
+        if p_rng == 0 { return ""; }
+        let buf = alloc(byte_count) as i64;
+        ffi_call2(p_rng, buf, byte_count);
+        return crypto_bytes_to_hex(buf, byte_count);
+    }
+}
+
+#[cfg(windows)]
+fn crypto_tls_available() -> i64 {
+    unsafe {
+        let s = ffi_load("secur32.dll");
+        if s == 0 { return 0; }
+        let p = ffi_symbol(s, "InitializeSecurityContextA");
+        if p == 0 { return 0; }
+        return 1;
+    }
+}
+
+#[cfg(unix)]
+fn crypto_tls_available() -> i64 {
+    unsafe {
+        let s = crypto_find_openssl_libssl();
+        if s == 0 { return 0; }
+        let p = ffi_symbol(s, "SSL_CTX_new");
+        if p == 0 { return 0; }
+        return 1;
+    }
+}
+
+// Generates an initial TLS ClientHello token length via OS Schannel (Windows) or checks OpenSSL ctx (Unix)
+#[cfg(windows)]
+fn crypto_tls_probe_client_hello(server_name: str) -> i64 {
+    unsafe {
+        let scred = alloc(96) as i64;
+        let mut z = 0;
+        while z < 96 {
+            ptr_write8(scred + z, 0);
+            z = z + 1;
+        }
+        ptr_write32(scred + 0, 4); // SCHANNEL_CRED_VERSION = 4
+
+        let cred_handle = alloc(16) as ptr;
+        let expiry = alloc(16) as ptr;
+        let st = AcquireCredentialsHandleA(
+            0 as ptr,
+            "Microsoft Unified Security Protocol Provider",
+            2, // SECPKG_CRED_OUTBOUND
+            0 as ptr,
+            scred as ptr,
+            0 as ptr,
+            0 as ptr,
+            cred_handle,
+            expiry
+        );
+        if st != 0 { return -1; }
+
+        let ctxt = alloc(16) as ptr;
+        let out_buf = alloc(16) as i64;
+        ptr_write32(out_buf + 0, 0);
+        ptr_write32(out_buf + 4, 2); // SECBUFFER_TOKEN = 2
+        ptr_write64(out_buf + 8, 0);
+
+        let out_desc = alloc(16) as i64;
+        ptr_write32(out_desc + 0, 0); // SECBUFFER_VERSION
+        ptr_write32(out_desc + 4, 1); // cBuffers
+        ptr_write64(out_desc + 8, out_buf);
+
+        let out_attr = alloc(8) as ptr;
+        // ISC_REQ_SEQUENCE_DETECT | REPLAY_DETECT | CONFIDENTIALITY | ALLOCATE_MEMORY | STREAM = 0x0000811C
+        let req_flags = 0x0000811C;
+        let hst = InitializeSecurityContextA(
+            cred_handle,
+            0 as ptr,
+            server_name,
+            req_flags,
+            0,
+            0x10,
+            0 as ptr,
+            0,
+            ctxt,
+            out_desc as ptr,
+            out_attr,
+            expiry
+        );
+
+        let tok_len = ptr_read32(out_buf + 0);
+        let tok_ptr = ptr_read64(out_buf + 8);
+        if tok_ptr != 0 {
+            FreeContextBuffer(tok_ptr as ptr);
+        }
+        DeleteSecurityContext(ctxt);
+        FreeCredentialsHandle(cred_handle);
+        if hst >= 0 {
+            return tok_len;
+        }
+        return tok_len;
+    }
+}
+
+#[cfg(unix)]
+fn crypto_tls_probe_client_hello(server_name: str) -> i64 {
+    let _srv = server_name;
+    unsafe {
+        let libssl = crypto_find_openssl_libssl();
+        if libssl == 0 { return -1; }
+        let p_meth = ffi_symbol(libssl, "TLS_client_method");
+        let p_cnew = ffi_symbol(libssl, "SSL_CTX_new");
+        let p_cfree = ffi_symbol(libssl, "SSL_CTX_free");
+        if p_meth == 0 { return -1; }
+        if p_cnew == 0 { return -1; }
+        let meth = ffi_call0(p_meth);
+        let ctx = ffi_call1(p_cnew, meth);
+        if ctx == 0 { return -1; }
+        if p_cfree != 0 { ffi_call1(p_cfree, ctx); }
+        return 1;
+    }
+}

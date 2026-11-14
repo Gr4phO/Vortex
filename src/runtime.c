@@ -3,13 +3,172 @@
  */
 
 #include "vortex.h"
+#include <stdarg.h>
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <sys/wait.h>
+#if defined(__aarch64__) || defined(__arm64__)
+extern void pthread_jit_write_protect_np(int enabled);
+#endif
+#endif
+
+#ifndef _WIN32
+#ifndef MAP_ANON
+#define MAP_ANON MAP_ANONYMOUS
+#endif
+#endif
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+#define VORTEX_HOST_ARCH VORTEX_ARCH_ARM64
+#if defined(__APPLE__)
+#define VORTEX_HOST_ABI VORTEX_ABI_DARWIN64
+#else
+#define VORTEX_HOST_ABI VORTEX_ABI_AAPCS64
+#endif
+#else
+#define VORTEX_HOST_ARCH VORTEX_ARCH_X86_64
+#if defined(_WIN32)
+#define VORTEX_HOST_ABI VORTEX_ABI_WIN64
+#else
+#define VORTEX_HOST_ABI VORTEX_ABI_SYSV64
+#endif
+#endif
 
 SymbolTable g_last_symtab;
 bool g_has_last_symtab = false;
 
 jmp_buf g_error_jmp;
 bool g_in_repl = false;
+VortexBuildMode g_compile_mode = VORTEX_MODE_SAFE;
+VortexTargetArch g_target_arch = VORTEX_HOST_ARCH;
+VortexTargetABI  g_target_abi  = VORTEX_HOST_ABI;
+const char* g_current_filename = "<input>";
+const char* g_dump_jit_path = NULL;
+bool g_headless_mode = false;
 static bool g_is_packaged_app = false;
+
+bool vortex_is_cross_target(void) {
+    if (g_target_arch != VORTEX_HOST_ARCH) return true;
+    if (g_target_arch == VORTEX_ARCH_X86_64 && g_target_abi != VORTEX_HOST_ABI) return true;
+    if (g_target_arch == VORTEX_ARCH_ARM64 && g_target_abi != VORTEX_HOST_ABI) return true;
+    return false;
+}
+
+#define MAX_INTERN_CSTRS 1024
+static const char* g_intern_cstrs[MAX_INTERN_CSTRS];
+static int g_intern_cstr_count = 0;
+
+const char* vortex_intern_cstr(const char* s) {
+    if (!s) return "";
+    for (int i = 0; i < g_intern_cstr_count; i++) {
+        if (strcmp(g_intern_cstrs[i], s) == 0) return g_intern_cstrs[i];
+    }
+    size_t len = strlen(s);
+    char* copy = (char*)malloc(len + 1);
+    if (!copy) return s;
+    memcpy(copy, s, len + 1);
+    if (g_intern_cstr_count < MAX_INTERN_CSTRS) {
+        g_intern_cstrs[g_intern_cstr_count++] = copy;
+    }
+    return copy;
+}
+
+void jit_write_protect(void* ptr, size_t size, bool writable) {
+    if (!ptr || size == 0 || g_target_arch != VORTEX_HOST_ARCH) {
+        (void)writable;
+        return;
+    }
+#ifdef _WIN32
+    if (!writable) {
+        FlushInstructionCache(GetCurrentProcess(), ptr, size);
+    }
+#else
+    if (!writable) {
+#ifdef __APPLE__
+        sys_icache_invalidate(ptr, size);
+#else
+        __builtin___clear_cache((char*)ptr, (char*)ptr + size);
+#endif
+    }
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+    pthread_jit_write_protect_np(writable ? 0 : 1);
+#else
+    long page_sz = sysconf(_SC_PAGESIZE);
+    size_t pg = (page_sz > 0) ? (size_t)page_sz : 4096;
+    uintptr_t start = (uintptr_t)ptr & ~(uintptr_t)(pg - 1);
+    uintptr_t end = ((uintptr_t)ptr + size + pg - 1) & ~(uintptr_t)(pg - 1);
+    int prot = writable ? (PROT_READ | PROT_WRITE) : (PROT_READ | PROT_EXEC);
+    mprotect((void*)start, (size_t)(end - start), prot);
+#endif
+#endif
+}
+
+void* alloc_exec_page(size_t size) {
+    if (g_target_arch != VORTEX_HOST_ARCH) {
+        return calloc(1, size);
+    }
+#ifdef _WIN32
+    return VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+#elif defined(__APPLE__)
+    void* mem = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+    if (mem == MAP_FAILED) {
+        mem = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (mem == MAP_FAILED) return NULL;
+    }
+#if defined(__aarch64__) || defined(__arm64__)
+    pthread_jit_write_protect_np(0);
+#endif
+    return mem;
+#else
+    void* mem = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return (mem == MAP_FAILED) ? NULL : mem;
+#endif
+}
+
+void free_exec_page(void* ptr, size_t size) {
+    if (!ptr) return;
+    if (g_target_arch != VORTEX_HOST_ARCH) {
+        free(ptr);
+        return;
+    }
+#ifdef _WIN32
+    (void)size;
+    VirtualFree(ptr, 0, MEM_RELEASE);
+#else
+    munmap(ptr, size);
+#endif
+}
+
+void vortex_get_self_path(char* out, size_t cap, const char* argv0) {
+    if (!out || cap == 0) return;
+    out[0] = '\0';
+#ifdef _WIN32
+    DWORD len = GetModuleFileNameA(NULL, out, (DWORD)cap);
+    if (len == 0 || len >= cap) {
+        if (argv0) {
+            strncpy(out, argv0, cap - 1);
+            out[cap - 1] = '\0';
+        }
+    }
+#elif defined(__APPLE__)
+    uint32_t sz = (uint32_t)cap;
+    if (_NSGetExecutablePath(out, &sz) != 0) {
+        if (argv0) {
+            strncpy(out, argv0, cap - 1);
+            out[cap - 1] = '\0';
+        }
+    }
+#else
+    ssize_t rlen = readlink("/proc/self/exe", out, cap - 1);
+    if (rlen > 0) {
+        out[rlen] = '\0';
+    } else if (argv0) {
+        strncpy(out, argv0, cap - 1);
+        out[cap - 1] = '\0';
+    }
+#endif
+}
 
 static void vortex_wait_on_standalone_error(const char* msg) {
 #ifdef _WIN32
@@ -35,12 +194,45 @@ static void vortex_wait_on_standalone_error(const char* msg) {
 #endif
 }
 
+static char g_lsp_diag_buf[4096];
+static size_t g_lsp_diag_len = 0;
+
+void vortex_diag_emit(FILE* stream, const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    if (stream == stderr && g_lsp_capture_errors) {
+        if (g_lsp_diag_len + 1 < sizeof(g_lsp_diag_buf)) {
+            int n = vsnprintf(g_lsp_diag_buf + g_lsp_diag_len,
+                              sizeof(g_lsp_diag_buf) - g_lsp_diag_len, fmt, ap);
+            if (n > 0) {
+                size_t add = (size_t)n;
+                if (g_lsp_diag_len + add >= sizeof(g_lsp_diag_buf)) {
+                    g_lsp_diag_len = sizeof(g_lsp_diag_buf) - 1;
+                } else {
+                    g_lsp_diag_len += add;
+                }
+            }
+        }
+        va_end(ap);
+        return;
+    }
+    vfprintf(stream, fmt, ap);
+    va_end(ap);
+}
+
 void vortex_error(const char* msg) {
     if (msg && msg[0]) {
-        fprintf(stderr, "%s\n", msg);
+        if (g_lsp_capture_errors) {
+            vortex_diag_emit(stderr, "%s\n", msg);
+        } else {
+            fprintf(stderr, "%s\n", msg);
+        }
+    }
+    if (!g_in_repl && !g_lsp_capture_errors) {
+        vortex_print_stacktrace(NULL);
     }
     fflush(stderr);
-    if (g_in_repl) {
+    if (g_in_repl || g_lsp_capture_errors) {
         longjmp(g_error_jmp, 1);
     } else {
         vortex_wait_on_standalone_error(msg);
@@ -126,6 +318,15 @@ static bool g_win_class_registered = false;
 
 int64_t vortex_gui_window(int64_t title_ptr, int64_t width, int64_t height) {
     const char* title = (const char*)title_ptr;
+    if (g_headless_mode || getenv("VORTEX_HEADLESS") != NULL) {
+        VortexWindow* w = (VortexWindow*)calloc(1, sizeof(VortexWindow));
+        if (!w) return 0;
+        w->width = (int)width;
+        w->height = (int)height;
+        w->is_open = false;
+        if (title) strncpy(w->title, title, sizeof(w->title) - 1);
+        return (int64_t)(uintptr_t)w;
+    }
     HINSTANCE hInst = GetModuleHandle(NULL);
     if (!g_win_class_registered) {
         WNDCLASSA wc = {0};
@@ -267,6 +468,15 @@ typedef struct {
 
 int64_t vortex_gui_window(int64_t title_ptr, int64_t width, int64_t height) {
     const char* title = (const char*)title_ptr;
+    if (g_headless_mode || getenv("VORTEX_HEADLESS") != NULL) {
+        VortexWindow* w = (VortexWindow*)calloc(1, sizeof(VortexWindow));
+        if (!w) return 0;
+        w->width = (int)width;
+        w->height = (int)height;
+        w->is_open = false;
+        if (title) strncpy(w->title, title, sizeof(w->title) - 1);
+        return (int64_t)(uintptr_t)w;
+    }
     Display* dpy = XOpenDisplay(NULL);
     if (!dpy) {
         fprintf(stderr, "[VORTEX GUI ERROR] Cannot open X11 display (check DISPLAY environment variable)\n");
@@ -396,7 +606,16 @@ typedef struct {
     char title[128];
 } VortexWindow;
 
-int64_t vortex_gui_window(int64_t t, int64_t w, int64_t h) { (void)t;(void)w;(void)h; return 1; }
+int64_t vortex_gui_window(int64_t t, int64_t w_px, int64_t h_px) {
+    const char* title = (const char*)t;
+    VortexWindow* w = (VortexWindow*)calloc(1, sizeof(VortexWindow));
+    if (!w) return 0;
+    w->width = (int)w_px;
+    w->height = (int)h_px;
+    w->is_open = false;
+    if (title) strncpy(w->title, title, sizeof(w->title) - 1);
+    return (int64_t)(uintptr_t)w;
+}
 int64_t vortex_gui_set_pos(int64_t win, int64_t x, int64_t y) { (void)win;(void)x;(void)y; return 0; }
 int64_t vortex_gui_is_open(int64_t win) { (void)win; return 0; }
 int64_t vortex_gui_draw_text(int64_t win, int64_t t, int64_t x, int64_t y, int64_t c) { (void)win;(void)t;(void)x;(void)y;(void)c; return 0; }
@@ -573,9 +792,20 @@ int64_t helper_time_us(void) {
     QueryPerformanceCounter(&counter);
     return (int64_t)((counter.QuadPart * 1000000LL) / freq.QuadPart);
 #else
+#if defined(__APPLE__) && !defined(CLOCK_MONOTONIC)
+    static mach_timebase_info_data_t tb_info;
+    static int tb_init = 0;
+    if (!tb_init) {
+        mach_timebase_info(&tb_info);
+        tb_init = 1;
+    }
+    uint64_t ns = (mach_absolute_time() * tb_info.numer) / tb_info.denom;
+    return (int64_t)(ns / 1000ULL);
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000000LL + (int64_t)(ts.tv_nsec / 1000LL);
+#endif
 #endif
 }
 
@@ -649,6 +879,10 @@ void vortex_thread_pool_init(void) {
         w->arena.current = w->arena.head;
         w->arena.current_page_index = 0;
         w->arena.total_pages = 1;
+        w->arena.scope_depth = 0;
+        w->arena.scope_stack[0] = 1;
+        w->arena.next_epoch = 2;
+        arena_register(&w->arena);
 #ifdef _WIN32
         w->start_event = CreateEventA(NULL, FALSE, FALSE, NULL);
         w->done_event = CreateEventA(NULL, FALSE, FALSE, NULL);
@@ -740,8 +974,24 @@ static BuiltinFunc g_builtins[] = {
     {"str_sub",        (void*)vortex_str_sub,        3},
     {"str_from_i64",   (void*)vortex_str_from_i64,   1},
     {"str_from_f32",   (void*)vortex_str_from_f32,   1},
+    {"str_byte",       (void*)vortex_str_byte,       2},
+    {"str_from_byte",  (void*)vortex_str_from_byte,  1},
+    {"str_eq",         (void*)vortex_str_eq,         2},
+    {"str_find",       (void*)vortex_str_find,       3},
+    {"str_to_i64",     (void*)vortex_str_to_i64,     1},
+    {"ptr_to_str",     (void*)vortex_ptr_to_str,     1},
     {"scope_push",     (void*)vortex_scope_push,     0},
     {"scope_pop",      (void*)vortex_scope_pop,      1},
+    {"slice_i64",      (void*)vortex_alloc_slice_i64,1},
+    {"slice_f32",      (void*)vortex_alloc_slice_f32,1},
+    {"slice_i32",      (void*)vortex_alloc_slice_i32,1},
+    {"slice_len",      (void*)vortex_slice_len,      1},
+    {"ptr_read8",      (void*)vortex_ptr_read8,      1},
+    {"ptr_write8",     (void*)vortex_ptr_write8,     2},
+    {"ptr_read32",     (void*)vortex_ptr_read32,     1},
+    {"ptr_write32",    (void*)vortex_ptr_write32,    2},
+    {"ptr_read64",     (void*)vortex_ptr_read64,     1},
+    {"ptr_write64",    (void*)vortex_ptr_write64,    2},
     {"ffi_load",       (void*)vortex_ffi_load,       1},
     {"ffi_symbol",     (void*)vortex_ffi_symbol,     2},
     {"ffi_call0",      (void*)vortex_ffi_call0,      1},
@@ -749,6 +999,8 @@ static BuiltinFunc g_builtins[] = {
     {"ffi_call2",      (void*)vortex_ffi_call2,      3},
     {"ffi_call3",      (void*)vortex_ffi_call3,      4},
     {"ffi_call4",      (void*)vortex_ffi_call4,      5},
+    {"ffi_call5",      (void*)vortex_ffi_call5,      6},
+    {"ffi_call6",      (void*)vortex_ffi_call6,      7},
     {"gui_window",     (void*)vortex_gui_window,     3},
     {"gui_is_open",    (void*)vortex_gui_is_open,    1},
     {"gui_rgb",        (void*)vortex_gui_rgb,        3},
@@ -781,9 +1033,14 @@ BuiltinFunc* builtin_find(const char* name) {
     return NULL;
 }
 
-/* --- Source / File JIT Execution --- */
-int execute_vortex_source(const char* source) {
+/* --- Source / File JIT Compilation & Execution --- */
+static bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffer* out_jit) {
+    if (!g_current_filename || !g_current_filename[0]) {
+        g_current_filename = "<input>";
+    }
     arena_init();
+    debug_info_reset();
+    lexer_reset_imports();
     if (!g_in_repl) {
         g_struct_type_count = 0;
     }
@@ -798,21 +1055,18 @@ int execute_vortex_source(const char* source) {
     SymbolTable symtab;
     memset(&symtab, 0, sizeof(symtab));
 
-    void* exec_mem = alloc_exec_page(MAX_JIT_CODE_SIZE);
-    if (!exec_mem) {
-        fprintf(stderr, "[VORTEX PANIC] Failed to allocate executable page\n");
-        return 1;
-    }
-
     JITBuffer jit;
     jit.code = (uint8_t*)exec_mem;
     jit.size = 0;
     jit.capacity = MAX_JIT_CODE_SIZE;
 
+    jit_write_protect(exec_mem, MAX_JIT_CODE_SIZE, true);
+
     IRBuffer main_ir;
     ir_init(&main_ir);
 
     Compiler comp;
+    memset(&comp, 0, sizeof(comp));
     comp.lex = &lexer;
     comp.st = &symtab;
     comp.j = &jit;
@@ -826,34 +1080,193 @@ int execute_vortex_source(const char* source) {
     g_last_symtab = symtab;
     g_has_last_symtab = true;
 
-    vortex_thread_pool_init();
+    const VortexJITBackend* bk = vortex_get_backend();
+
+    if (!vortex_is_cross_target()) {
+        vortex_thread_pool_init();
+    }
+    ir_region_verify(&main_ir);
+    ir_optimize_bounds_and_licm(&main_ir);
     ir_loop_vectorize(&main_ir);
     ir_liveness_analysis(&main_ir);
     ir_linear_scan_allocate(&main_ir);
 
-    int main_frame_size = compute_frame_size(main_ir.total_spill_bytes);
-    emit_prologue(&jit, main_frame_size);
-    ir_codegen_x86_64(&main_ir, &jit);
-    emit_epilogue(&jit, main_frame_size);
+    int main_frame_size = bk->compute_frame_size(main_ir.total_spill_bytes);
+    size_t main_start_off = jit.size;
+    debug_info_set_current_func("__main__");
+    bk->emit_prologue(&jit, main_frame_size);
+    bk->ir_codegen(&main_ir, &jit);
+    bk->emit_epilogue(&jit, main_frame_size);
+    debug_info_record_func("__main__", main_start_off, jit.size, main_frame_size, true, g_current_filename, 1);
 
-    // Patch forward user function calls across the JIT code
+    /* Patch forward user function calls across the JIT code */
     for (int r = 0; r < g_user_func_reloc_count; r++) {
         UserFunc* uf = user_func_find(g_user_func_relocs[r].name);
         if (!uf) {
             fprintf(stderr, "[VORTEX ERROR] Unresolved user function '%s'\n", g_user_func_relocs[r].name);
             vortex_error("");
         }
-        int32_t rel = (int32_t)(uf->code_offset - (g_user_func_relocs[r].patch_pos + 4));
-        memcpy(&jit.code[g_user_func_relocs[r].patch_pos], &rel, 4);
+        if (uf->is_unsafe && !g_user_func_relocs[r].called_in_unsafe) {
+            fprintf(stderr,
+                    "[VORTEX SAFETY ERROR] Calling unsafe fn '%s' requires an unsafe block or unsafe fn at %s:%d\n",
+                    uf->name,
+                    g_user_func_relocs[r].call_file ? g_user_func_relocs[r].call_file : g_current_filename,
+                    g_user_func_relocs[r].call_line);
+            vortex_error("");
+        }
+        bk->patch_call_rel(&jit, g_user_func_relocs[r].patch_pos, uf->code_offset);
     }
 
     ir_free(&main_ir);
+    *out_jit = jit;
+    return true;
+}
+
+bool vortex_frontend_check(const char* source, const char* file_path, char* diag_out, size_t diag_cap) {
+    if (diag_out && diag_cap > 0) diag_out[0] = '\0';
+    bool prev_capture = g_lsp_capture_errors;
+    const char* prev_file = g_current_filename;
+    jmp_buf saved_jmp;
+    memcpy(&saved_jmp, &g_error_jmp, sizeof(saved_jmp));
+
+    g_lsp_capture_errors = true;
+    g_lsp_diag_len = 0;
+    g_lsp_diag_buf[0] = '\0';
+    g_current_filename = (file_path && file_path[0]) ? file_path : "<lsp>";
+
+    bool ok = false;
+    if (setjmp(g_error_jmp) == 0) {
+        arena_init();
+        debug_info_reset();
+        lexer_reset_imports();
+        g_struct_type_count = 0;
+        g_user_func_count = 0;
+        g_user_func_reloc_count = 0;
+        g_ffi_func_count = 0;
+        g_literal_string_count = 0;
+
+        Lexer lexer;
+        lexer_init(&lexer, source ? source : "");
+
+        SymbolTable symtab;
+        memset(&symtab, 0, sizeof(symtab));
+
+        uint8_t dummy_code[64];
+        JITBuffer dummy_jit;
+        dummy_jit.code = dummy_code;
+        dummy_jit.size = 0;
+        dummy_jit.capacity = sizeof(dummy_code);
+
+        IRBuffer main_ir;
+        ir_init(&main_ir);
+
+        Compiler comp;
+        memset(&comp, 0, sizeof(comp));
+        comp.lex = &lexer;
+        comp.st = &symtab;
+        comp.j = &dummy_jit;
+        comp.ir = &main_ir;
+        comp.last_struct_id = -1;
+
+        while (comp.lex->cur.type != TOK_EOF) {
+            parse_statement(&comp);
+        }
+
+        ir_region_verify(&main_ir);
+
+        for (int r = 0; r < g_user_func_reloc_count; r++) {
+            UserFunc* uf = user_func_find(g_user_func_relocs[r].name);
+            if (!uf) {
+                vortex_diag_emit(stderr, "[VORTEX ERROR] Unresolved user function '%s' at %s:%d\n",
+                                 g_user_func_relocs[r].name,
+                                 g_user_func_relocs[r].call_file ? g_user_func_relocs[r].call_file : g_current_filename,
+                                 g_user_func_relocs[r].call_line);
+                vortex_error("");
+            }
+            if (uf->is_unsafe && !g_user_func_relocs[r].called_in_unsafe) {
+                vortex_diag_emit(stderr,
+                                 "[VORTEX SAFETY ERROR] Calling unsafe fn '%s' requires an unsafe block or unsafe fn at %s:%d\n",
+                                 uf->name,
+                                 g_user_func_relocs[r].call_file ? g_user_func_relocs[r].call_file : g_current_filename,
+                                 g_user_func_relocs[r].call_line);
+                vortex_error("");
+            }
+        }
+
+        ir_free(&main_ir);
+        ok = true;
+    } else {
+        ir_free_all_active();
+        if (diag_out && diag_cap > 0) {
+            strncpy(diag_out, g_lsp_diag_buf, diag_cap - 1);
+            diag_out[diag_cap - 1] = '\0';
+        }
+        ok = false;
+    }
+
+    memcpy(&g_error_jmp, &saved_jmp, sizeof(saved_jmp));
+    g_current_filename = prev_file;
+    g_lsp_capture_errors = prev_capture;
+    return ok;
+}
+
+int execute_vortex_source(const char* source) {
+    void* exec_mem = alloc_exec_page(MAX_JIT_CODE_SIZE);
+    if (!exec_mem) {
+        fprintf(stderr, "[VORTEX PANIC] Failed to allocate executable page\n");
+        return 1;
+    }
+
+    JITBuffer jit;
+    if (!compile_vortex_source_internal(source, exec_mem, &jit)) {
+        free_exec_page(exec_mem, MAX_JIT_CODE_SIZE);
+        return 1;
+    }
+
+    const VortexTargetDesc* td = vortex_get_target_desc();
+    const VortexJITBackend* bk = vortex_get_backend();
+
+    if (g_dump_jit_path && g_dump_jit_path[0] != '\0') {
+        FILE* df = fopen(g_dump_jit_path, "wb");
+        if (!df) {
+            free_exec_page(exec_mem, MAX_JIT_CODE_SIZE);
+            fprintf(stderr, "[VORTEX ERROR] Failed to open --dump-jit output '%s'\n", g_dump_jit_path);
+            return 1;
+        }
+        if (jit.size > 0) fwrite(jit.code, 1, jit.size, df);
+        fclose(df);
+        printf("[VORTEX JIT] Dumped %zu bytes (%s, %s, SIMD %u-bit) to %s\n",
+               jit.size, td->name, bk->backend_name, td->simd_width_bits, g_dump_jit_path);
+    }
+
+    debug_info_set_jit_image(exec_mem, jit.size, &jit);
+
+    if (g_dump_debug_path && g_dump_debug_path[0] != '\0') {
+        if (debug_write_dwarf_elf(g_dump_debug_path)) {
+            printf("[VORTEX DEBUG] Wrote DWARF v4 ELF debug info (%s) to %s\n", td->name, g_dump_debug_path);
+        } else {
+            fprintf(stderr, "[VORTEX DEBUG] Warning: failed to write DWARF output '%s'\n", g_dump_debug_path);
+        }
+    }
+
+    if (vortex_is_cross_target()) {
+        printf("[VORTEX CROSS] Compiled %zu bytes for target '%s' (%s, %u-bit SIMD) - skipping host execution.\n",
+               jit.size, td->name, bk->backend_name, td->simd_width_bits);
+        debug_info_unregister_jit_image();
+        free_exec_page(exec_mem, MAX_JIT_CODE_SIZE);
+        return 0;
+    }
+
+    jit_write_protect(exec_mem, jit.size, false);
 
     typedef void (*vortex_entry_fn)(void);
     vortex_entry_fn entry = (vortex_entry_fn)exec_mem;
 
+    vortex_crash_guard_enter();
     entry();
+    vortex_crash_guard_leave();
 
+    debug_info_unregister_jit_image();
     free_exec_page(exec_mem, MAX_JIT_CODE_SIZE);
     return 0;
 }
@@ -878,7 +1291,10 @@ int execute_vortex_file(const char* filename) {
     buffer[read_bytes] = '\0';
     fclose(f);
 
+    const char* prev_file = g_current_filename;
+    g_current_filename = filename ? filename : "<file>";
     int res = execute_vortex_source(buffer);
+    g_current_filename = prev_file;
     free(buffer);
     return res;
 }
@@ -888,19 +1304,7 @@ int execute_vortex_file(const char* filename) {
 bool check_and_run_embedded_payload(int argc, char** argv) {
     (void)argc;
     char self_path[1024] = {0};
-#ifdef _WIN32
-    DWORD len = GetModuleFileNameA(NULL, self_path, sizeof(self_path));
-    if (len == 0 || len >= sizeof(self_path)) {
-        if (argv && argv[0]) strncpy(self_path, argv[0], sizeof(self_path) - 1);
-    }
-#else
-    ssize_t rlen = readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
-    if (rlen > 0) {
-        self_path[rlen] = '\0';
-    } else if (argv && argv[0]) {
-        strncpy(self_path, argv[0], sizeof(self_path) - 1);
-    }
-#endif
+    vortex_get_self_path(self_path, sizeof(self_path), (argc > 0 && argv) ? argv[0] : NULL);
 
     if (self_path[0] == '\0') return false;
 
@@ -991,6 +1395,8 @@ bool check_and_run_embedded_payload(int argc, char** argv) {
         vortex_error("");
     }
 
+    g_compile_mode = (hdr.flags & VORTEX_PACK_FLAG_RELEASE) ? VORTEX_MODE_RELEASE : VORTEX_MODE_SAFE;
+    g_current_filename = "<packaged>";
     int res = execute_vortex_source(src_buf);
     free(src_buf);
     if (res != 0) {
@@ -1001,27 +1407,410 @@ bool check_and_run_embedded_payload(int argc, char** argv) {
     return true;
 }
 
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  e_ident[16];
+    uint16_t e_type;
+    uint16_t e_machine;
+    uint32_t e_version;
+    uint64_t e_entry;
+    uint64_t e_phoff;
+    uint64_t e_shoff;
+    uint32_t e_flags;
+    uint16_t e_ehsize;
+    uint16_t e_phentsize;
+    uint16_t e_phnum;
+    uint16_t e_shentsize;
+    uint16_t e_shnum;
+    uint16_t e_shstrndx;
+} VxElf64Ehdr;
+
+typedef struct {
+    uint32_t p_type;
+    uint32_t p_flags;
+    uint64_t p_offset;
+    uint64_t p_vaddr;
+    uint64_t p_paddr;
+    uint64_t p_filesz;
+    uint64_t p_memsz;
+    uint64_t p_align;
+} VxElf64Phdr;
+
+typedef struct {
+    uint32_t sh_name;
+    uint32_t sh_type;
+    uint64_t sh_flags;
+    uint64_t sh_addr;
+    uint64_t sh_offset;
+    uint64_t sh_size;
+    uint32_t sh_link;
+    uint32_t sh_info;
+    uint64_t sh_addralign;
+    uint64_t sh_entsize;
+} VxElf64Shdr;
+
+typedef struct {
+    uint32_t magic;
+    int32_t  cputype;
+    int32_t  cpusubtype;
+    uint32_t filetype;
+    uint32_t ncmds;
+    uint32_t sizeofcmds;
+    uint32_t flags;
+    uint32_t reserved;
+} VxMachHeader64;
+
+typedef struct {
+    uint32_t cmd;
+    uint32_t cmdsize;
+    char     segname[16];
+    uint64_t vmaddr;
+    uint64_t vmsize;
+    uint64_t fileoff;
+    uint64_t filesize;
+    int32_t  maxprot;
+    int32_t  initprot;
+    uint32_t nsects;
+    uint32_t flags;
+} VxMachSegCmd64;
+
+typedef struct {
+    char     sectname[16];
+    char     segname[16];
+    uint64_t addr;
+    uint64_t size;
+    uint32_t offset;
+    uint32_t align;
+    uint32_t reloff;
+    uint32_t nreloc;
+    uint32_t flags;
+    uint32_t reserved1;
+    uint32_t reserved2;
+    uint32_t reserved3;
+} VxMachSect64;
+
+typedef struct {
+    uint32_t cmd;
+    uint32_t cmdsize;
+    uint64_t entryoff;
+    uint64_t stacksize;
+} VxMachMainCmd;
+#pragma pack(pop)
+
+static bool write_zero_bytes(FILE* f, size_t count) {
+    static const uint8_t zeros[256] = {0};
+    while (count > 0) {
+        size_t chunk = (count < sizeof(zeros)) ? count : sizeof(zeros);
+        if (fwrite(zeros, 1, chunk, f) != chunk) return false;
+        count -= chunk;
+    }
+    return true;
+}
+
+static long probe_runtime_clean_size(FILE* f, long file_size) {
+    long clean_size = file_size;
+    if (file_size >= (long)sizeof(VortexPackageFooter)) {
+        if (fseek(f, file_size - (long)sizeof(VortexPackageFooter), SEEK_SET) == 0) {
+            VortexPackageFooter prev_footer;
+            if (fread(&prev_footer, sizeof(prev_footer), 1, f) == 1 &&
+                memcmp(prev_footer.footer_magic, VORTEX_PACK_MAGIC_FOOTER, 8) == 0 &&
+                prev_footer.payload_offset < (uint64_t)(file_size - (long)sizeof(VortexPackageFooter))) {
+                clean_size = (long)prev_footer.payload_offset;
+            }
+        }
+    }
+    fseek(f, 0, SEEK_SET);
+    return clean_size;
+}
+
+static bool copy_runtime_prefix(FILE* src, FILE* dst, long remaining) {
+    char copy_buf[65536];
+    while (remaining > 0) {
+        size_t chunk = (remaining < (long)sizeof(copy_buf)) ? (size_t)remaining : sizeof(copy_buf);
+        size_t n = fread(copy_buf, 1, chunk, src);
+        if (n == 0) break;
+        if (fwrite(copy_buf, 1, n, dst) != n) return false;
+        remaining -= (long)n;
+    }
+    return remaining == 0;
+}
+
+static bool write_package_payload_and_footer(FILE* out_f, const char* src_buf, size_t src_len, uint64_t payload_offset) {
+    VortexPackageHeader hdr;
+    memcpy(hdr.header_magic, VORTEX_PACK_MAGIC_HEADER, 4);
+    hdr.version = VORTEX_PACK_VERSION;
+    hdr.flags = (g_compile_mode == VORTEX_MODE_RELEASE) ? VORTEX_PACK_FLAG_RELEASE : 0;
+    hdr.num_structs = (uint32_t)g_struct_type_count;
+    hdr.num_constants = 0;
+    hdr.source_len = (uint32_t)src_len;
+
+    if (fwrite(&hdr, sizeof(hdr), 1, out_f) != 1 ||
+        fwrite(src_buf, 1, src_len, out_f) != src_len) {
+        return false;
+    }
+
+    VortexPackageFooter footer;
+    footer.payload_offset = payload_offset;
+    memcpy(footer.footer_magic, VORTEX_PACK_MAGIC_FOOTER, 8);
+    return fwrite(&footer, sizeof(footer), 1, out_f) == 1;
+}
+
+static void ad_hoc_codesign_if_apple(const char* output_path) {
+#ifdef __APPLE__
+    if (g_target_abi == VORTEX_ABI_DARWIN64) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            const char* cs_argv[] = {"codesign", "--force", "--sign", "-", output_path, NULL};
+            execvp("codesign", (char* const*)cs_argv);
+            _exit(127);
+        } else if (pid > 0) {
+            int status = 0;
+            waitpid(pid, &status, 0);
+        }
+    }
+#else
+    (void)output_path;
+#endif
+}
+
+static FILE* open_companion_runtime(const char* self_path, const VortexTargetDesc* td, char* out_found, size_t cap) {
+    const char* ext = (td->abi == VORTEX_ABI_WIN64) ? ".exe" : "";
+    char dir[1024] = {0};
+    strncpy(dir, self_path, sizeof(dir) - 1);
+    char* slash1 = strrchr(dir, '/');
+    char* slash2 = strrchr(dir, '\\');
+    char* sep = (slash1 && slash2) ? ((slash1 > slash2) ? slash1 : slash2) : (slash1 ? slash1 : slash2);
+    if (sep) {
+        *sep = '\0';
+    } else {
+        strcpy(dir, ".");
+    }
+
+    snprintf(out_found, cap, "%s/vortex-%s%s", dir, td->name, ext);
+    FILE* f = fopen(out_found, "rb");
+    if (f) return f;
+
+    snprintf(out_found, cap, "%s/targets/vortex-%s%s", dir, td->name, ext);
+    return fopen(out_found, "rb");
+}
+
+static bool emit_elf64_arm64_binary(const char* output_path, const uint8_t* jit_code, size_t jit_size,
+                                    const char* src_buf, size_t src_len,
+                                    long* out_code_bytes, long* out_total_bytes) {
+    static const char shstrtab[] = "\0.text\0.shstrtab\0";
+    const uint64_t vaddr_base = 0x400000ULL;
+    const uint64_t text_off = 0x1000ULL;
+    const uint32_t stub[4] = {
+        0x94000004U, /* BL +16 (enter Vortex JIT main) */
+        0xD2800000U, /* MOVZ X0, #0 */
+        0xD2800BA8U, /* MOVZ X8, #93 (__NR_exit on Linux ARM64) */
+        0xD4000001U  /* SVC #0 */
+    };
+    uint64_t text_size = sizeof(stub) + (uint64_t)jit_size;
+    uint64_t shstr_off = text_off + text_size;
+    uint64_t shoff = (shstr_off + sizeof(shstrtab) + 7ULL) & ~7ULL;
+
+    VxElf64Ehdr ehdr;
+    memset(&ehdr, 0, sizeof(ehdr));
+    ehdr.e_ident[0] = 0x7F; ehdr.e_ident[1] = 'E'; ehdr.e_ident[2] = 'L'; ehdr.e_ident[3] = 'F';
+    ehdr.e_ident[4] = 2; /* ELFCLASS64 */
+    ehdr.e_ident[5] = 1; /* ELFDATA2LSB */
+    ehdr.e_ident[6] = 1; /* EV_CURRENT */
+    ehdr.e_type = 2;     /* ET_EXEC */
+    ehdr.e_machine = 183;/* EM_AARCH64 */
+    ehdr.e_version = 1;
+    ehdr.e_entry = vaddr_base + text_off;
+    ehdr.e_phoff = sizeof(VxElf64Ehdr);
+    ehdr.e_shoff = shoff;
+    ehdr.e_ehsize = sizeof(VxElf64Ehdr);
+    ehdr.e_phentsize = sizeof(VxElf64Phdr);
+    ehdr.e_phnum = 1;
+    ehdr.e_shentsize = sizeof(VxElf64Shdr);
+    ehdr.e_shnum = 3;
+    ehdr.e_shstrndx = 2;
+
+    VxElf64Phdr phdr;
+    memset(&phdr, 0, sizeof(phdr));
+    phdr.p_type = 1; /* PT_LOAD */
+    phdr.p_flags = 5;/* PF_R | PF_X */
+    phdr.p_offset = 0;
+    phdr.p_vaddr = vaddr_base;
+    phdr.p_paddr = vaddr_base;
+    phdr.p_filesz = text_off + text_size;
+    phdr.p_memsz = text_off + text_size;
+    phdr.p_align = 0x10000ULL;
+
+    VxElf64Shdr shdrs[3];
+    memset(shdrs, 0, sizeof(shdrs));
+    shdrs[1].sh_name = 1; /* ".text" */
+    shdrs[1].sh_type = 1; /* SHT_PROGBITS */
+    shdrs[1].sh_flags = 6;/* SHF_ALLOC | SHF_EXECINSTR */
+    shdrs[1].sh_addr = vaddr_base + text_off;
+    shdrs[1].sh_offset = text_off;
+    shdrs[1].sh_size = text_size;
+    shdrs[1].sh_addralign = 4;
+
+    shdrs[2].sh_name = 7; /* ".shstrtab" */
+    shdrs[2].sh_type = 3; /* SHT_STRTAB */
+    shdrs[2].sh_offset = shstr_off;
+    shdrs[2].sh_size = sizeof(shstrtab);
+    shdrs[2].sh_addralign = 1;
+
+    FILE* out_f = fopen(output_path, "wb");
+    if (!out_f) return false;
+
+    bool ok = (fwrite(&ehdr, sizeof(ehdr), 1, out_f) == 1) &&
+              (fwrite(&phdr, sizeof(phdr), 1, out_f) == 1) &&
+              write_zero_bytes(out_f, (size_t)(text_off - (sizeof(ehdr) + sizeof(phdr)))) &&
+              (fwrite(stub, sizeof(stub), 1, out_f) == 1) &&
+              (jit_size == 0 || fwrite(jit_code, 1, jit_size, out_f) == jit_size) &&
+              (fwrite(shstrtab, sizeof(shstrtab), 1, out_f) == 1) &&
+              write_zero_bytes(out_f, (size_t)(shoff - (shstr_off + sizeof(shstrtab)))) &&
+              (fwrite(shdrs, sizeof(shdrs), 1, out_f) == 1);
+
+    if (ok) {
+        uint64_t payload_off = (uint64_t)ftell(out_f);
+        ok = write_package_payload_and_footer(out_f, src_buf, src_len, payload_off);
+    }
+
+    *out_code_bytes = (long)text_size;
+    *out_total_bytes = ftell(out_f);
+    fclose(out_f);
+    return ok;
+}
+
+static bool emit_macho64_arm64_binary(const char* output_path, const uint8_t* jit_code, size_t jit_size,
+                                      const char* src_buf, size_t src_len,
+                                      long* out_code_bytes, long* out_total_bytes) {
+    const uint64_t text_vmaddr = 0x100000000ULL;
+    const uint64_t text_off = 0x1000ULL;
+    const uint32_t stub[4] = {
+        0x94000004U, /* BL +16 (enter Vortex JIT main) */
+        0xD2800000U, /* MOVZ X0, #0 */
+        0xD2800030U, /* MOVZ X16, #1 (SYS_exit on Darwin ARM64) */
+        0xD4001001U  /* SVC #0x80 */
+    };
+    uint64_t text_size = sizeof(stub) + (uint64_t)jit_size;
+    uint64_t text_end = text_off + text_size;
+    uint64_t seg_size = (text_end + 0x3FFFULL) & ~0x3FFFULL; /* 16 KiB Apple Silicon page */
+
+    uint32_t cmds_size = (uint32_t)(sizeof(VxMachSegCmd64) + sizeof(VxMachSegCmd64) +
+                                    sizeof(VxMachSect64) + sizeof(VxMachMainCmd));
+
+    VxMachHeader64 mh;
+    memset(&mh, 0, sizeof(mh));
+    mh.magic = 0xFEEDFACFU;     /* MH_MAGIC_64 */
+    mh.cputype = 0x0100000C;    /* CPU_TYPE_ARM64 */
+    mh.cpusubtype = 0;          /* CPU_SUBTYPE_ARM64_ALL */
+    mh.filetype = 2;            /* MH_EXECUTE */
+    mh.ncmds = 3;
+    mh.sizeofcmds = cmds_size;
+    mh.flags = 0x85U;           /* MH_NOUNDEFS | MH_DYLDLINK | MH_TWOLEVEL */
+
+    VxMachSegCmd64 pagezero;
+    memset(&pagezero, 0, sizeof(pagezero));
+    pagezero.cmd = 0x19U;       /* LC_SEGMENT_64 */
+    pagezero.cmdsize = sizeof(VxMachSegCmd64);
+    strncpy(pagezero.segname, "__PAGEZERO", sizeof(pagezero.segname));
+    pagezero.vmsize = 0x100000000ULL;
+
+    VxMachSegCmd64 text_seg;
+    memset(&text_seg, 0, sizeof(text_seg));
+    text_seg.cmd = 0x19U;
+    text_seg.cmdsize = sizeof(VxMachSegCmd64) + sizeof(VxMachSect64);
+    strncpy(text_seg.segname, "__TEXT", sizeof(text_seg.segname));
+    text_seg.vmaddr = text_vmaddr;
+    text_seg.vmsize = seg_size;
+    text_seg.fileoff = 0;
+    text_seg.filesize = seg_size;
+    text_seg.maxprot = 5;       /* VM_PROT_READ | VM_PROT_EXECUTE */
+    text_seg.initprot = 5;
+    text_seg.nsects = 1;
+
+    VxMachSect64 text_sect;
+    memset(&text_sect, 0, sizeof(text_sect));
+    strncpy(text_sect.sectname, "__text", sizeof(text_sect.sectname));
+    strncpy(text_sect.segname, "__TEXT", sizeof(text_sect.segname));
+    text_sect.addr = text_vmaddr + text_off;
+    text_sect.size = text_size;
+    text_sect.offset = (uint32_t)text_off;
+    text_sect.align = 2;        /* 2^2 = 4-byte alignment */
+    text_sect.flags = 0x80000400U; /* S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS */
+
+    VxMachMainCmd main_cmd;
+    memset(&main_cmd, 0, sizeof(main_cmd));
+    main_cmd.cmd = 0x80000028U; /* LC_MAIN */
+    main_cmd.cmdsize = sizeof(VxMachMainCmd);
+    main_cmd.entryoff = text_off;
+
+    size_t hdr_bytes = sizeof(mh) + cmds_size;
+
+    FILE* out_f = fopen(output_path, "wb");
+    if (!out_f) return false;
+
+    bool ok = (fwrite(&mh, sizeof(mh), 1, out_f) == 1) &&
+              (fwrite(&pagezero, sizeof(pagezero), 1, out_f) == 1) &&
+              (fwrite(&text_seg, sizeof(text_seg), 1, out_f) == 1) &&
+              (fwrite(&text_sect, sizeof(text_sect), 1, out_f) == 1) &&
+              (fwrite(&main_cmd, sizeof(main_cmd), 1, out_f) == 1) &&
+              write_zero_bytes(out_f, (size_t)(text_off - hdr_bytes)) &&
+              (fwrite(stub, sizeof(stub), 1, out_f) == 1) &&
+              (jit_size == 0 || fwrite(jit_code, 1, jit_size, out_f) == jit_size) &&
+              write_zero_bytes(out_f, (size_t)(seg_size - text_end));
+
+    if (ok) {
+        uint64_t payload_off = (uint64_t)ftell(out_f);
+        ok = write_package_payload_and_footer(out_f, src_buf, src_len, payload_off);
+    }
+
+    *out_code_bytes = (long)text_size;
+    *out_total_bytes = ftell(out_f);
+    fclose(out_f);
+    return ok;
+}
+
 int vortex_cmd_build(int argc, char** argv) {
-    if (argc < 3) {
+    const char* input_path = NULL;
+    char output_path[1024] = {0};
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--release") == 0) {
+            g_compile_mode = VORTEX_MODE_RELEASE;
+        } else if (strcmp(argv[i], "--safe") == 0) {
+            g_compile_mode = VORTEX_MODE_SAFE;
+        } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
+            const char* tname = argv[++i];
+            if (!vortex_set_target_name(tname)) {
+                fprintf(stderr, "[VORTEX BUILD ERROR] Unknown target '%s'\n", tname);
+                return 1;
+            }
+        } else if (strncmp(argv[i], "--target=", 9) == 0) {
+            if (!vortex_set_target_name(argv[i] + 9)) {
+                fprintf(stderr, "[VORTEX BUILD ERROR] Unknown target '%s'\n", argv[i] + 9);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            strncpy(output_path, argv[++i], sizeof(output_path) - 1);
+        } else if (argv[i][0] != '-') {
+            if (!input_path) input_path = argv[i];
+            else if (output_path[0] == '\0') strncpy(output_path, argv[i], sizeof(output_path) - 1);
+        }
+    }
+
+    if (!input_path) {
         fprintf(stderr, "[VORTEX BUILD ERROR] Missing input script file\n");
-        fprintf(stderr, "Usage: vortex build <script.vx> [-o <output.exe>]\n");
+        fprintf(stderr, "Usage: vortex build <script.vx> [-o <output>] [--safe|--release] [--target <triple>]\n");
         return 1;
     }
 
-    const char* input_path = argv[2];
-    char output_path[1024] = {0};
-
-    if (argc >= 5 && strcmp(argv[3], "-o") == 0) {
-        strncpy(output_path, argv[4], sizeof(output_path) - 1);
-    } else if (argc == 4 && argv[3][0] != '-') {
-        strncpy(output_path, argv[3], sizeof(output_path) - 1);
-    } else {
+    const VortexTargetDesc* td = vortex_get_target_desc();
+    if (output_path[0] == '\0') {
         strncpy(output_path, input_path, sizeof(output_path) - 1);
         char* dot = strrchr(output_path, '.');
         if (dot) *dot = '\0';
-#ifdef _WIN32
-        strncat(output_path, ".exe", sizeof(output_path) - strlen(output_path) - 1);
-#endif
+        if (td->abi == VORTEX_ABI_WIN64) {
+            strncat(output_path, ".exe", sizeof(output_path) - strlen(output_path) - 1);
+        }
     }
 
     FILE* in_f = fopen(input_path, "rb");
@@ -1057,118 +1846,116 @@ int vortex_cmd_build(int argc, char** argv) {
         return 1;
     }
 
+    size_t bundled_len = 0;
+    char* bundled = vortex_bundle_source(input_path, src_buf, &bundled_len);
+    if (bundled && bundled_len > 0) {
+        free(src_buf);
+        src_buf = bundled;
+        r = bundled_len;
+    }
+
     char self_path[1024] = {0};
-#ifdef _WIN32
-    DWORD len = GetModuleFileNameA(NULL, self_path, sizeof(self_path));
-    if (len == 0 || len >= sizeof(self_path)) {
-        if (argv[0]) strncpy(self_path, argv[0], sizeof(self_path) - 1);
-    }
-#else
-    ssize_t rlen = readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
-    if (rlen > 0) {
-        self_path[rlen] = '\0';
-    } else if (argv[0]) {
-        strncpy(self_path, argv[0], sizeof(self_path) - 1);
-    }
-#endif
+    vortex_get_self_path(self_path, sizeof(self_path), argv ? argv[0] : NULL);
 
-    FILE* self_f = fopen(self_path, "rb");
-    if (!self_f) {
-        fprintf(stderr, "[VORTEX BUILD ERROR] Cannot open runtime executable '%s' for self-cloning\n", self_path);
-        free(src_buf);
-        return 1;
+    FILE* rt_f = NULL;
+    char companion_path[1024] = {0};
+    bool is_cross = vortex_is_cross_target();
+
+    if (!is_cross) {
+        rt_f = fopen(self_path, "rb");
+    } else {
+        rt_f = open_companion_runtime(self_path, td, companion_path, sizeof(companion_path));
     }
 
-    fseek(self_f, 0, SEEK_END);
-    long self_size = ftell(self_f);
-    long runtime_clean_size = self_size;
-
-    if (self_size >= (long)sizeof(VortexPackageFooter)) {
-        fseek(self_f, self_size - (long)sizeof(VortexPackageFooter), SEEK_SET);
-        VortexPackageFooter prev_footer;
-        if (fread(&prev_footer, sizeof(prev_footer), 1, self_f) == 1 &&
-            memcmp(prev_footer.footer_magic, VORTEX_PACK_MAGIC_FOOTER, 8) == 0 &&
-            prev_footer.payload_offset < (uint64_t)(self_size - sizeof(VortexPackageFooter))) {
-            runtime_clean_size = (long)prev_footer.payload_offset;
+    if (rt_f) {
+        fseek(rt_f, 0, SEEK_END);
+        long rt_size = ftell(rt_f);
+        long runtime_clean_size = probe_runtime_clean_size(rt_f, rt_size);
+        if (runtime_clean_size <= 0) {
+            fprintf(stderr, "[VORTEX BUILD ERROR] Invalid base runtime executable size\n");
+            fclose(rt_f);
+            free(src_buf);
+            return 1;
         }
-    }
-    if (runtime_clean_size <= 0) {
-        fprintf(stderr, "[VORTEX BUILD ERROR] Invalid base runtime executable size\n");
-        fclose(self_f);
-        free(src_buf);
-        return 1;
-    }
-    fseek(self_f, 0, SEEK_SET);
 
-    FILE* out_f = fopen(output_path, "wb");
-    if (!out_f) {
-        fprintf(stderr, "[VORTEX BUILD ERROR] Cannot open output executable '%s' for writing\n", output_path);
-        fclose(self_f);
-        free(src_buf);
-        return 1;
-    }
+        FILE* out_f = fopen(output_path, "wb");
+        if (!out_f) {
+            fprintf(stderr, "[VORTEX BUILD ERROR] Cannot open output executable '%s' for writing\n", output_path);
+            fclose(rt_f);
+            free(src_buf);
+            return 1;
+        }
 
-    // 1. Copy base runtime
-    char copy_buf[65536];
-    long remaining = runtime_clean_size;
-    while (remaining > 0) {
-        size_t chunk = (remaining < (long)sizeof(copy_buf)) ? (size_t)remaining : sizeof(copy_buf);
-        size_t n = fread(copy_buf, 1, chunk, self_f);
-        if (n == 0) break;
-        if (fwrite(copy_buf, 1, n, out_f) != n) {
+        if (!copy_runtime_prefix(rt_f, out_f, runtime_clean_size)) {
             fprintf(stderr, "[VORTEX BUILD ERROR] Write error while copying base runtime\n");
-            fclose(self_f);
+            fclose(rt_f);
             fclose(out_f);
             free(src_buf);
             return 1;
         }
-        remaining -= (long)n;
-    }
-    fclose(self_f);
+        fclose(rt_f);
 
-    // 2. Append payload (Header + Source)
-    uint64_t payload_offset = (uint64_t)ftell(out_f);
-
-    VortexPackageHeader hdr;
-    memcpy(hdr.header_magic, VORTEX_PACK_MAGIC_HEADER, 4);
-    hdr.version = VORTEX_PACK_VERSION;
-    hdr.flags = 0;
-    hdr.num_structs = (uint32_t)g_struct_type_count;
-    hdr.num_constants = 0;
-    hdr.source_len = (uint32_t)r;
-
-    if (fwrite(&hdr, sizeof(hdr), 1, out_f) != 1 ||
-        fwrite(src_buf, 1, r, out_f) != r) {
-        fprintf(stderr, "[VORTEX BUILD ERROR] Failed to write embedded payload to '%s'\n", output_path);
-        fclose(out_f);
+        uint64_t payload_offset = (uint64_t)ftell(out_f);
+        bool ok = write_package_payload_and_footer(out_f, src_buf, r, payload_offset);
         free(src_buf);
-        return 1;
-    }
-    free(src_buf);
+        if (!ok) {
+            fprintf(stderr, "[VORTEX BUILD ERROR] Failed to write embedded payload to '%s'\n", output_path);
+            fclose(out_f);
+            return 1;
+        }
 
-    // 3. Append fixed 16-byte footer
-    VortexPackageFooter footer;
-    footer.payload_offset = payload_offset;
-    memcpy(footer.footer_magic, VORTEX_PACK_MAGIC_FOOTER, 8);
-    if (fwrite(&footer, sizeof(footer), 1, out_f) != 1) {
-        fprintf(stderr, "[VORTEX BUILD ERROR] Failed to write package footer to '%s'\n", output_path);
+        long final_size = ftell(out_f);
         fclose(out_f);
-        return 1;
+        ad_hoc_codesign_if_apple(output_path);
+#ifndef _WIN32
+        chmod(output_path, 0755);
+#endif
+        printf("[VORTEX BUILD] Executable standalone generated (%s): %s\n", td->name, output_path);
+        printf("               Runtime: %ld bytes | Payload: %zu bytes | Total: %ld bytes\n",
+               runtime_clean_size, r + sizeof(VortexPackageHeader) + sizeof(VortexPackageFooter), final_size);
+        printf("               Payload offset: %llu (0x%llX)\n",
+               (unsigned long long)payload_offset, (unsigned long long)payload_offset);
+        return 0;
     }
 
-    long final_size = ftell(out_f);
-    fclose(out_f);
+    if (td->arch == VORTEX_ARCH_ARM64) {
+        g_current_filename = input_path;
+        void* code_mem = alloc_exec_page(MAX_JIT_CODE_SIZE);
+        if (!code_mem) {
+            free(src_buf);
+            fprintf(stderr, "[VORTEX BUILD ERROR] Out of memory compiling ARM64 target\n");
+            return 1;
+        }
+        JITBuffer jit;
+        compile_vortex_source_internal(src_buf, code_mem, &jit);
 
+        long code_bytes = 0;
+        long total_bytes = 0;
+        const char* fmt_name = (td->abi == VORTEX_ABI_DARWIN64) ? "Mach-O 64 ARM64" : "ELF64 AArch64";
+        bool ok = (td->abi == VORTEX_ABI_DARWIN64)
+                  ? emit_macho64_arm64_binary(output_path, jit.code, jit.size, src_buf, r, &code_bytes, &total_bytes)
+                  : emit_elf64_arm64_binary(output_path, jit.code, jit.size, src_buf, r, &code_bytes, &total_bytes);
+        free_exec_page(code_mem, MAX_JIT_CODE_SIZE);
+        free(src_buf);
+        if (!ok) {
+            fprintf(stderr, "[VORTEX BUILD ERROR] Failed to write %s output '%s'\n", fmt_name, output_path);
+            return 1;
+        }
+        ad_hoc_codesign_if_apple(output_path);
 #ifndef _WIN32
-    chmod(output_path, 0755);
+        chmod(output_path, 0755);
 #endif
+        printf("[VORTEX BUILD] Cross-compiled %s standalone binary: %s\n", fmt_name, output_path);
+        printf("               Target: %s | Code (.text): %ld bytes | Total: %ld bytes\n",
+               td->name, code_bytes, total_bytes);
+        printf("               Note: Place companion runtime 'vortex-%s' beside binary for full dynamic FFI runtime cloning.\n",
+               td->name);
+        return 0;
+    }
 
-    printf("[VORTEX BUILD] Executable standalone generated successfully: %s\n", output_path);
-    printf("               Runtime: %ld bytes | Payload: %zu bytes | Total: %ld bytes\n",
-           runtime_clean_size, r + sizeof(hdr) + sizeof(footer), final_size);
-    printf("               Payload offset: %llu (0x%llX)\n",
-           (unsigned long long)payload_offset, (unsigned long long)payload_offset);
-    printf("               Zero external dependencies. Sub-millisecond instant startup ready.\n");
-    return 0;
+    free(src_buf);
+    fprintf(stderr, "[VORTEX BUILD ERROR] Cannot open runtime executable '%s' (companion '%s' not found)\n",
+            self_path, companion_path[0] ? companion_path : td->name);
+    return 1;
 }
 

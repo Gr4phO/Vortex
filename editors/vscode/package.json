@@ -1,0 +1,62 @@
+{
+  "name": "vortex-lang",
+  "displayName": "Vortex Language Support",
+  "description": "Syntax highlighting and native LSP client (vortex lsp) for the Vortex systems language.",
+  "version": "0.1.0",
+  "publisher": "vortex-lang",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:vortex"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "vortex",
+        "aliases": [
+          "Vortex",
+          "vortex"
+        ],
+        "extensions": [
+          ".vx"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "vortex",
+        "scopeName": "source.vortex",
+        "path": "./syntaxes/vortex.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Vortex",
+      "properties": {
+        "vortex.serverPath": {
+          "type": "string",
+          "default": "vortex",
+          "description": "Path to the Vortex compiler executable (launched with `lsp`)."
+        },
+        "vortex.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace communication between VS Code and the Vortex LSP server."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

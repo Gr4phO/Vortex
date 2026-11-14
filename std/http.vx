@@ -1,0 +1,266 @@
+// Vortex Standard Library: std/http
+// Zero-GC HTTP/1.1 client/server parser & formatter built on std/net + std/crypto.
+
+import "std/net";
+import "std/crypto";
+
+struct HttpRequest {
+    method: str,
+    path: str,
+    version: str,
+    headers: str,
+    body: str,
+    valid: i64
+}
+
+struct HttpResponse {
+    status: i64,
+    reason: str,
+    headers: str,
+    body: str,
+    raw: str,
+    valid: i64
+}
+
+fn http_crlf() -> str {
+    let cr = str_from_byte(13);
+    let lf = str_from_byte(10);
+    return str_concat(cr, lf);
+}
+
+fn http_find_char_from(s: str, ch: i64, start: i64) -> i64 {
+    let n = str_len(s);
+    let mut i = start;
+    while i < n {
+        if str_byte(s, i) == ch {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn http_trim_cr(s: str) -> str {
+    let n = str_len(s);
+    if n > 0 {
+        if str_byte(s, n - 1) == 13 {
+            return str_sub(s, 0, n - 1);
+        }
+    }
+    return s;
+}
+
+fn http_format_request(method: str, host: str, path: str, body: str) -> str {
+    let crlf = http_crlf();
+    let mut use_path = path;
+    if str_len(use_path) == 0 {
+        use_path = "/";
+    }
+    let mut req = str_concat(method, " ");
+    req = str_concat(req, use_path);
+    req = str_concat(req, " HTTP/1.1");
+    req = str_concat(req, crlf);
+    req = str_concat(req, "Host: ");
+    req = str_concat(req, host);
+    req = str_concat(req, crlf);
+    req = str_concat(req, "User-Agent: VortexHTTP/1.0");
+    req = str_concat(req, crlf);
+    let blen = str_len(body);
+    if blen > 0 {
+        req = str_concat(req, "Content-Length: ");
+        req = str_concat(req, str_from_i64(blen));
+        req = str_concat(req, crlf);
+    }
+    req = str_concat(req, "Connection: close");
+    req = str_concat(req, crlf);
+    req = str_concat(req, crlf);
+    if blen > 0 {
+        req = str_concat(req, body);
+    }
+    return req;
+}
+
+fn http_format_response(status: i64, reason: str, content_type: str, body: str) -> str {
+    let crlf = http_crlf();
+    let mut resp = "HTTP/1.1 ";
+    resp = str_concat(resp, str_from_i64(status));
+    resp = str_concat(resp, " ");
+    resp = str_concat(resp, reason);
+    resp = str_concat(resp, crlf);
+    resp = str_concat(resp, "Content-Type: ");
+    resp = str_concat(resp, content_type);
+    resp = str_concat(resp, crlf);
+    resp = str_concat(resp, "Content-Length: ");
+    resp = str_concat(resp, str_from_i64(str_len(body)));
+    resp = str_concat(resp, crlf);
+    resp = str_concat(resp, "Connection: close");
+    resp = str_concat(resp, crlf);
+    resp = str_concat(resp, crlf);
+    resp = str_concat(resp, body);
+    return resp;
+}
+
+fn http_find_header_end(raw: str) -> i64 {
+    let crlf = http_crlf();
+    let double_crlf = str_concat(crlf, crlf);
+    let pos = str_find(raw, double_crlf, 0);
+    if pos >= 0 {
+        return pos;
+    }
+    let lf = str_from_byte(10);
+    let double_lf = str_concat(lf, lf);
+    return str_find(raw, double_lf, 0);
+}
+
+fn http_header_sep_len(raw: str, pos: i64) -> i64 {
+    if pos < 0 {
+        return 0;
+    }
+    if str_byte(raw, pos) == 13 {
+        return 4;
+    }
+    return 2;
+}
+
+fn http_parse_request(raw: str) -> HttpRequest {
+    let n = str_len(raw);
+    if n == 0 {
+        return HttpRequest { method: "", path: "", version: "", headers: "", body: "", valid: 0 };
+    }
+    let eol = http_find_char_from(raw, 10, 0);
+    let mut first_line = raw;
+    let mut rest_start = n;
+    if eol >= 0 {
+        first_line = http_trim_cr(str_sub(raw, 0, eol));
+        rest_start = eol + 1;
+    }
+    let sp1 = http_find_char_from(first_line, 32, 0);
+    if sp1 < 0 {
+        return HttpRequest { method: "", path: "", version: "", headers: "", body: "", valid: 0 };
+    }
+    let method = str_sub(first_line, 0, sp1);
+    let sp2 = http_find_char_from(first_line, 32, sp1 + 1);
+    let mut path = "";
+    let mut ver = "HTTP/1.1";
+    if sp2 < 0 {
+        path = str_sub(first_line, sp1 + 1, str_len(first_line) - (sp1 + 1));
+    } else {
+        path = str_sub(first_line, sp1 + 1, sp2 - (sp1 + 1));
+        ver = str_sub(first_line, sp2 + 1, str_len(first_line) - (sp2 + 1));
+    }
+
+    let hdr_end = http_find_header_end(raw);
+    let mut headers = "";
+    let mut body = "";
+    if hdr_end >= rest_start {
+        headers = str_sub(raw, rest_start, hdr_end - rest_start);
+        let sep = http_header_sep_len(raw, hdr_end);
+        let bstart = hdr_end + sep;
+        if bstart < n {
+            body = str_sub(raw, bstart, n - bstart);
+        }
+    } else {
+        if rest_start < n {
+            headers = str_sub(raw, rest_start, n - rest_start);
+        }
+    }
+    return HttpRequest { method: method, path: path, version: ver, headers: headers, body: body, valid: 1 };
+}
+
+fn http_parse_response(raw: str) -> HttpResponse {
+    let n = str_len(raw);
+    if n == 0 {
+        return HttpResponse { status: 0, reason: "", headers: "", body: "", raw: raw, valid: 0 };
+    }
+    let eol = http_find_char_from(raw, 10, 0);
+    let mut status_line = raw;
+    let mut rest_start = n;
+    if eol >= 0 {
+        status_line = http_trim_cr(str_sub(raw, 0, eol));
+        rest_start = eol + 1;
+    }
+    let sp1 = http_find_char_from(status_line, 32, 0);
+    if sp1 < 0 {
+        return HttpResponse { status: 0, reason: "", headers: "", body: "", raw: raw, valid: 0 };
+    }
+    let sl_len = str_len(status_line);
+    let mut code_end = http_find_char_from(status_line, 32, sp1 + 1);
+    let mut reason = "";
+    if code_end < 0 {
+        code_end = sl_len;
+    } else {
+        reason = str_sub(status_line, code_end + 1, sl_len - (code_end + 1));
+    }
+    let code_str = str_sub(status_line, sp1 + 1, code_end - (sp1 + 1));
+    let status = str_to_i64(code_str);
+
+    let hdr_end = http_find_header_end(raw);
+    let mut headers = "";
+    let mut body = "";
+    if hdr_end >= rest_start {
+        headers = str_sub(raw, rest_start, hdr_end - rest_start);
+        let sep = http_header_sep_len(raw, hdr_end);
+        let bstart = hdr_end + sep;
+        if bstart < n {
+            body = str_sub(raw, bstart, n - bstart);
+        }
+    } else {
+        if rest_start < n {
+            headers = str_sub(raw, rest_start, n - rest_start);
+        }
+    }
+    return HttpResponse { status: status, reason: reason, headers: headers, body: body, raw: raw, valid: 1 };
+}
+
+fn http_exchange_tcp(host: str, port: i64, wire_req: str) -> HttpResponse {
+    if net_init() != 0 {
+        return HttpResponse { status: 0, reason: "net_init_failed", headers: "", body: "", raw: "", valid: 0 };
+    }
+    let fd = net_tcp_connect(host, port, 1);
+    if fd < 0 {
+        return HttpResponse { status: 0, reason: "connect_failed", headers: "", body: "", raw: "", valid: 0 };
+    }
+    let wready = net_poll_write(fd, 5000);
+    if wready <= 0 {
+        net_close(fd);
+        return HttpResponse { status: 0, reason: "connect_timeout", headers: "", body: "", raw: "", valid: 0 };
+    }
+    let sent = net_send(fd, wire_req);
+    if sent <= 0 {
+        net_close(fd);
+        return HttpResponse { status: 0, reason: "send_failed", headers: "", body: "", raw: "", valid: 0 };
+    }
+
+    let mut raw = "";
+    let mut done = 0;
+    let mut iters = 0;
+    while done == 0 {
+        if iters >= 64 {
+            done = 1;
+        } else {
+            let chunk = net_recv_wait(fd, 8192, 2000);
+            if str_len(chunk) == 0 {
+                done = 1;
+            } else {
+                raw = str_concat(raw, chunk);
+                iters = iters + 1;
+            }
+        }
+    }
+    net_close(fd);
+    return http_parse_response(raw);
+}
+
+fn http_get(host: str, port: i64, path: str) -> HttpResponse {
+    let wire = http_format_request("GET", host, path, "");
+    return http_exchange_tcp(host, port, wire);
+}
+
+fn http_post(host: str, port: i64, path: str, body: str) -> HttpResponse {
+    let wire = http_format_request("POST", host, path, body);
+    return http_exchange_tcp(host, port, wire);
+}
+
+fn http_tls_supported() -> i64 {
+    return crypto_tls_available();
+}

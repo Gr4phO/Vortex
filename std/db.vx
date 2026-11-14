@@ -1,0 +1,354 @@
+// Vortex Standard Library: std/db
+// Unified FFI wrapper for SQLite (sqlite3 / winsqlite3) and PostgreSQL (libpq).
+
+struct DbConn {
+    kind: i64,       // 0 = none, 1 = sqlite, 2 = postgres
+    lib: i64,
+    handle: i64,
+    last_err: str,
+    open: i64
+}
+
+fn db_i32_sext(v: i64) -> i64 {
+    let mut u = v % 4294967296;
+    if u < 0 {
+        u = u + 4294967296;
+    }
+    if u >= 2147483648 {
+        return u - 4294967296;
+    }
+    return u;
+}
+
+fn db_cstr_alloc(s: str) -> i64 {
+    let n = str_len(s);
+    unsafe {
+        let p = alloc(n + 1);
+        let mut i = 0;
+        while i < n {
+            ptr_write8(p + i, str_byte(s, i));
+            i = i + 1;
+        }
+        ptr_write8(p + n, 0);
+        return p;
+    }
+}
+
+#[cfg(windows)]
+fn db_load_sqlite_lib() -> i64 {
+    unsafe {
+        let h1 = ffi_load("sqlite3.dll");
+        if h1 != 0 {
+            return h1;
+        }
+        return ffi_load("winsqlite3.dll");
+    }
+}
+
+#[cfg(linux)]
+fn db_load_sqlite_lib() -> i64 {
+    unsafe {
+        let h1 = ffi_load("libsqlite3.so.0");
+        if h1 != 0 {
+            return h1;
+        }
+        return ffi_load("libsqlite3.so");
+    }
+}
+
+#[cfg(macos)]
+fn db_load_sqlite_lib() -> i64 {
+    unsafe {
+        let h1 = ffi_load("libsqlite3.dylib");
+        if h1 != 0 {
+            return h1;
+        }
+        return ffi_load("/usr/lib/libsqlite3.dylib");
+    }
+}
+
+#[cfg(windows)]
+fn db_load_postgres_lib() -> i64 {
+    unsafe {
+        return ffi_load("libpq.dll");
+    }
+}
+
+#[cfg(linux)]
+fn db_load_postgres_lib() -> i64 {
+    unsafe {
+        let h1 = ffi_load("libpq.so.5");
+        if h1 != 0 {
+            return h1;
+        }
+        return ffi_load("libpq.so");
+    }
+}
+
+#[cfg(macos)]
+fn db_load_postgres_lib() -> i64 {
+    unsafe {
+        let h1 = ffi_load("libpq.dylib");
+        if h1 != 0 {
+            return h1;
+        }
+        return ffi_load("/opt/homebrew/opt/libpq/lib/libpq.dylib");
+    }
+}
+
+fn db_sqlite_available() -> i64 {
+    if db_load_sqlite_lib() != 0 {
+        return 1;
+    }
+    return 0;
+}
+
+fn db_postgres_available() -> i64 {
+    if db_load_postgres_lib() != 0 {
+        return 1;
+    }
+    return 0;
+}
+
+fn db_sqlite_version() -> str {
+    let lib = db_load_sqlite_lib();
+    if lib == 0 {
+        return "";
+    }
+    unsafe {
+        let fn_ver = ffi_symbol(lib, "sqlite3_libversion");
+        if fn_ver == 0 {
+            return "";
+        }
+        let p = ffi_call0(fn_ver);
+        if p == 0 {
+            return "";
+        }
+        return ptr_to_str(p);
+    }
+}
+
+fn db_open_sqlite(path: str) -> DbConn {
+    let lib = db_load_sqlite_lib();
+    if lib == 0 {
+        return DbConn { kind: 1, lib: 0, handle: 0, last_err: "sqlite_library_not_found", open: 0 };
+    }
+    unsafe {
+        let fn_open = ffi_symbol(lib, "sqlite3_open");
+        let fn_err = ffi_symbol(lib, "sqlite3_errmsg");
+        let fn_close = ffi_symbol(lib, "sqlite3_close");
+        if fn_open == 0 {
+            return DbConn { kind: 1, lib: lib, handle: 0, last_err: "sqlite3_open_missing", open: 0 };
+        }
+        let pp_db = alloc(8);
+        ptr_write64(pp_db, 0);
+        let cpath = db_cstr_alloc(path);
+        let rc = db_i32_sext(ffi_call2(fn_open, cpath, pp_db));
+        let hdb = ptr_read64(pp_db);
+        if rc != 0 {
+            let mut msg = "sqlite3_open_failed";
+            if hdb != 0 {
+                if fn_err != 0 {
+                    let ep = ffi_call1(fn_err, hdb);
+                    if ep != 0 {
+                        msg = ptr_to_str(ep);
+                    }
+                }
+                if fn_close != 0 {
+                    ffi_call1(fn_close, hdb);
+                }
+            }
+            return DbConn { kind: 1, lib: lib, handle: 0, last_err: msg, open: 0 };
+        }
+        return DbConn { kind: 1, lib: lib, handle: hdb, last_err: "", open: 1 };
+    }
+}
+
+fn db_open_postgres(conninfo: str) -> DbConn {
+    let lib = db_load_postgres_lib();
+    if lib == 0 {
+        return DbConn { kind: 2, lib: 0, handle: 0, last_err: "libpq_not_found", open: 0 };
+    }
+    unsafe {
+        let fn_conn = ffi_symbol(lib, "PQconnectdb");
+        let fn_stat = ffi_symbol(lib, "PQstatus");
+        let fn_err = ffi_symbol(lib, "PQerrorMessage");
+        let fn_fin = ffi_symbol(lib, "PQfinish");
+        if fn_conn == 0 {
+            return DbConn { kind: 2, lib: lib, handle: 0, last_err: "PQconnectdb_missing", open: 0 };
+        }
+        let cinfo = db_cstr_alloc(conninfo);
+        let pg = ffi_call1(fn_conn, cinfo);
+        if pg == 0 {
+            return DbConn { kind: 2, lib: lib, handle: 0, last_err: "PQconnectdb_null", open: 0 };
+        }
+        if fn_stat != 0 {
+            let st = db_i32_sext(ffi_call1(fn_stat, pg));
+            if st != 0 {
+                let mut msg = "postgres_connect_failed";
+                if fn_err != 0 {
+                    let ep = ffi_call1(fn_err, pg);
+                    if ep != 0 {
+                        msg = ptr_to_str(ep);
+                    }
+                }
+                if fn_fin != 0 {
+                    ffi_call1(fn_fin, pg);
+                }
+                return DbConn { kind: 2, lib: lib, handle: 0, last_err: msg, open: 0 };
+            }
+        }
+        return DbConn { kind: 2, lib: lib, handle: pg, last_err: "", open: 1 };
+    }
+}
+
+fn db_exec(conn: DbConn, sql: str) -> i64 {
+    if conn.open == 0 {
+        return 0 - 1;
+    }
+    if conn.kind == 1 {
+        unsafe {
+            let fn_exec = ffi_symbol(conn.lib, "sqlite3_exec");
+            if fn_exec == 0 {
+                return 0 - 1;
+            }
+            let csql = db_cstr_alloc(sql);
+            let rc = db_i32_sext(ffi_call5(fn_exec, conn.handle, csql, 0, 0, 0));
+            return rc;
+        }
+    }
+    if conn.kind == 2 {
+        unsafe {
+            let fn_exec = ffi_symbol(conn.lib, "PQexec");
+            let fn_rstat = ffi_symbol(conn.lib, "PQresultStatus");
+            let fn_clear = ffi_symbol(conn.lib, "PQclear");
+            if fn_exec == 0 {
+                return 0 - 1;
+            }
+            let csql = db_cstr_alloc(sql);
+            let res = ffi_call2(fn_exec, conn.handle, csql);
+            if res == 0 {
+                return 0 - 1;
+            }
+            let mut ok = 0 - 1;
+            if fn_rstat != 0 {
+                let st = db_i32_sext(ffi_call1(fn_rstat, res));
+                if st == 1 {
+                    ok = 0;
+                }
+                if st == 2 {
+                    ok = 0;
+                }
+            } else {
+                ok = 0;
+            }
+            if fn_clear != 0 {
+                ffi_call1(fn_clear, res);
+            }
+            return ok;
+        }
+    }
+    return 0 - 1;
+}
+
+fn db_query_scalar_str(conn: DbConn, sql: str) -> str {
+    if conn.open == 0 {
+        return "";
+    }
+    if conn.kind == 1 {
+        unsafe {
+            let fn_prep = ffi_symbol(conn.lib, "sqlite3_prepare_v2");
+            let fn_step = ffi_symbol(conn.lib, "sqlite3_step");
+            let fn_col = ffi_symbol(conn.lib, "sqlite3_column_text");
+            let fn_fin = ffi_symbol(conn.lib, "sqlite3_finalize");
+            if fn_prep == 0 {
+                return "";
+            }
+            let pp_stmt = alloc(8);
+            ptr_write64(pp_stmt, 0);
+            let csql = db_cstr_alloc(sql);
+            let rc = db_i32_sext(ffi_call5(fn_prep, conn.handle, csql, 0 - 1, pp_stmt, 0));
+            let stmt = ptr_read64(pp_stmt);
+            if rc != 0 {
+                if stmt != 0 {
+                    if fn_fin != 0 {
+                        ffi_call1(fn_fin, stmt);
+                    }
+                }
+                return "";
+            }
+            let mut out = "";
+            let step_rc = db_i32_sext(ffi_call1(fn_step, stmt));
+            if step_rc == 100 {
+                let ptxt = ffi_call2(fn_col, stmt, 0);
+                if ptxt != 0 {
+                    out = ptr_to_str(ptxt);
+                }
+            }
+            if fn_fin != 0 {
+                ffi_call1(fn_fin, stmt);
+            }
+            return out;
+        }
+    }
+    if conn.kind == 2 {
+        unsafe {
+            let fn_exec = ffi_symbol(conn.lib, "PQexec");
+            let fn_rstat = ffi_symbol(conn.lib, "PQresultStatus");
+            let fn_ntup = ffi_symbol(conn.lib, "PQntuples");
+            let fn_val = ffi_symbol(conn.lib, "PQgetvalue");
+            let fn_clear = ffi_symbol(conn.lib, "PQclear");
+            if fn_exec == 0 {
+                return "";
+            }
+            let csql = db_cstr_alloc(sql);
+            let res = ffi_call2(fn_exec, conn.handle, csql);
+            if res == 0 {
+                return "";
+            }
+            let mut out = "";
+            let st = db_i32_sext(ffi_call1(fn_rstat, res));
+            if st == 2 {
+                let rows = db_i32_sext(ffi_call1(fn_ntup, res));
+                if rows > 0 {
+                    let ptxt = ffi_call3(fn_val, res, 0, 0);
+                    if ptxt != 0 {
+                        out = ptr_to_str(ptxt);
+                    }
+                }
+            }
+            if fn_clear != 0 {
+                ffi_call1(fn_clear, res);
+            }
+            return out;
+        }
+    }
+    return "";
+}
+
+fn db_close(conn: DbConn) -> i64 {
+    if conn.open == 0 {
+        return 0;
+    }
+    if conn.handle == 0 {
+        return 0;
+    }
+    if conn.kind == 1 {
+        unsafe {
+            let fn_close = ffi_symbol(conn.lib, "sqlite3_close");
+            if fn_close != 0 {
+                return db_i32_sext(ffi_call1(fn_close, conn.handle));
+            }
+        }
+    }
+    if conn.kind == 2 {
+        unsafe {
+            let fn_fin = ffi_symbol(conn.lib, "PQfinish");
+            if fn_fin != 0 {
+                ffi_call1(fn_fin, conn.handle);
+                return 0;
+            }
+        }
+    }
+    return 0;
+}
