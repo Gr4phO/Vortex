@@ -181,6 +181,15 @@ void* arena_alloc_fast(size_t bytes) {
     return arena_bump_raw(ar, aligned);
 }
 
+void* arena_alloc_compact(size_t bytes) {
+    if (g_compile_mode == VORTEX_MODE_SAFE) {
+        return arena_alloc_with_header(bytes, 0, 0);
+    }
+    size_t aligned = (bytes + 7U) & ~(size_t)7U;
+    if (aligned == 0) aligned = 8;
+    return arena_bump_raw(get_active_arena(), aligned);
+}
+
 void* arena_alloc(size_t bytes) {
     return arena_alloc_fast(bytes);
 }
@@ -195,7 +204,8 @@ int64_t vortex_alloc_struct(int64_t size) {
 }
 
 static int64_t vortex_alloc_slice_common(int64_t len, uint32_t elem_size) {
-    if (len < 0 || len > 1000000000LL) {
+    if (len < 0 || len > 1000000000LL || elem_size == 0 ||
+        (uint64_t)len > (uint64_t)(SIZE_MAX - sizeof(VortexSafeHeader) - VORTEX_ALIGNMENT) / elem_size) {
         fprintf(stderr, "[VORTEX SAFETY ERROR] Invalid slice length %lld\n", (long long)len);
         vortex_error("");
     }
@@ -228,6 +238,36 @@ int64_t vortex_alloc_slice_i32(int64_t len) {
     return vortex_alloc_slice_common(len, 4);
 }
 
+static inline VortexSafeHeader* arena_match_page_header(VortexRegionArena* ar,
+                                                        VortexPage* page,
+                                                        size_t p_idx,
+                                                        const uint8_t* p_addr,
+                                                        VortexRegionArena** out_arena,
+                                                        VortexPage** out_page,
+                                                        size_t* out_page_idx,
+                                                        size_t* out_offset,
+                                                        bool* out_in_arena,
+                                                        bool* matched) {
+    if (page && p_addr >= page->base && p_addr < page->base + page->capacity) {
+        size_t off = (size_t)(p_addr - page->base);
+        if (out_arena) *out_arena = ar;
+        if (out_page) *out_page = page;
+        if (out_page_idx) *out_page_idx = p_idx;
+        if (out_offset) *out_offset = off;
+        if (out_in_arena) *out_in_arena = true;
+        *matched = true;
+        if (off >= sizeof(VortexSafeHeader)) {
+            VortexSafeHeader* hdr = (VortexSafeHeader*)(p_addr - sizeof(VortexSafeHeader));
+            if (hdr->magic == VORTEX_SAFE_MAGIC) {
+                return hdr;
+            }
+        }
+        return NULL;
+    }
+    *matched = false;
+    return NULL;
+}
+
 static VortexSafeHeader* find_arena_header_internal(const void* ptr,
                                                     VortexRegionArena** out_arena,
                                                     VortexPage** out_page,
@@ -238,27 +278,40 @@ static VortexSafeHeader* find_arena_header_internal(const void* ptr,
     if (out_in_arena) *out_in_arena = false;
     if (!p_addr) return NULL;
 
+    /* Fast path: check active thread-local arena's current page first, then its page list */
+    VortexRegionArena* act = get_active_arena();
+    bool matched = false;
+    if (act && act->current) {
+        VortexSafeHeader* h = arena_match_page_header(
+            act, act->current, act->current_page_index, p_addr,
+            out_arena, out_page, out_page_idx, out_offset, out_in_arena, &matched);
+        if (matched) return h;
+    }
+    if (act) {
+        VortexPage* page = act->head;
+        size_t p_idx = 0;
+        while (page) {
+            if (page != act->current) {
+                VortexSafeHeader* h = arena_match_page_header(
+                    act, page, p_idx, p_addr,
+                    out_arena, out_page, out_page_idx, out_offset, out_in_arena, &matched);
+                if (matched) return h;
+            }
+            page = page->next;
+            p_idx++;
+        }
+    }
+
     for (int a = 0; a < g_registered_arena_count; a++) {
         VortexRegionArena* ar = g_registered_arenas[a];
-        if (!ar) continue;
+        if (!ar || ar == act) continue;
         VortexPage* page = ar->head;
         size_t p_idx = 0;
         while (page) {
-            if (p_addr >= page->base && p_addr < page->base + page->capacity) {
-                size_t off = (size_t)(p_addr - page->base);
-                if (out_arena) *out_arena = ar;
-                if (out_page) *out_page = page;
-                if (out_page_idx) *out_page_idx = p_idx;
-                if (out_offset) *out_offset = off;
-                if (out_in_arena) *out_in_arena = true;
-                if (off >= sizeof(VortexSafeHeader)) {
-                    VortexSafeHeader* hdr = (VortexSafeHeader*)(p_addr - sizeof(VortexSafeHeader));
-                    if (hdr->magic == VORTEX_SAFE_MAGIC) {
-                        return hdr;
-                    }
-                }
-                return NULL;
-            }
+            VortexSafeHeader* h = arena_match_page_header(
+                ar, page, p_idx, p_addr,
+                out_arena, out_page, out_page_idx, out_offset, out_in_arena, &matched);
+            if (matched) return h;
             page = page->next;
             p_idx++;
         }
@@ -621,26 +674,32 @@ int64_t vortex_map_set(int64_t map_ptr, int64_t key_ptr, int64_t val) {
         m->capacity *= 2;
         m->entries = (MapEntry*)arena_alloc(m->capacity * sizeof(MapEntry));
         memset(m->entries, 0, m->capacity * sizeof(MapEntry));
-        m->count = 0;
+        int64_t mask = m->capacity - 1;
         for (int64_t i = 0; i < old_cap; i++) {
             if (old_entries[i].occupied) {
-                vortex_map_set((int64_t)m, (int64_t)old_entries[i].key, old_entries[i].value);
+                int64_t nidx = (int64_t)(old_entries[i].hash & (uint64_t)mask);
+                while (m->entries[nidx].occupied) {
+                    nidx = (nidx + 1) & mask;
+                }
+                m->entries[nidx] = old_entries[i];
             }
         }
     }
 
     uint64_t h = hash_str(key);
-    int64_t idx = h & (m->capacity - 1);
+    int64_t mask = m->capacity - 1;
+    int64_t idx = (int64_t)(h & (uint64_t)mask);
     while (m->entries[idx].occupied) {
-        if (strcmp(m->entries[idx].key, key) == 0) {
+        if (m->entries[idx].hash == h && strcmp(m->entries[idx].key, key) == 0) {
             m->entries[idx].value = val;
             return val;
         }
-        idx = (idx + 1) & (m->capacity - 1);
+        idx = (idx + 1) & mask;
     }
     m->entries[idx].occupied = true;
+    m->entries[idx].hash = h;
     size_t klen = strlen(key);
-    char* kcopy = (char*)arena_alloc_fast(klen + 1);
+    char* kcopy = (char*)arena_alloc_compact(klen + 1);
     memcpy(kcopy, key, klen + 1);
     m->entries[idx].key = kcopy;
     m->entries[idx].value = val;
@@ -654,12 +713,13 @@ int64_t vortex_map_get(int64_t map_ptr, int64_t key_ptr) {
     if (!m || !key || m->count == 0) return 0;
 
     uint64_t h = hash_str(key);
-    int64_t idx = h & (m->capacity - 1);
+    int64_t mask = m->capacity - 1;
+    int64_t idx = (int64_t)(h & (uint64_t)mask);
     while (m->entries[idx].occupied) {
-        if (strcmp(m->entries[idx].key, key) == 0) {
+        if (m->entries[idx].hash == h && strcmp(m->entries[idx].key, key) == 0) {
             return m->entries[idx].value;
         }
-        idx = (idx + 1) & (m->capacity - 1);
+        idx = (idx + 1) & mask;
     }
     return 0;
 }
@@ -670,12 +730,13 @@ int64_t vortex_map_has(int64_t map_ptr, int64_t key_ptr) {
     if (!m || !key || m->count == 0) return 0;
 
     uint64_t h = hash_str(key);
-    int64_t idx = h & (m->capacity - 1);
+    int64_t mask = m->capacity - 1;
+    int64_t idx = (int64_t)(h & (uint64_t)mask);
     while (m->entries[idx].occupied) {
-        if (strcmp(m->entries[idx].key, key) == 0) {
+        if (m->entries[idx].hash == h && strcmp(m->entries[idx].key, key) == 0) {
             return 1;
         }
-        idx = (idx + 1) & (m->capacity - 1);
+        idx = (idx + 1) & mask;
     }
     return 0;
 }
@@ -689,6 +750,16 @@ int64_t vortex_map_len(int64_t map_ptr) {
 /* UTF-8 STRINGS                                                             */
 /* ========================================================================= */
 
+static inline size_t vortex_cached_strlen(const char* s) {
+    if (!s) return 0;
+    if (s != tl_last_str_s || tl_last_str_seq != tl_rewind_seq) {
+        tl_last_str_s = s;
+        tl_last_str_len = strlen(s);
+        tl_last_str_seq = tl_rewind_seq;
+    }
+    return tl_last_str_len;
+}
+
 int64_t vortex_str_concat(int64_t s1_ptr, int64_t s2_ptr) {
     const char* s1 = (const char*)s1_ptr;
     const char* s2 = (const char*)s2_ptr;
@@ -696,7 +767,7 @@ int64_t vortex_str_concat(int64_t s1_ptr, int64_t s2_ptr) {
     if (!s2) s2 = "";
     size_t len1 = strlen(s1);
     size_t len2 = strlen(s2);
-    char* res = (char*)arena_alloc(len1 + len2 + 1);
+    char* res = (char*)arena_alloc_compact(len1 + len2 + 1);
     memcpy(res, s1, len1);
     memcpy(res + len1, s2, len2);
     res[len1 + len2] = '\0';
@@ -710,19 +781,32 @@ int64_t vortex_str_len(int64_t s_ptr) {
 
 int64_t vortex_str_sub(int64_t s_ptr, int64_t start, int64_t len) {
     const char* s = (const char*)s_ptr;
-    if (!s || start < 0) return (int64_t)"";
-    size_t total = strlen(s);
-    if ((size_t)start >= total) return (int64_t)"";
-    if ((size_t)(start + len) > total) len = total - start;
-    char* res = (char*)arena_alloc(len + 1);
-    memcpy(res, s + start, len);
-    res[len] = '\0';
+    if (!s || start < 0 || len <= 0) return (int64_t)"";
+    size_t total = vortex_cached_strlen(s);
+    size_t ustart = (size_t)start;
+    if (ustart >= total) return (int64_t)"";
+    size_t avail = total - ustart;
+    size_t ulen = ((uint64_t)len > (uint64_t)avail) ? avail : (size_t)len;
+    char* res = (char*)arena_alloc_compact(ulen + 1);
+    memcpy(res, s + ustart, ulen);
+    res[ulen] = '\0';
     return (int64_t)res;
 }
 
 int64_t vortex_str_from_i64(int64_t n) {
-    char* buf = (char*)arena_alloc(32);
-    snprintf(buf, 32, "%lld", (long long)n);
+    char tmp[24];
+    int pos = 23;
+    tmp[pos] = '\0';
+    bool neg = (n < 0);
+    uint64_t uv = neg ? ((uint64_t)(-(n + 1)) + 1ULL) : (uint64_t)n;
+    do {
+        tmp[--pos] = (char)('0' + (uv % 10ULL));
+        uv /= 10ULL;
+    } while (uv > 0);
+    if (neg) tmp[--pos] = '-';
+    size_t len = (size_t)(23 - pos);
+    char* buf = (char*)arena_alloc_compact(len + 1);
+    memcpy(buf, tmp + pos, len + 1);
     return (int64_t)buf;
 }
 
@@ -730,25 +814,24 @@ int64_t vortex_str_from_f32(int64_t f_bits) {
     float f;
     uint32_t b = (uint32_t)f_bits;
     memcpy(&f, &b, 4);
-    char* buf = (char*)arena_alloc(32);
-    snprintf(buf, 32, "%.4f", (double)f);
+    char tmp[32];
+    int n = snprintf(tmp, sizeof(tmp), "%.4f", (double)f);
+    size_t len = (n > 0 && n < (int)sizeof(tmp)) ? (size_t)n : strlen(tmp);
+    char* buf = (char*)arena_alloc_compact(len + 1);
+    memcpy(buf, tmp, len + 1);
     return (int64_t)buf;
 }
 
 int64_t vortex_str_byte(int64_t s_ptr, int64_t idx) {
     const char* s = (const char*)s_ptr;
     if (!s || idx < 0) return -1;
-    if (s != tl_last_str_s || tl_last_str_seq != tl_rewind_seq) {
-        tl_last_str_s = s;
-        tl_last_str_len = strlen(s);
-        tl_last_str_seq = tl_rewind_seq;
-    }
-    if ((size_t)idx >= tl_last_str_len) return -1;
+    size_t len = vortex_cached_strlen(s);
+    if ((size_t)idx >= len) return -1;
     return (int64_t)(unsigned char)s[idx];
 }
 
 int64_t vortex_str_from_byte(int64_t ch) {
-    char* buf = (char*)arena_alloc(2);
+    char* buf = (char*)arena_alloc_compact(2);
     buf[0] = (char)(ch & 0xFF);
     buf[1] = '\0';
     return (int64_t)buf;
@@ -757,7 +840,7 @@ int64_t vortex_str_from_byte(int64_t ch) {
 int64_t vortex_str_eq(int64_t s1_ptr, int64_t s2_ptr) {
     const char* a = (const char*)s1_ptr;
     const char* b = (const char*)s2_ptr;
-    if (!a && !b) return 1;
+    if (a == b) return 1;
     if (!a || !b) return 0;
     return (strcmp(a, b) == 0) ? 1 : 0;
 }
@@ -767,11 +850,74 @@ int64_t vortex_str_find(int64_t haystack_ptr, int64_t needle_ptr, int64_t start_
     const char* n = (const char*)needle_ptr;
     if (!h || !n) return -1;
     if (start_idx < 0) start_idx = 0;
-    size_t hlen = strlen(h);
+    size_t hlen = vortex_cached_strlen(h);
     if ((size_t)start_idx > hlen) return -1;
     if (n[0] == '\0') return start_idx;
+    if (n[1] == '\0') {
+        const char* found1 = strchr(h + start_idx, (unsigned char)n[0]);
+        return found1 ? (int64_t)(found1 - h) : -1;
+    }
     const char* found = strstr(h + start_idx, n);
     return found ? (int64_t)(found - h) : -1;
+}
+
+int64_t vortex_str_find_any2(int64_t s_ptr, int64_t c1, int64_t c2, int64_t start_idx) {
+    const char* s = (const char*)s_ptr;
+    if (!s) return -1;
+    if (start_idx < 0) start_idx = 0;
+    size_t len = vortex_cached_strlen(s);
+    if ((size_t)start_idx >= len) return -1;
+    unsigned char b1 = (unsigned char)c1;
+    unsigned char b2 = (unsigned char)c2;
+    const unsigned char* p = (const unsigned char*)(s + start_idx);
+    const unsigned char* end = (const unsigned char*)(s + len);
+    while (p < end) {
+        unsigned char ch = *p;
+        if (ch == b1 || ch == b2) return (int64_t)(p - (const unsigned char*)s);
+        p++;
+    }
+    return -1;
+}
+
+int64_t vortex_str_join(int64_t vec_ptr, int64_t sep_ptr) {
+    VortexVec* v = (VortexVec*)vec_ptr;
+    if (!v || v->len <= 0) return (int64_t)"";
+    const char* sep = (const char*)sep_ptr;
+    if (!sep) sep = "";
+    size_t sep_len = strlen(sep);
+
+    int64_t n = v->len;
+    size_t small_lens[128];
+    size_t* lens = (n <= 128) ? small_lens : (size_t*)malloc((size_t)n * sizeof(size_t));
+    if (!lens) {
+        fprintf(stderr, "[VORTEX MEMORY ERROR] Out of memory in str_join\n");
+        vortex_error("");
+    }
+
+    size_t total = (sep_len > 0 && n > 1) ? sep_len * (size_t)(n - 1) : 0;
+    for (int64_t i = 0; i < n; i++) {
+        const char* s = (const char*)v->data[i];
+        size_t sl = s ? strlen(s) : 0;
+        lens[i] = sl;
+        total += sl;
+    }
+
+    char* res = (char*)arena_alloc_compact(total + 1);
+    char* out = res;
+    for (int64_t i = 0; i < n; i++) {
+        if (i > 0 && sep_len > 0) {
+            memcpy(out, sep, sep_len);
+            out += sep_len;
+        }
+        size_t sl = lens[i];
+        if (sl > 0) {
+            memcpy(out, (const char*)v->data[i], sl);
+            out += sl;
+        }
+    }
+    *out = '\0';
+    if (lens != small_lens) free(lens);
+    return (int64_t)res;
 }
 
 int64_t vortex_str_to_i64(int64_t s_ptr) {
@@ -783,12 +929,12 @@ int64_t vortex_str_to_i64(int64_t s_ptr) {
 int64_t vortex_ptr_to_str(int64_t ptr_val) {
     const char* s = (const char*)ptr_val;
     if (!s) {
-        char* empty = (char*)arena_alloc(1);
+        char* empty = (char*)arena_alloc_compact(1);
         empty[0] = '\0';
         return (int64_t)empty;
     }
     size_t len = strlen(s);
-    char* copy = (char*)arena_alloc(len + 1);
+    char* copy = (char*)arena_alloc_compact(len + 1);
     memcpy(copy, s, len + 1);
     return (int64_t)copy;
 }

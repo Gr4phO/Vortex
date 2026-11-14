@@ -805,7 +805,8 @@ static void lsp_index_source_rec(const char* text, const char* file_path, const 
                         else if (strcmp(sc.cur.text, "slice_f32") == 0) strcpy(vtype, "*f32");
                         else if (strcmp(sc.cur.text, "slice_i32") == 0) strcpy(vtype, "*i32");
                         else if (strcmp(sc.cur.text, "str_concat") == 0 || strcmp(sc.cur.text, "str_sub") == 0 ||
-                                 strcmp(sc.cur.text, "str_from_byte") == 0 || strcmp(sc.cur.text, "str_from_i64") == 0) {
+                                 strcmp(sc.cur.text, "str_from_byte") == 0 || strcmp(sc.cur.text, "str_from_i64") == 0 ||
+                                 strcmp(sc.cur.text, "str_join") == 0) {
                             strcpy(vtype, "str");
                         } else {
                             char candidate[64];
@@ -866,12 +867,14 @@ static const LspBuiltinDoc g_builtin_docs[] = {
     {"map_has",      "fn map_has(m: i64, k: str) -> i64",       "Return `1` if key `k` exists in map `m`, else `0`.", 3},
     {"map_len",      "fn map_len(m: i64) -> i64",               "Return number of entries in map `m`.", 3},
     {"str_concat",   "fn str_concat(a: str, b: str) -> str",    "Concatenate two strings on the active arena.", 3},
+    {"str_join",     "fn str_join(chunks: i64, sep: str) -> str", "Join a `vec` of strings with separator `sep` in O(N).", 3},
     {"str_len",      "fn str_len(s: str) -> i64",               "Return byte length of string `s`.", 3},
     {"str_sub",      "fn str_sub(s: str, st: i64, len: i64) -> str", "Extract substring allocated on the active arena.", 3},
     {"str_byte",     "fn str_byte(s: str, idx: i64) -> i64",    "Safe O(1)-cached byte read (`0..255`, or `-1` if OOB).", 3},
     {"str_from_byte","fn str_from_byte(ch: i64) -> str",        "Create 1-byte string on the arena.", 3},
     {"str_eq",       "fn str_eq(a: str, b: str) -> i64",        "Return `1` if strings `a` and `b` have identical content.", 3},
     {"str_find",     "fn str_find(h: str, n: str, st: i64) -> i64", "Find first index of `n` in `h` from `st`, or `-1`.", 3},
+    {"str_find_any2","fn str_find_any2(s: str, c1: i64, c2: i64, st: i64) -> i64", "Find first byte `c1` or `c2` in `s` from `st`, or `-1`.", 3},
     {"str_to_i64",   "fn str_to_i64(s: str) -> i64",            "Parse decimal integer from string `s`.", 3},
     {"str_from_i64", "fn str_from_i64(n: i64) -> str",          "Format integer `n` to arena string.", 3},
     {"str_from_f32", "fn str_from_f32(f_bits: i64) -> str",     "Format `f32` to arena string.", 3},

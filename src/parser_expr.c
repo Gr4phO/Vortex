@@ -677,7 +677,8 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                     ret_t = TYPE_PTR; is_alloc_ref = true;
                 } else if (strcmp(name, "str_concat") == 0 || strcmp(name, "str_sub") == 0 ||
                            strcmp(name, "str_from_i64") == 0 || strcmp(name, "str_from_f32") == 0 ||
-                           strcmp(name, "str_from_byte") == 0 || strcmp(name, "ptr_to_str") == 0) {
+                           strcmp(name, "str_from_byte") == 0 || strcmp(name, "ptr_to_str") == 0 ||
+                           strcmp(name, "str_join") == 0) {
                     ret_t = TYPE_STR; is_alloc_ref = true;
                 } else if (strcmp(name, "ffi_load") == 0 || strcmp(name, "ffi_symbol") == 0 ||
                            strcmp(name, "gui_window") == 0) {

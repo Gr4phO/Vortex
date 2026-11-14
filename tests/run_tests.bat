@@ -21,7 +21,7 @@ echo ========================================================
 set "FAILED=0"
 set "PASSED=0"
 
-for %%t in (test_struct.vx test_vec_struct.vx test_fib.vx test_ffi.vx test_memory_1m.vx test_safety_pass.vx test_import_main.vx) do (
+for %%t in (test_struct.vx test_vec_struct.vx test_fib.vx test_ffi.vx test_memory_1m.vx test_safety_pass.vx test_import_main.vx test_opt_regression.vx) do (
     echo.
     echo --- [RUN] %%t ---
     "%VORTEX_BIN%" "%SCRIPT_DIR%%%t"

@@ -1,0 +1,104 @@
+// Regression tests for optimization cycle fixes:
+// str_sub bounds/neg len, str_find_any2, str_join, power-of-2 signed div/mod, map rehash, std/json round-trip.
+
+import "std/json";
+
+let mut passed = 0;
+let mut failed = 0;
+
+fn check(cond: i64, name: str) -> i64 {
+    if cond != 0 {
+        return 1;
+    }
+    print_str("[FAIL] ");
+    print_str(name);
+    print_str("\n");
+    return 0;
+}
+
+fn mod8_rt(x: i64) -> i64 { return x % 8; }
+fn div8_rt(x: i64) -> i64 { return x / 8; }
+fn mod2_rt(x: i64) -> i64 { return x % 2; }
+fn div2_rt(x: i64) -> i64 { return x / 2; }
+fn mod4_rt(x: i64) -> i64 { return x % 4; }
+fn div4_rt(x: i64) -> i64 { return x / 4; }
+
+// 1. str_sub safety & edge cases
+let s = "abcdef";
+passed = passed + check(str_eq(str_sub(s, 0, 0), ""), "str_sub len=0");
+passed = passed + check(str_eq(str_sub(s, 2, -5), ""), "str_sub neg len");
+passed = passed + check(str_eq(str_sub(s, 10, 3), ""), "str_sub start>=len");
+passed = passed + check(str_eq(str_sub(s, 4, 100), "ef"), "str_sub clamp upper");
+passed = passed + check(str_eq(str_sub(s, 1, 3), "bcd"), "str_sub normal");
+
+// 2. str_find_any2 (args: str, byte1, byte2, start_idx)
+let js = "hello\\\"world\\n";
+passed = passed + check(str_find_any2(js, 34, 92, 0) == 5, "find_any2 slash first");
+passed = passed + check(str_find_any2(js, 34, 92, 6) == 6, "find_any2 quote at offset");
+passed = passed + check(str_find_any2("abc\"def", 34, 92, 0) == 3, "find_any2 quote only");
+passed = passed + check(str_find_any2("abcdef", 34, 92, 0) == -1, "find_any2 none");
+
+// 3. str_join
+let v0 = vec_new();
+passed = passed + check(str_eq(str_join(v0, ","), ""), "str_join empty vec");
+let v1 = vec_new();
+vec_push(v1, "only");
+passed = passed + check(str_eq(str_join(v1, ","), "only"), "str_join single");
+let v3 = vec_new();
+vec_push(v3, "a");
+vec_push(v3, "bb");
+vec_push(v3, "ccc");
+passed = passed + check(str_eq(str_join(v3, "-"), "a-bb-ccc"), "str_join sep");
+passed = passed + check(str_eq(str_join(v3, ""), "abbccc"), "str_join empty sep");
+
+// 4. Power-of-2 signed division & modulo (runtime + JIT fast paths)
+let n13 = -13;
+let n16 = -16;
+let n7 = -7;
+let p19 = 19;
+passed = passed + check(mod8_rt(n13) == -5, "mod8_rt(-13) == -5");
+passed = passed + check(div8_rt(n13) == -1, "div8_rt(-13) == -1");
+passed = passed + check(mod8_rt(n16) == 0, "mod8_rt(-16) == 0");
+passed = passed + check(div8_rt(n16) == -2, "div8_rt(-16) == -2");
+passed = passed + check(mod2_rt(n7) == -1, "mod2_rt(-7) == -1");
+passed = passed + check(div2_rt(n7) == -3, "div2_rt(-7) == -3");
+passed = passed + check(mod4_rt(p19) == 3, "mod4_rt(19) == 3");
+passed = passed + check(div4_rt(p19) == 4, "div4_rt(19) == 4");
+passed = passed + check((-13 % 8) == -5, "const (-13 % 8) == -5");
+passed = passed + check((-13 / 8) == -1, "const (-13 / 8) == -1");
+
+// 5. Map rehash & cached hash lookup (> 64 entries)
+let m = map_new();
+let mut i = 0;
+while i < 100 {
+    let k = str_concat("key_", str_from_i64(i));
+    map_set(m, k, i * 10 + 7);
+    i = i + 1;
+}
+map_set(m, "key_42", 9999);
+passed = passed + check(map_get(m, "key_0") == 7, "map rehash key_0");
+passed = passed + check(map_get(m, "key_42") == 9999, "map overwrite key_42");
+passed = passed + check(map_get(m, "key_99") == 997, "map rehash key_99");
+passed = passed + check(map_has(m, "missing") == 0, "map missing");
+
+// 6. std/json escaped strings & nested structures
+let payload = "{\"msg\":\"line1\\n\\t\\\"quoted\\\"\",\"items\":[1,2,true,null,\"ok\"]}";
+let parsed = json_parse(payload);
+let msg_n = json_get(parsed, "msg");
+passed = passed + check(str_find(msg_n.str_val, "\"quoted\"", 0) >= 0, "json escaped quote");
+let out = json_stringify(parsed);
+let reparsed = json_parse(out);
+let items = json_get(reparsed, "items");
+let ok_n = json_at(items, 4);
+passed = passed + check(str_eq(ok_n.str_val, "ok") == 1, "json roundtrip");
+
+let total_checks = 29;
+failed = total_checks - passed;
+
+print_str("OPT_REGRESSION_PASSED=");
+print(passed);
+if failed > 0 {
+    print_str("OPT_REGRESSION_FAILED=");
+    print(failed);
+    exit(1);
+}

@@ -124,6 +124,7 @@ typedef struct {
 typedef struct {
     char* key;
     int64_t value;
+    uint64_t hash;
     bool occupied;
 } MapEntry;
 
@@ -498,7 +499,8 @@ typedef enum {
     IR_VEC_LOOP,
     IR_SUB_MOD_IMM,
     IR_VEC_ARR_OP,
-    IR_VEC_GRID_MOD
+    IR_VEC_GRID_MOD,
+    IR_VEC_MOD_FILL
 } IROpcode;
 
 typedef int VReg;
@@ -726,6 +728,9 @@ int64_t vortex_str_eq(int64_t s1_ptr, int64_t s2_ptr);
 int64_t vortex_str_find(int64_t haystack_ptr, int64_t needle_ptr, int64_t start_idx);
 int64_t vortex_str_to_i64(int64_t s_ptr);
 int64_t vortex_ptr_to_str(int64_t ptr_val);
+int64_t vortex_str_join(int64_t vec_ptr, int64_t sep_ptr);
+int64_t vortex_str_find_any2(int64_t s_ptr, int64_t c1, int64_t c2, int64_t start_idx);
+void* arena_alloc_compact(size_t bytes);
 
 /* --- src/lexer.c, src/modules.c, src/parser_expr.c, src/parser_stmt.c --- */
 void lexer_init(Lexer* lex, const char* source);
@@ -857,6 +862,10 @@ void vortex_parallel_for_dispatch(void* fn_ptr, void* ctx, int64_t start, int64_
 int64_t vortex_num_workers(void);
 BuiltinFunc* builtin_find(const char* name);
 
+extern bool g_is_packaged_app;
+void vx_str_copy(char* dst, size_t cap, const char* src);
+void vortex_wait_on_standalone_error(const char* msg);
+bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffer* out_jit);
 char* vortex_resolve_imports(const char* entry_path);
 int execute_vortex_source(const char* source);
 int execute_vortex_file(const char* filename);

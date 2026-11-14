@@ -134,70 +134,64 @@ fn json_parse_string_raw(cur: JsonCursor) -> str {
     if str_byte(cur.src, cur.pos) != 34 { return ""; }
     cur.pos = cur.pos + 1;
     let start = cur.pos;
-    let mut has_esc = 0;
+    let first_hit = str_find_any2(cur.src, 34, 92, start);
+    if first_hit < 0 {
+        cur.pos = cur.len;
+        return str_sub(cur.src, start, cur.len - start);
+    }
+    if str_byte(cur.src, first_hit) == 34 {
+        cur.pos = first_hit + 1;
+        return str_sub(cur.src, start, first_hit - start);
+    }
+    let parts = vec_new();
+    let mut seg = start;
+    let mut p = first_hit;
     let mut done = 0;
     while done == 0 {
-        if cur.pos >= cur.len {
+        if p > seg {
+            let chunk = str_sub(cur.src, seg, p - seg);
+            unsafe { vec_push(parts, chunk as i64); }
+        }
+        let b = str_byte(cur.src, p);
+        if b == 34 {
+            cur.pos = p + 1;
             done = 1;
         } else {
-            let b = str_byte(cur.src, cur.pos);
-            if b == 34 {
+            if p + 1 < cur.len {
+                let nx = str_byte(cur.src, p + 1);
+                if nx == 110 { unsafe { vec_push(parts, "\n" as i64); } }
+                else if nx == 114 { unsafe { vec_push(parts, "\r" as i64); } }
+                else if nx == 116 { unsafe { vec_push(parts, "\t" as i64); } }
+                else if nx == 34 { unsafe { vec_push(parts, "\"" as i64); } }
+                else if nx == 92 { unsafe { vec_push(parts, "\\" as i64); } }
+                else if nx == 47 { unsafe { vec_push(parts, "/" as i64); } }
+                else {
+                    let cs = str_from_byte(nx);
+                    unsafe { vec_push(parts, cs as i64); }
+                }
+                seg = p + 2;
+            } else {
+                seg = p + 1;
+            }
+            if seg >= cur.len {
+                cur.pos = cur.len;
                 done = 1;
             } else {
-                if b == 92 {
-                    has_esc = 1;
-                    cur.pos = cur.pos + 2;
-                } else {
-                    cur.pos = cur.pos + 1;
-                }
-            }
-        }
-    }
-    let end_pos = cur.pos;
-    if cur.pos < cur.len {
-        if str_byte(cur.src, cur.pos) == 34 {
-            cur.pos = cur.pos + 1;
-        }
-    }
-    if has_esc == 0 {
-        return str_sub(cur.src, start, end_pos - start);
-    }
-    let mut out = "";
-    let mut k = start;
-    while k < end_pos {
-        let ch = str_byte(cur.src, k);
-        if ch == 92 {
-            if k + 1 < end_pos {
-                let nx = str_byte(cur.src, k + 1);
-                if nx == 110 { out = str_concat(out, "\n"); }
-                else if nx == 114 { out = str_concat(out, "\r"); }
-                else if nx == 116 { out = str_concat(out, "\t"); }
-                else if nx == 34 { out = str_concat(out, "\""); }
-                else if nx == 92 { out = str_concat(out, "\\"); }
-                else if nx == 47 { out = str_concat(out, "/"); }
-                else { out = str_concat(out, str_from_byte(nx)); }
-                k = k + 2;
-            } else {
-                k = k + 1;
-            }
-        } else {
-            let seg_st = k;
-            let mut seg_done = 0;
-            while seg_done == 0 {
-                if k >= end_pos {
-                    seg_done = 1;
-                } else {
-                    if str_byte(cur.src, k) == 92 {
-                        seg_done = 1;
-                    } else {
-                        k = k + 1;
+                let next_hit = str_find_any2(cur.src, 34, 92, seg);
+                if next_hit < 0 {
+                    if cur.len > seg {
+                        let tail = str_sub(cur.src, seg, cur.len - seg);
+                        unsafe { vec_push(parts, tail as i64); }
                     }
+                    cur.pos = cur.len;
+                    done = 1;
+                } else {
+                    p = next_hit;
                 }
             }
-            out = str_concat(out, str_sub(cur.src, seg_st, k - seg_st));
         }
     }
-    return out;
+    return str_join(parts, "");
 }
 
 fn json_is_num_char(b: i64) -> i64 {
@@ -337,74 +331,113 @@ fn json_parse(src: str) -> JsonNode {
     return json_parse_value(cur);
 }
 
+fn json_needs_esc_ch(ch: i64) -> i64 {
+    if ch == 34 { return 1; }
+    if ch == 92 { return 1; }
+    if ch < 32 { return 1; }
+    return 0;
+}
+
 fn json_escape_str(s: str) -> str {
     let n = str_len(s);
-    let mut needs_esc = 0;
-    let mut i = 0;
-    while i < n {
-        let ch = str_byte(s, i);
-        if ch == 34 { needs_esc = 1; }
-        else if ch == 92 { needs_esc = 1; }
-        else if ch < 32 { needs_esc = 1; }
-        i = i + 1;
-    }
-    if needs_esc == 0 {
-        return str_concat("\"", str_concat(s, "\""));
-    }
-    let mut out = "\"";
+    let parts = vec_new();
+    unsafe { vec_push(parts, "\"" as i64); }
+    let mut seg = 0;
     let mut k = 0;
     while k < n {
         let ch = str_byte(s, k);
-        if ch == 34 { out = str_concat(out, "\\\""); }
-        else if ch == 92 { out = str_concat(out, "\\\\"); }
-        else if ch == 10 { out = str_concat(out, "\\n"); }
-        else if ch == 13 { out = str_concat(out, "\\r"); }
-        else if ch == 9  { out = str_concat(out, "\\t"); }
-        else { out = str_concat(out, str_from_byte(ch)); }
+        if json_needs_esc_ch(ch) != 0 {
+            if k > seg {
+                let sub = str_sub(s, seg, k - seg);
+                unsafe { vec_push(parts, sub as i64); }
+            }
+            if ch == 34 { unsafe { vec_push(parts, "\\\"" as i64); } }
+            else if ch == 92 { unsafe { vec_push(parts, "\\\\" as i64); } }
+            else if ch == 10 { unsafe { vec_push(parts, "\\n" as i64); } }
+            else if ch == 13 { unsafe { vec_push(parts, "\\r" as i64); } }
+            else if ch == 9  { unsafe { vec_push(parts, "\\t" as i64); } }
+            else {
+                let bstr = str_from_byte(ch);
+                unsafe { vec_push(parts, bstr as i64); }
+            }
+            seg = k + 1;
+        }
         k = k + 1;
     }
-    return str_concat(out, "\"");
+    if seg == 0 {
+        return str_concat("\"", str_concat(s, "\""));
+    }
+    if n > seg {
+        let tail = str_sub(s, seg, n - seg);
+        unsafe { vec_push(parts, tail as i64); }
+    }
+    unsafe { vec_push(parts, "\"" as i64); }
+    return str_join(parts, "");
 }
 
-fn json_stringify(node: JsonNode) -> str {
-    if node.kind == 0 { return "null"; }
+fn json_stringify_into(node: JsonNode, parts: i64) -> i64 {
+    if node.kind == 0 { unsafe { vec_push(parts, "null" as i64); } return 0; }
     if node.kind == 1 {
-        if node.bool_val != 0 { return "true"; }
-        return "false";
+        if node.bool_val != 0 { unsafe { vec_push(parts, "true" as i64); } }
+        else { unsafe { vec_push(parts, "false" as i64); } }
+        return 0;
     }
-    if node.kind == 2 { return str_from_i64(node.int_val); }
-    if node.kind == 3 { return node.str_val; }
-    if node.kind == 4 { return json_escape_str(node.str_val); }
+    if node.kind == 2 {
+        let s = str_from_i64(node.int_val);
+        unsafe { vec_push(parts, s as i64); }
+        return 0;
+    }
+    if node.kind == 3 {
+        unsafe { vec_push(parts, node.str_val as i64); }
+        return 0;
+    }
+    if node.kind == 4 {
+        let s = json_escape_str(node.str_val);
+        unsafe { vec_push(parts, s as i64); }
+        return 0;
+    }
     if node.kind == 5 {
         let n = vec_len(node.arr);
-        let mut out = "[";
+        unsafe { vec_push(parts, "[" as i64); }
         let mut i = 0;
         while i < n {
-            if i > 0 { out = str_concat(out, ","); }
+            if i > 0 { unsafe { vec_push(parts, "," as i64); } }
             let child = json_at(node, i);
-            out = str_concat(out, json_stringify(child));
+            json_stringify_into(child, parts);
             i = i + 1;
         }
-        return str_concat(out, "]");
+        unsafe { vec_push(parts, "]" as i64); }
+        return 0;
     }
     if node.kind == 6 {
         let n = vec_len(node.keys);
-        let mut out = "{";
+        unsafe { vec_push(parts, "{" as i64); }
         let mut i = 0;
         while i < n {
-            if i > 0 { out = str_concat(out, ","); }
+            if i > 0 { unsafe { vec_push(parts, "," as i64); } }
             let k_raw = vec_get(node.keys, i);
             let mut key = "";
             unsafe {
                 key = k_raw as str;
             }
             let val = json_get(node, key);
-            out = str_concat(out, json_escape_str(key));
-            out = str_concat(out, ":");
-            out = str_concat(out, json_stringify(val));
+            let ek = json_escape_str(key);
+            unsafe {
+                vec_push(parts, ek as i64);
+                vec_push(parts, ":" as i64);
+            }
+            json_stringify_into(val, parts);
             i = i + 1;
         }
-        return str_concat(out, "}");
+        unsafe { vec_push(parts, "}" as i64); }
+        return 0;
     }
-    return "null";
+    unsafe { vec_push(parts, "null" as i64); }
+    return 0;
+}
+
+fn json_stringify(node: JsonNode) -> str {
+    let parts = vec_new();
+    json_stringify_into(node, parts);
+    return str_join(parts, "");
 }

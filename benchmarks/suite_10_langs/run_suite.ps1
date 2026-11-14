@@ -12,7 +12,7 @@ $VortexBin = Join-Path $SuiteDir "bench_vortex_cli.exe"
 $clangBuild = Get-Command clang -ErrorAction SilentlyContinue
 if ($clangBuild) {
     Push-Location $RepoRoot
-    & clang -std=c99 -Os -Wall -Wextra -flto -ffunction-sections -fdata-sections src/arena.c src/lexer.c src/modules.c src/parser_expr.c src/parser_stmt.c src/ir_opt.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/runtime.c src/main.c -o $VortexBin -luser32 -lgdi32 "-Wl,--gc-sections" -s
+    & clang -std=c99 -Os -Wall -Wextra -flto -ffunction-sections -fdata-sections src/arena.c src/lexer.c src/modules.c src/parser_expr.c src/parser_stmt.c src/ir_core.c src/ir_opt.c src/ir_vec_ra.c src/ffi.c src/jit_x64_simd.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/gui.c src/packager.c src/runtime.c src/main.c -o $VortexBin -luser32 -lgdi32 "-Wl,--gc-sections" -s
     Pop-Location
 } elseif (Test-Path (Join-Path $RepoRoot "vortex.exe")) {
     $VortexBin = Join-Path $RepoRoot "vortex.exe"

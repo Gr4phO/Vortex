@@ -1268,6 +1268,7 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
             case IR_SUB_MOD_IMM:
             case IR_VEC_ARR_OP:
             case IR_VEC_GRID_MOD:
+            case IR_VEC_MOD_FILL:
                 break;
         }
         if (ins->line > 0 && j->size > ins_start_off) {

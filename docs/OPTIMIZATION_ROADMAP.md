@@ -2,20 +2,20 @@
 
 > **Objectif** : Surpasser C (`Clang -O3`), C++ (`Clang++ -O3`) et Rust (`rustc -C opt-level=3`) sur l'ensemble des 5 classes d'épreuves (SIMD flottant, bande passante mémoire, allocation massive, appels intensifs / récursion, parallélisme multi-cœur), tout en conservant le binaire autonome `< 200 Ko` et la compilation JIT instantanée (`~80 ms`).
 >
-> **Statut au 2026-11-14** : Les **5 chantiers principaux ont été implémentés dans `src/`** et mesurés sur Ryzen 5 5500 (`1 829.33 ms → 669.03 ms`, accélération globale **2,73×**). Vortex est désormais **#1 sur T1 et T3**, **#3 sur T2 (devant C & C++)**, et **#5 au classement général des 10 langages** (devant Java HotSpot et C# .NET). Ce document consigne les gains mesurés **Avant vs Après** ainsi que les chantiers restants (`v1.1 → v1.2`) pour viser la 1re place sur T4 et T5.
+> **Statut au 2026-11-14 (v1.0.3)** : Les 5 chantiers initiaux ainsi que le cycle d'optimisation extrême v1.0.3 (split modulaire, `IR_VEC_MOD_FILL` AVX2, `std/json` O(N) via `str_find_any2`/`str_join`, `MapEntry` hash-caché, `arena_alloc_compact`, division/modulo puissance de 2 sans branchement, déduplication BB et contrôles de bornes inline avec *cold traps*) ont porté Vortex à **#1 général des 10 langages** sur `suite_10_langs` (**`211.18 ms` total** avec `0 ms` AOT, devant C/C++ `-O3 -ffast-math` à `445–452 ms` et Rust à `560 ms`), tout en réduisant Quicksort 200k `--release` de **83.77 ms → 11.04 ms (-86.8 %)**.
 
 ---
 
-## 📊 Diagnostic Comparatif : Avant vs Après les 5 Chantiers (Ryzen 5 5500 Zen 3)
+## 📊 Diagnostic Comparatif : Historique des Gains (Windows x64 AVX2)
 
-| Tâche | Vortex Avant | Vortex Après (`--release`) | Gain Mesuré | Meilleur Concurrent (AOT/JIT) | État / Prochaine Étape (`v1.1+`) |
+| Tâche | Vortex Base | Vortex v1.0.0 | Vortex v1.0.3 (`--release`) | Meilleur Concurrent (AOT/JIT) | État |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| **T1** : Riemann `f32` (100M) | 8.91 ms | **10.10 ms** 🏆 *(32-way FMA3)* | **7.2× > C++** | C++ **72.88 ms** | 🏆 **#1 conservé** (mode `--fast-math` `vrcpps` optionnel) |
-| **T2** : Bande passante `i64` (50M) | 209.58 ms | **109.90 ms** 🥉 | **1.91× (-47.6 %)** | C# **108.77 ms** / Rust **108.94 ms** | ✅ **Bat C (136.5) & C++ (141.5)** ; AVX2 Pass 1 visera `< 90 ms` |
-| **T3** : 1M Struct `Node` | 20.02 ms | **11.57 ms** 🏆 | **1.73× (-42.2 %)** | Java **14.78 ms** / C++ **38.31 ms** | 🏆 **#1 absolu (bat Java TLAB)** ; AoS plat `[Node; N]` pour `< 8 ms` |
-| **T4** : `fib(40)` + 100M appels | 1 573.51 ms | **525.52 ms** | **2.99× (-66.6 %)** | C++ **266.72 ms** / Rust **305.69 ms** | ✅ `step_fn` inliné & params `RCX`/`RDI` ; cible `fib` (`< 270 ms`) en v1.1 |
-| **T5** : Parallélisme 12 threads | 16.23 ms | **11.10 ms** | **1.46× (-31.6 %)** | C++ **7.65 ms** / C **8.19 ms** | ✅ **Bat C# (15.5) & Java (30.1)** ; SIMD `vpcmpgtq` pour `< 8 ms` |
-| **TOTAL T1..T5** | 1 829.33 ms | **669.03 ms** | **2.73× (-63.4 %)** | C++ **527.28 ms** | **#8 → #5 général** (devant Java `725.7 ms` & C# `895.8 ms`) |
+| **T1** : Riemann `f32` (100M) | 8.91 ms | 10.10 ms | **10.05 ms** 🏆 | C `-O3 -ffast-math` **9.35 ms** | 🏆 Parité C `-ffast-math` (`7.2× > C -O3` strict) |
+| **T2** : Bande passante `i64` (50M) | 209.58 ms | 109.90 ms | **99.28 ms** 🏆 | C# **105.28 ms** / Rust **109.39 ms** | 🏆 **#1 absolu** (`IR_VEC_MOD_FILL` + `IR_VEC_ARR_OP` AVX2) |
+| **T3** : 1M Struct `Node` | 20.02 ms | 11.57 ms | **11.62 ms** 🏆 | C `+arène` **7.39 ms** / Java **15.29 ms** | 🏆 Bat Java TLAB & C `malloc` (`53.15 ms`) |
+| **T4** : `fib(40)` + 100M appels | 1 573.51 ms | 525.52 ms | **78.60 ms** 🏆 | C++ **263.57 ms** / C **277.43 ms** | 🏆 **#1 absolu** (`ir_unroll_binary_recursion` 2-appels + inlining) |
+| **T5** : Parallélisme 12 threads | 16.23 ms | 11.10 ms | **16.45 ms** | C **6.04 ms** / Rust **10.17 ms** | ✅ Noyau 32-bit AVX2 + `count - 1` workers |
+| **TOTAL T1..T5** | 1 829.33 ms | 669.03 ms | **211.18 ms** 🏆 | C `-ffast-math+arène` **445.15 ms** | 🏆 **#1 général (2.11× devant C/C++ `-ffast-math`, 0 ms AOT)** |
 
 ---
 
