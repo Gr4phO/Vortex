@@ -42,17 +42,21 @@ def _worker_rows(args):
 def main() -> None:
     t_all = time.perf_counter_ns()
 
-    # Task 1 (100,000,000 iterations)
-    n1 = 100_000_000
-    step1 = 0.00000001
-    sum1 = 0.0
-    x1 = 0.000000005
+    # Task 1 (100 x 1,000,000 = 100,000,000 iterations)
+    reps1 = 100
+    n1 = 1_000_000
+    step1 = 0.000001
+    total_pi1 = 0.0
     t1_0 = time.perf_counter_ns()
-    for _ in range(n1):
-        sum1 = sum1 + 4.0 / (1.0 + x1 * x1)
-        x1 = x1 + step1
+    for _ in range(reps1):
+        sum1 = 0.0
+        x1 = 0.0000005
+        for _ in range(n1):
+            sum1 = sum1 + 4.0 / (1.0 + x1 * x1)
+            x1 = x1 + step1
+        total_pi1 += sum1 * step1
     us1 = (time.perf_counter_ns() - t1_0) // 1000
-    pi1 = sum1 * step1
+    pi1 = total_pi1 * 0.01
 
     # Task 2 (50,000,000 elements)
     n2 = 50_000_000

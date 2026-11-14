@@ -1238,6 +1238,54 @@ static void commit_vreg_float_reg(IRBuffer* ir, VReg v, int source_xmm, JITBuffe
     }
 }
 
+static void emit_save_xmm_range(JITBuffer* j, int first_xmm, int count) {
+    if (g_target_abi != VORTEX_ABI_WIN64 || count <= 0) return;
+    int stack_bytes = ((count * 16) + 15) & ~15;
+    emit_u8(j, 0x48); emit_u8(j, 0x81); emit_u8(j, 0xEC); emit_u32(j, (uint32_t)stack_bytes);
+    for (int k = 0; k < count; k++) {
+        int xr = first_xmm + k;
+        int32_t off = k * 16;
+        if (xr >= 8) emit_u8(j, 0x44);
+        emit_u8(j, 0x0F); emit_u8(j, 0x11);
+        if (off == 0) {
+            emit_u8(j, (uint8_t)(0x04 | ((xr & 7) << 3)));
+            emit_u8(j, 0x24);
+        } else if (off <= 127) {
+            emit_u8(j, (uint8_t)(0x44 | ((xr & 7) << 3)));
+            emit_u8(j, 0x24);
+            emit_u8(j, (uint8_t)off);
+        } else {
+            emit_u8(j, (uint8_t)(0x84 | ((xr & 7) << 3)));
+            emit_u8(j, 0x24);
+            emit_u32(j, (uint32_t)off);
+        }
+    }
+}
+
+static void emit_restore_xmm_range(JITBuffer* j, int first_xmm, int count) {
+    if (g_target_abi != VORTEX_ABI_WIN64 || count <= 0) return;
+    int stack_bytes = ((count * 16) + 15) & ~15;
+    for (int k = 0; k < count; k++) {
+        int xr = first_xmm + k;
+        int32_t off = k * 16;
+        if (xr >= 8) emit_u8(j, 0x44);
+        emit_u8(j, 0x0F); emit_u8(j, 0x10);
+        if (off == 0) {
+            emit_u8(j, (uint8_t)(0x04 | ((xr & 7) << 3)));
+            emit_u8(j, 0x24);
+        } else if (off <= 127) {
+            emit_u8(j, (uint8_t)(0x44 | ((xr & 7) << 3)));
+            emit_u8(j, 0x24);
+            emit_u8(j, (uint8_t)off);
+        } else {
+            emit_u8(j, (uint8_t)(0x84 | ((xr & 7) << 3)));
+            emit_u8(j, 0x24);
+            emit_u32(j, (uint32_t)off);
+        }
+    }
+    emit_u8(j, 0x48); emit_u8(j, 0x81); emit_u8(j, 0xC4); emit_u32(j, (uint32_t)stack_bytes);
+}
+
 static void emit_avx2_vector_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins) {
     int i_reg = get_vreg_int_reg(ir, ins->i_vreg, PREG_RAX, j);
     if (i_reg != PREG_RAX) emit_mov_rr(j, PREG_RAX, i_reg);
@@ -1245,17 +1293,19 @@ static void emit_avx2_vector_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins
     int lim_reg = get_vreg_int_reg(ir, ins->lim_vreg, PREG_RCX, j);
     if (lim_reg != PREG_RCX) emit_mov_rr(j, PREG_RCX, lim_reg);
 
-    /* Stage x_init in xmm5 and step in xmm4/xmm13 (xmm4 & xmm5 are never Linear-Scan allocated) */
+    /* Stage x_init in xmm5, step in xmm4, acc in xmm0 BEFORE saving Win64 xmm6..xmm15 */
     int x_reg = get_vreg_float_reg(ir, ins->x_vreg, 5, j);
     if (x_reg != 5) emit_movaps_xx(j, 5, x_reg);
 
     int step_reg = get_vreg_float_reg(ir, ins->step_vreg, 4, j);
     if (step_reg != 4) emit_movaps_xx(j, 4, step_reg);
-    emit_movaps_xx(j, 13, 4); /* keep scalar step in xmm13 */
 
     int acc_src = get_vreg_float_reg(ir, ins->acc_vreg, 0, j);
     emit_vmovss_zero_upper(j, 0, acc_src);
     emit_vxorps_ymm(j, 1);
+
+    emit_save_xmm_range(j, 6, 10);
+    emit_movaps_xx(j, 13, 4); /* keep scalar step in xmm13 after xmm6..xmm15 are saved */
 
     float const1_val = (ins->num_val != 0.0f) ? ins->num_val : 4.0f;
     float const2_val = (ins->den_base != 0.0f) ? ins->den_base : 1.0f;
@@ -1455,11 +1505,12 @@ static void emit_avx2_vector_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins
 
     patch_jump(j, tail_exit);
 
+    emit_vzeroupper(j);
+    emit_restore_xmm_range(j, 6, 10);
     commit_vreg_float_reg(ir, ins->acc_vreg, 0, j);
     commit_vreg_float_reg(ir, ins->x_vreg, 4, j);
     commit_vreg_float_reg(ir, ins->step_vreg, 5, j);
     commit_vreg_int_reg(ir, ins->i_vreg, PREG_RAX, j);
-    emit_vzeroupper(j);
 }
 
 static const int64_t g_simd_i64_03[4] __attribute__((aligned(32))) = { 0, 1, 2, 3 };
@@ -1480,6 +1531,7 @@ static void emit_vex3_ymm(JITBuffer* j, uint8_t mmmmm, uint8_t pp, int reg, int 
 
 static void emit_avx2_i64_array_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins) {
     /* Kernel uses ONLY scratch GPRs (RAX, R10, R11) and YMM0..YMM7 (16x i64 = 128 bytes/iter) */
+    emit_save_xmm_range(j, 6, 2);
     int r_i = get_vreg_int_reg(ir, ins->i_vreg, PREG_RAX, j);
     if (r_i != PREG_RAX) emit_mov_rr(j, PREG_RAX, r_i);
 
@@ -1597,11 +1649,13 @@ static void emit_avx2_i64_array_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* 
     memcpy(&j->code[tail_back], &tail_rel, 4);
 
     patch_jump(j, tail_exit);
+    emit_restore_xmm_range(j, 6, 2);
     commit_vreg_int_reg(ir, ins->i_vreg, PREG_RAX, j);
 }
 
 static void emit_avx2_grid_mod_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins) {
     /* Vectorizes 8 rows of i64 conditional-modulo accumulation at a time using vpcmpgtq + vpand + vpsubq */
+    emit_save_xmm_range(j, 6, 4);
     int r_i = get_vreg_int_reg(ir, ins->i_vreg, PREG_RAX, j);
     if (r_i != PREG_RAX) emit_mov_rr(j, PREG_RAX, r_i);
 
@@ -1680,6 +1734,7 @@ static void emit_avx2_grid_mod_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* i
 
     patch_jump(j, simd_exit);
     emit_vzeroupper(j);
+    emit_restore_xmm_range(j, 6, 4);
 
     /* Scalar tail for remaining < 8 rows (save cols, lim, rcx, rdx on stack) */
     int r_cols_t = get_vreg_int_reg(ir, ins->src2, PREG_R10, j);

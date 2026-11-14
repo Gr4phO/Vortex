@@ -35,17 +35,22 @@ pub fn main() !void {
     const t_all = std.time.microTimestamp();
 
     // Task 1
-    const n1: usize = 100_000_000;
-    const step1: f32 = 0.00000001;
-    var sum1: f32 = 0.0;
-    var x1: f32 = 0.000000005;
+    const reps1: usize = 100;
+    const n1: usize = 1_000_000;
+    const step1: f32 = 0.000001;
+    var total_pi1: f32 = 0.0;
     const t1 = std.time.microTimestamp();
-    for (0..n1) |_| {
-        sum1 = sum1 + 4.0 / (1.0 + x1 * x1);
-        x1 = x1 + step1;
+    for (0..reps1) |_| {
+        var sum1: f32 = 0.0;
+        var x1: f32 = 0.0000005;
+        for (0..n1) |_| {
+            sum1 = sum1 + 4.0 / (1.0 + x1 * x1);
+            x1 = x1 + step1;
+        }
+        total_pi1 += sum1 * step1;
     }
     const us1 = std.time.microTimestamp() - t1;
-    const pi1 = sum1 * step1;
+    const pi1 = total_pi1 * 0.01;
 
     // Task 2
     const n2: usize = 50_000_000;

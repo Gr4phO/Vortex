@@ -1600,7 +1600,7 @@ void ir_liveness_analysis(IRBuffer* ir) {
                    ins->op == IR_VEC_LOOP || ins->op == IR_RAW_RIEMANN) {
             for (int v = 0; v < ir->vreg_count; v++) {
                 VRegInfo* vi = &ir->vregs[v];
-                if (vi->is_float && vi->start_ip != -1 && vi->start_ip < ip && vi->end_ip > ip) {
+                if (vi->start_ip != -1 && vi->start_ip < ip && vi->end_ip > ip) {
                     vi->crosses_call = true;
                 }
             }

@@ -35,18 +35,24 @@ public class BenchCSharp
         long tAll = Stopwatch.GetTimestamp();
 
         // Task 1
-        const long n1 = 100000000L;
-        float step1 = 0.00000001f;
-        float sum1 = 0.0f;
-        float x1 = 0.000000005f;
+        const long reps1 = 100L;
+        const long n1 = 1000000L;
+        float step1 = 0.000001f;
+        float totalPi1 = 0.0f;
         long t1_0 = Stopwatch.GetTimestamp();
-        for (long i = 0; i < n1; i++)
+        for (long r = 0; r < reps1; r++)
         {
-            sum1 = sum1 + 4.0f / (1.0f + x1 * x1);
-            x1 = x1 + step1;
+            float sum1 = 0.0f;
+            float x1 = 0.0000005f;
+            for (long i = 0; i < n1; i++)
+            {
+                sum1 = sum1 + 4.0f / (1.0f + x1 * x1);
+                x1 = x1 + step1;
+            }
+            totalPi1 += sum1 * step1;
         }
         long us1 = ToUs(Stopwatch.GetTimestamp() - t1_0);
-        float pi1 = sum1 * step1;
+        float pi1 = totalPi1 * 0.01f;
 
         // Task 2
         const int n2 = 50000000;

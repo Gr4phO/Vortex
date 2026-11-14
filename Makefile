@@ -4,6 +4,8 @@ UNAME_S := $(shell uname -s)
 
 SRCS = src/arena.c src/lexer_parser.c src/ir_opt.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/runtime.c src/main.c
 TARGET ?= vortex
+VORTEX_VER := $(shell tr -d ' \r\n' < VERSION 2>/dev/null || echo 1.0.1)
+VORTEX_VER_FLAG := -DVORTEX_VERSION=\"$(VORTEX_VER)\"
 
 ifeq ($(UNAME_S),Darwin)
     X11_HEADER := $(firstword $(wildcard /opt/X11/include/X11/Xlib.h /usr/X11/include/X11/Xlib.h))
@@ -39,13 +41,13 @@ endif
 all: $(TARGET)
 
 $(TARGET): $(SRCS) src/vortex.h
-	$(CC) $(CFLAGS) $(VORTEX_GUI_FLAGS) $(SRCS) -o $(TARGET) $(LDFLAGS)
+	$(CC) $(CFLAGS) $(VORTEX_VER_FLAG) $(VORTEX_GUI_FLAGS) $(SRCS) -o $(TARGET) $(LDFLAGS)
 
 headless: $(SRCS) src/vortex.h
-	$(CC) $(CFLAGS) -DVORTEX_NO_X11 -DVORTEX_HEADLESS $(SRCS) -o $(TARGET) $(if $(filter Darwin,$(UNAME_S)),-pthread -lm,-pthread -ldl -lm)
+	$(CC) $(CFLAGS) $(VORTEX_VER_FLAG) -DVORTEX_NO_X11 -DVORTEX_HEADLESS $(SRCS) -o $(TARGET) $(if $(filter Darwin,$(UNAME_S)),-pthread -lm,-pthread -ldl -lm)
 
 release: $(SRCS) src/vortex.h
-	$(CC) $(RELEASE_CFLAGS) $(VORTEX_GUI_FLAGS) $(SRCS) -o $(TARGET) $(LDFLAGS)
+	$(CC) $(RELEASE_CFLAGS) $(VORTEX_VER_FLAG) $(VORTEX_GUI_FLAGS) $(SRCS) -o $(TARGET) $(LDFLAGS)
 	$(POST_RELEASE)
 
 test: $(TARGET)

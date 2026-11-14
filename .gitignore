@@ -15,11 +15,9 @@ vortex
 build/
 dist/
 target/
+releases/
 
-# Official standalone CLI releases & SVG benchmark assets
-!releases/
-!releases/v1.0.0/
-!releases/v1.0.0/vortex-*
+# Official SVG benchmark assets
 !docs/
 !docs/assets/
 !docs/assets/*.svg

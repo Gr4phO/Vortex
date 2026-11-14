@@ -32,17 +32,22 @@ func main() {
 	tAll := time.Now()
 
 	// Task 1
-	const n1 int64 = 100000000
-	var step1 float32 = 0.00000001
-	var sum1 float32 = 0.0
-	var x1 float32 = 0.000000005
+	const reps1 int64 = 100
+	const n1 int64 = 1000000
+	var step1 float32 = 0.000001
+	var totalPi1 float32 = 0.0
 	t1 := time.Now()
-	for i := int64(0); i < n1; i++ {
-		sum1 = sum1 + 4.0/(1.0+x1*x1)
-		x1 = x1 + step1
+	for r := int64(0); r < reps1; r++ {
+		var sum1 float32 = 0.0
+		var x1 float32 = 0.0000005
+		for i := int64(0); i < n1; i++ {
+			sum1 = sum1 + 4.0/(1.0+x1*x1)
+			x1 = x1 + step1
+		}
+		totalPi1 += sum1 * step1
 	}
 	us1 := time.Since(t1).Microseconds()
-	pi1 := sum1 * step1
+	pi1 := totalPi1 * 0.01
 
 	// Task 2
 	const n2 int = 50000000

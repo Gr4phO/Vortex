@@ -1,98 +1,94 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1160" height="720" viewBox="0 0 1160 720">
 <rect width="100%" height="100%" rx="12" fill="#05070A"/>
 <rect x="16" y="16" width="1128" height="688" rx="10" fill="#0A0E14" stroke="#171E29" stroke-width="1"/>
-<text x="40" y="54" fill="#E2E8F0" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="20" font-weight="700">Temps d'Execution Total (T1..T5) — Vortex v1.0.0 vs 10 Langages</text>
-<text x="40" y="78" fill="#64748B" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="13">AMD Ryzen 5 5500 (6C/12T @ 3.60 GHz, Windows 11 x64) · Mediane 5 runs · Plus court = plus rapide · * = etalonne Zen 3</text>
-<rect x="780" y="40" width="12" height="12" rx="3" fill="#10B981"/>
-<text x="798" y="51" fill="#34D399" font-family="Segoe UI, Inter, sans-serif" font-size="12" font-weight="600">Vortex (#1)</text>
-<rect x="886" y="40" width="12" height="12" rx="3" fill="#334155"/>
-<text x="904" y="51" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="12">Mesure localement</text>
-<rect x="1028" y="40" width="12" height="12" rx="3" fill="#1E293B" stroke="#475569" stroke-dasharray="2,2"/>
-<text x="1046" y="51" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="12">Etalonne*</text>
-<line x1="310.0" y1="102" x2="310.0" y2="538" stroke="#121822" stroke-width="1"/>
-<text x="310.0" y="556" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">0 ms</text>
-<line x1="417.7" y1="102" x2="417.7" y2="538" stroke="#121822" stroke-width="1"/>
-<text x="417.7" y="556" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">500 ms</text>
-<line x1="525.4" y1="102" x2="525.4" y2="538" stroke="#121822" stroke-width="1"/>
-<text x="525.4" y="556" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">1000 ms</text>
-<line x1="633.1" y1="102" x2="633.1" y2="538" stroke="#121822" stroke-width="1"/>
-<text x="633.1" y="556" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">1500 ms</text>
-<line x1="740.8" y1="102" x2="740.8" y2="538" stroke="#121822" stroke-width="1"/>
-<text x="740.8" y="556" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">2000 ms</text>
-<line x1="848.5" y1="102" x2="848.5" y2="538" stroke="#121822" stroke-width="1"/>
-<text x="848.5" y="556" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">2500 ms</text>
+<text x="40" y="54" fill="#E2E8F0" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="20" font-weight="700">Temps d'Execution Total (T1..T5) — Vortex v1.0.1 vs C/C++ (-O3 &amp; -ffast-math), Rust, Java, C#, JS</text>
+<text x="40" y="78" fill="#64748B" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="13">AMD Ryzen 5 5500 (6C/12T @ 3.60 GHz, Windows 11 x64) · 100% mesure localement (mediane 5 runs, 3 pour Python) · Plus court = meilleur</text>
+<rect x="860" y="38" width="12" height="12" rx="3" fill="#10B981"/>
+<text x="878" y="49" fill="#34D399" font-family="Segoe UI, Inter, sans-serif" font-size="12" font-weight="600">Vortex (#1)</text>
+<rect x="965" y="38" width="12" height="12" rx="3" fill="#334155"/>
+<text x="983" y="49" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="12">Mesure localement</text>
+<line x1="310.0" y1="102" x2="310.0" y2="540" stroke="#121822" stroke-width="1"/>
+<text x="310.0" y="558" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">0 ms</text>
+<line x1="434.4" y1="102" x2="434.4" y2="540" stroke="#121822" stroke-width="1"/>
+<text x="434.4" y="558" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">400 ms</text>
+<line x1="558.9" y1="102" x2="558.9" y2="540" stroke="#121822" stroke-width="1"/>
+<text x="558.9" y="558" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">800 ms</text>
+<line x1="683.3" y1="102" x2="683.3" y2="540" stroke="#121822" stroke-width="1"/>
+<text x="683.3" y="558" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">1200 ms</text>
+<line x1="807.8" y1="102" x2="807.8" y2="540" stroke="#121822" stroke-width="1"/>
+<text x="807.8" y="558" text-anchor="middle" fill="#475569" font-family="Consolas, monospace" font-size="11">1600 ms</text>
 <rect x="28" y="108" width="1104" height="40" rx="6" fill="#052E22" fill-opacity="0.45" stroke="#10B981" stroke-opacity="0.4" stroke-width="1"/>
 <text x="44" y="127" fill="#34D399" font-family="Consolas, monospace" font-size="13" font-weight="700">#1</text>
-<text x="80" y="127" fill="#FFFFFF" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="700">Vortex v1.0.0</text>
-<text x="80" y="142" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">JIT x86-64 AVX2 (--release)</text>
+<text x="80" y="127" fill="#FFFFFF" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="700">Vortex v1.0.1</text>
+<text x="80" y="142" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">JIT x86-64 AVX2/FMA3 (--release, T1=-ffast-math equiv.)</text>
 <rect x="310" y="118" width="560" height="20" rx="4" fill="#0E131B"/>
-<rect x="310" y="118" width="88.4" height="20" rx="4" fill="#10B981"/>
-<text x="888" y="132" fill="#34D399" font-family="Consolas, monospace" font-size="13" font-weight="700">410.30 ms</text>
+<rect x="310" y="118" width="126.9" height="20" rx="4" fill="#10B981"/>
+<text x="888" y="132" fill="#34D399" font-family="Consolas, monospace" font-size="13" font-weight="700">407.88 ms</text>
 <text x="1116" y="132" text-anchor="end" fill="#34D399" font-family="Consolas, monospace" font-size="12">REFERENCE #1</text>
 <text x="44" y="175" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#2</text>
-<text x="80" y="175" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">C++</text>
-<text x="80" y="190" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">Clang++ 23 (-O3 -march=native)</text>
+<text x="80" y="175" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">C++ (-ffast-math)</text>
+<text x="80" y="190" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">Clang++ 23 (-O3 -march=native -ffast-math)</text>
 <rect x="310" y="166" width="560" height="20" rx="4" fill="#0E131B"/>
-<rect x="310" y="166" width="117.9" height="20" rx="4" fill="#334155"/>
-<text x="888" y="180" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">547.28 ms</text>
-<text x="1116" y="180" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.33x</text>
+<rect x="310" y="166" width="146.3" height="20" rx="4" fill="#334155"/>
+<text x="888" y="180" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">470.20 ms</text>
+<text x="1116" y="180" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.15x</text>
 <text x="44" y="223" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#3</text>
-<text x="80" y="223" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">Rust</text>
-<text x="80" y="238" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">rustc 1.99 (-C opt-level=3)</text>
+<text x="80" y="223" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">C (-ffast-math)</text>
+<text x="80" y="238" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">Clang 23 (-O3 -march=native -ffast-math)</text>
 <rect x="310" y="214" width="560" height="20" rx="4" fill="#0E131B"/>
-<rect x="310" y="214" width="126.4" height="20" rx="4" fill="#334155"/>
-<text x="888" y="228" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">587.08 ms</text>
-<text x="1116" y="228" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.43x</text>
+<rect x="310" y="214" width="163.5" height="20" rx="4" fill="#334155"/>
+<text x="888" y="228" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">525.63 ms</text>
+<text x="1116" y="228" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.29x</text>
 <text x="44" y="271" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#4</text>
-<text x="80" y="271" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">C</text>
-<text x="80" y="286" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">Clang 23 (-O3 -march=native)</text>
+<text x="80" y="271" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">C++ (-O3)</text>
+<text x="80" y="286" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">Clang++ 23 (-O3 -march=native, IEEE-754 strict)</text>
 <rect x="310" y="262" width="560" height="20" rx="4" fill="#0E131B"/>
-<rect x="310" y="262" width="133.9" height="20" rx="4" fill="#334155"/>
-<text x="888" y="276" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">621.72 ms</text>
-<text x="1116" y="276" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.52x</text>
+<rect x="310" y="262" width="171.6" height="20" rx="4" fill="#334155"/>
+<text x="888" y="276" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">551.55 ms</text>
+<text x="1116" y="276" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.35x</text>
 <text x="44" y="319" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#5</text>
-<text x="80" y="319" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">Go 1.23*</text>
-<text x="80" y="334" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">gc (etalonne Zen 3)</text>
+<text x="80" y="319" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">Rust (-O3)</text>
+<text x="80" y="334" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">rustc 1.99 (-C opt-level=3 -C target-cpu=native)</text>
 <rect x="310" y="310" width="560" height="20" rx="4" fill="#0E131B"/>
-<rect x="310" y="310" width="141.2" height="20" rx="4" fill="#1E293B" stroke="#475569" stroke-dasharray="4,3" stroke-width="1"/>
-<text x="888" y="324" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">655.50 ms</text>
-<text x="1116" y="324" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.60x</text>
+<rect x="310" y="310" width="183.1" height="20" rx="4" fill="#334155"/>
+<text x="888" y="324" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">588.56 ms</text>
+<text x="1116" y="324" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.44x</text>
 <text x="44" y="367" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#6</text>
-<text x="80" y="367" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">Java</text>
-<text x="80" y="382" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">OpenJDK HotSpot 17</text>
+<text x="80" y="367" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">C (-O3)</text>
+<text x="80" y="382" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">Clang 23 (-O3 -march=native, IEEE-754 strict)</text>
 <rect x="310" y="358" width="560" height="20" rx="4" fill="#0E131B"/>
-<rect x="310" y="358" width="160.5" height="20" rx="4" fill="#334155"/>
-<text x="888" y="372" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">745.02 ms</text>
-<text x="1116" y="372" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.82x</text>
+<rect x="310" y="358" width="184.5" height="20" rx="4" fill="#334155"/>
+<text x="888" y="372" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">592.92 ms</text>
+<text x="1116" y="372" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">1.45x</text>
 <text x="44" y="415" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#7</text>
-<text x="80" y="415" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">C# (.NET)</text>
-<text x="80" y="430" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">csc v4.8 / RyuJIT</text>
+<text x="80" y="415" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">Java (HotSpot 17)</text>
+<text x="80" y="430" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">OpenJDK HotSpot 17 (JIT C2)</text>
 <rect x="310" y="406" width="560" height="20" rx="4" fill="#0E131B"/>
-<rect x="310" y="406" width="196.2" height="20" rx="4" fill="#334155"/>
-<text x="888" y="420" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">910.82 ms</text>
-<text x="1116" y="420" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">2.22x</text>
+<rect x="310" y="406" width="257.7" height="20" rx="4" fill="#334155"/>
+<text x="888" y="420" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">828.39 ms</text>
+<text x="1116" y="420" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">2.03x</text>
 <text x="44" y="463" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#8</text>
-<text x="80" y="463" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">Node.js</text>
-<text x="80" y="478" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">v26.13 (V8 JIT)</text>
+<text x="80" y="463" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">C# (.NET v4.8)</text>
+<text x="80" y="478" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">csc v4.8 / RyuJIT x64</text>
 <rect x="310" y="454" width="560" height="20" rx="4" fill="#0E131B"/>
-<rect x="310" y="454" width="340.4" height="20" rx="4" fill="#334155"/>
-<text x="888" y="468" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">1 580.34 ms</text>
-<text x="1116" y="468" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">3.85x</text>
+<rect x="310" y="454" width="280.9" height="20" rx="4" fill="#334155"/>
+<text x="888" y="468" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">902.90 ms</text>
+<text x="1116" y="468" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">2.21x</text>
 <text x="44" y="511" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#9</text>
-<text x="80" y="511" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">LuaJIT 2.1*</text>
-<text x="80" y="526" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">Trace JIT (etalonne Zen 3)</text>
+<text x="80" y="511" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="13.5" font-weight="600">Node.js v26</text>
+<text x="80" y="526" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="11">Node.js v26.13 (V8 JIT + worker_threads)</text>
 <rect x="310" y="502" width="560" height="20" rx="4" fill="#0E131B"/>
-<rect x="310" y="502" width="520.8" height="20" rx="4" fill="#1E293B" stroke="#475569" stroke-dasharray="4,3" stroke-width="1"/>
-<text x="888" y="516" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">2 418.00 ms</text>
-<text x="1116" y="516" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">5.89x</text>
-<rect x="28" y="572" width="1104" height="46" rx="6" fill="#080B10" stroke="#171E29" stroke-width="1"/>
-<text x="44" y="599" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#10</text>
-<text x="80" y="593" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="13" font-weight="600">Python 3.12 (CPython — hors echelle)</text>
-<text x="80" y="608" fill="#475569" font-family="Segoe UI, Inter, sans-serif" font-size="11">Interprete standard sans JIT (3 runs)</text>
-<rect x="310" y="586" width="560" height="18" rx="4" fill="#131922" stroke="#26303D" stroke-dasharray="6,4"/>
-<text x="590.0" y="599" text-anchor="middle" fill="#64748B" font-family="Consolas, monospace" font-size="11.5">HORS ECHELLE (&gt; 16x limite graphique)</text>
-<text x="888" y="599" fill="#64748B" font-family="Consolas  monospace" font-size="13" font-weight="700">42 891.01 ms</text>
-<text x="1116" y="599" text-anchor="end" fill="#475569" font-family="Consolas, monospace" font-size="12">104.5x</text>
+<rect x="310" y="502" width="487.5" height="20" rx="4" fill="#334155"/>
+<text x="888" y="516" fill="#E2E8F0" font-family="Consolas, monospace" font-size="13" font-weight="700">1 566.88 ms</text>
+<text x="1116" y="516" text-anchor="end" fill="#64748B" font-family="Consolas, monospace" font-size="12">3.84x</text>
+<rect x="28" y="574" width="1104" height="46" rx="6" fill="#080B10" stroke="#171E29" stroke-width="1"/>
+<text x="44" y="601" fill="#475569" font-family="Consolas, monospace" font-size="13" font-weight="700">#10</text>
+<text x="80" y="595" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="13" font-weight="600">Python 3.12 (CPython — hors echelle)</text>
+<text x="80" y="610" fill="#475569" font-family="Segoe UI, Inter, sans-serif" font-size="11">Interprete standard sans JIT (mediane 3 runs)</text>
+<rect x="310" y="588" width="560" height="18" rx="4" fill="#131922" stroke="#26303D" stroke-dasharray="6,4"/>
+<text x="590.0" y="601" text-anchor="middle" fill="#64748B" font-family="Consolas, monospace" font-size="11.5">HORS ECHELLE (&gt; 22x limite graphique)</text>
+<text x="888" y="601" fill="#64748B" font-family="Consolas, monospace" font-size="13" font-weight="700">40 421.43 ms</text>
+<text x="1116" y="601" text-anchor="end" fill="#475569" font-family="Consolas, monospace" font-size="12">99.1x</text>
 <rect x="28" y="652" width="1104" height="36" rx="6" fill="#070A0F" stroke="#171E29"/>
-<text x="44" y="674" fill="#64748B" font-family="Consolas, monospace" font-size="12">Vortex v1.0.0 (#1):  T1=10.15 ms (#1)  ·  T2=111.16 ms  ·  T3=10.75 ms (#1)  ·  T4=257.19 ms (#1)  ·  T5=12.56 ms  ·  100% checksums exacts</text>
+<text x="44" y="674" fill="#64748B" font-family="Consolas, monospace" font-size="12">Vortex v1.0.1 (#1):  T1=9.87 ms  ·  T2=119.44 ms  ·  T3=11.38 ms (#1)  ·  T4=259.89 ms (#1)  ·  T5=12.68 ms  ·  100% checksums valides</text>
 </svg>

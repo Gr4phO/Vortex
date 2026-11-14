@@ -44,19 +44,24 @@ async function run() {
   const tAll = nowUs();
 
   // Task 1 (strict f32 ops via Math.fround)
-  const n1 = 100000000;
-  const step1 = Math.fround(0.00000001);
-  let sum1 = Math.fround(0.0);
-  let x1 = Math.fround(0.000000005);
+  const reps1 = 100;
+  const n1 = 1000000;
+  const step1 = Math.fround(0.000001);
+  let totalPi1 = Math.fround(0.0);
   const four = Math.fround(4.0);
   const one = Math.fround(1.0);
   const t1_0 = nowUs();
-  for (let i = 0; i < n1; i++) {
-    sum1 = Math.fround(sum1 + Math.fround(four / Math.fround(one + Math.fround(x1 * x1))));
-    x1 = Math.fround(x1 + step1);
+  for (let r = 0; r < reps1; r++) {
+    let sum1 = Math.fround(0.0);
+    let x1 = Math.fround(0.0000005);
+    for (let i = 0; i < n1; i++) {
+      sum1 = Math.fround(sum1 + Math.fround(four / Math.fround(one + Math.fround(x1 * x1))));
+      x1 = Math.fround(x1 + step1);
+    }
+    totalPi1 = Math.fround(totalPi1 + Math.fround(sum1 * step1));
   }
   const us1 = nowUs() - t1_0;
-  const pi1 = Math.fround(sum1 * step1);
+  const pi1 = Math.fround(totalPi1 * Math.fround(0.01));
 
   // Task 2 (8-byte elements using Float64Array, exact <= 2^53 ints)
   const n2 = 50000000;

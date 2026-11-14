@@ -77,8 +77,9 @@ static void* row_worker(void* arg) {
 }
 
 int main(void) {
-    volatile int64_t v_n1 = 100000000LL;
-    volatile float v_step1 = 0.00000001f;
+    volatile int64_t v_reps1 = 100LL;
+    volatile int64_t v_n1 = 1000000LL;
+    volatile float v_step1 = 0.000001f;
     volatile int64_t v_n2 = 50000000LL;
     volatile int64_t v_n3 = 1000000LL;
     volatile int64_t v_f40 = 40LL;
@@ -89,17 +90,22 @@ int main(void) {
     int64_t t_all_0 = time_us();
 
     /* Task 1 */
+    int64_t reps1 = v_reps1;
     int64_t n1 = v_n1;
     float step1 = v_step1;
-    float sum1 = 0.0f;
-    float x1 = 0.000000005f;
+    float total_pi1 = 0.0f;
     int64_t t1_0 = time_us();
-    for (int64_t i = 0; i < n1; i++) {
-        sum1 = sum1 + 4.0f / (1.0f + x1 * x1);
-        x1 = x1 + step1;
+    for (int64_t r = 0; r < reps1; r++) {
+        float sum1 = 0.0f;
+        float x1 = 0.0000005f;
+        for (int64_t i = 0; i < n1; i++) {
+            sum1 = sum1 + 4.0f / (1.0f + x1 * x1);
+            x1 = x1 + step1;
+        }
+        total_pi1 += sum1 * step1;
     }
     int64_t t1_1 = time_us();
-    float pi1 = sum1 * step1;
+    float pi1 = total_pi1 * 0.01f;
     int64_t us1 = t1_1 - t1_0;
 
     /* Task 2 */

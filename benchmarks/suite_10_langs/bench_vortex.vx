@@ -39,29 +39,36 @@ fn bench_task3(n3: i64) -> i64 {
     return sum3;
 }
 
+let dyn_zero: i64 = num_workers() - num_workers();
 let t_all_0: i64 = time_us();
 
 // -----------------------------------------------------------------------------
-// TASK 1: SIMD & Pure Floating-Point (Riemann Pi, 100,000,000 iterations, f32)
+// TASK 1: SIMD & Pure Floating-Point (Riemann Pi, 100 x 1,000,000 = 100M f32)
+//         step = 1e-6f ensures 1 ULP < step across [0, 1] (no IEEE-754 freeze)
 // -----------------------------------------------------------------------------
-let n1: i64 = 100000000;
-let step1: f32 = 0.00000001;
-let mut sum1: f32 = 0.0;
-let mut x1: f32 = 0.000000005;
+let reps1: i64 = 100 + dyn_zero;
+let n1: i64 = 1000000 + dyn_zero;
+let step1: f32 = 0.000001;
+let mut total_pi1: f32 = 0.0;
 
 let t1_0: i64 = time_us();
-for i1 in 0..n1 {
-    sum1 = sum1 + 4.0 / (1.0 + x1 * x1);
-    x1 = x1 + step1;
+for r1 in 0..reps1 {
+    let mut sum1: f32 = 0.0;
+    let mut x1: f32 = 0.0000005;
+    for i1 in 0..n1 {
+        sum1 = sum1 + 4.0 / (1.0 + x1 * x1);
+        x1 = x1 + step1;
+    }
+    total_pi1 = total_pi1 + sum1 * step1;
 }
 let t1_1: i64 = time_us();
-let pi1: f32 = sum1 * step1;
+let pi1: f32 = total_pi1 * 0.01;
 let us1: i64 = t1_1 - t1_0;
 
 // -----------------------------------------------------------------------------
 // TASK 2: Memory Bandwidth & Vector Reduction (50,000,000 i64 elements)
 // -----------------------------------------------------------------------------
-let n2: i64 = 50000000;
+let n2: i64 = 50000000 + dyn_zero;
 let t2_0: i64 = time_us();
 let arr2: *i64 = slice_i64(n2);
 let mut cur2: i64 = 1;
@@ -84,7 +91,7 @@ let us2: i64 = t2_1 - t2_0;
 // -----------------------------------------------------------------------------
 // TASK 3: Massive Memory Allocation (1,000,000 Node structs + full reduction)
 // -----------------------------------------------------------------------------
-let n3: i64 = 1000000;
+let n3: i64 = 1000000 + dyn_zero;
 let t3_0: i64 = time_us();
 let sum3: i64 = bench_task3(n3);
 let t3_1: i64 = time_us();
@@ -93,10 +100,11 @@ let us3: i64 = t3_1 - t3_0;
 // -----------------------------------------------------------------------------
 // TASK 4: Function Calls & Intensive Recursion (fib(40) + 100M step_fn calls)
 // -----------------------------------------------------------------------------
+let f_arg: i64 = 40 + dyn_zero;
 let t4_0: i64 = time_us();
-let f40: i64 = fib(40);
+let f40: i64 = fib(f_arg);
 let mut acc4: i64 = 0;
-let n4: i64 = 100000000;
+let n4: i64 = 100000000 + dyn_zero;
 for i4 in 0..n4 {
     acc4 = step_fn(acc4, 7919);
 }
@@ -107,8 +115,8 @@ let us4: i64 = t4_1 - t4_0;
 // -----------------------------------------------------------------------------
 // TASK 5: Multi-Core Parallelism (2000 x 50000 = 100,000,000 cells across cores)
 // -----------------------------------------------------------------------------
-let rows5: i64 = 2000;
-let cols5: i64 = 50000;
+let rows5: i64 = 2000 + dyn_zero;
+let cols5: i64 = 50000 + dyn_zero;
 let t5_0: i64 = time_us();
 let row_sums: *i64 = slice_i64(rows5);
 parallel_for r5 in 0..rows5 {

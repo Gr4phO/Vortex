@@ -1,92 +1,81 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="600" viewBox="0 0 1160 600">
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="540" viewBox="0 0 1160 540">
 <rect width="100%" height="100%" rx="12" fill="#05070A"/>
-<rect x="16" y="16" width="1128" height="568" rx="10" fill="#0A0E14" stroke="#171E29" stroke-width="1"/>
-<text x="40" y="54" fill="#E2E8F0" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="20" font-weight="700">Temps de Compilation / Demarrage &amp; Taille Binaire / Runtime</text>
-<text x="40" y="78" fill="#64748B" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="13">Comparatif systeme · Vortex CLI 100% autonome (compilateur + JIT + runtime = 205.5 Ko, demarrage = 72.3 ms)</text>
-<rect x="32" y="98" width="536" height="466" rx="8" fill="#070A0F" stroke="#171E29"/>
-<rect x="592" y="98" width="536" height="466" rx="8" fill="#070A0F" stroke="#171E29"/>
-<text x="52" y="126" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="14" font-weight="700">Compilation / Demarrage (ms) — plus bas = meilleur</text>
+<rect x="16" y="16" width="1128" height="508" rx="10" fill="#0A0E14" stroke="#171E29" stroke-width="1"/>
+<text x="40" y="54" fill="#E2E8F0" font-family="Segoe UI, Inter, system-ui, sans-serif" font-size="20" font-weight="700">Compilation AOT + Demarrage/JIT &amp; Taille Binaire / Runtime</text>
+<text x="40" y="78" fill="#64748B" font-family="Segoe UI, Inter, sans-serif" font-size="13">Separation explicite Compilation AOT vs Demarrage/JIT · Vortex CLI 206.5 Ko (compilateur + JIT + runtime, 0 ms AOT, 76.0 ms JIT+start)</text>
+<rect x="32" y="98" width="536" height="404" rx="8" fill="#070A0F" stroke="#171E29"/>
+<rect x="592" y="98" width="536" height="404" rx="8" fill="#070A0F" stroke="#171E29"/>
+<text x="52" y="126" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="14" font-weight="700">Compilation AOT (clair) + Startup/JIT (fonce) (ms)</text>
 <text x="612" y="126" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="14" font-weight="700">Taille Binaire / Runtime (Ko) — echelle log10</text>
-<text x="52" y="164" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">LuaJIT 2.1*</text>
-<rect x="180" y="153" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="180" y="153" width="4.0" height="14" rx="3" fill="#1E293B"/>
-<text x="432" y="164" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">12.0 ms</text>
-<rect x="42" y="184" width="516" height="32" rx="5" fill="#052E22" fill-opacity="0.45" stroke="#10B981" stroke-opacity="0.35"/>
-<text x="52" y="204" fill="#34D399" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="700">Vortex v1.0.0</text>
-<rect x="180" y="193" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="180" y="193" width="6.7" height="14" rx="3" fill="#10B981"/>
-<text x="432" y="204" fill="#34D399" font-family="Consolas  monospace" font-size="12" font-weight="700">72.3 ms</text>
-<text x="52" y="244" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Node.js</text>
-<rect x="180" y="233" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="180" y="233" width="31.8" height="14" rx="3" fill="#334155"/>
-<text x="432" y="244" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">344.6 ms</text>
-<text x="52" y="284" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Python 3.12</text>
-<rect x="180" y="273" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="180" y="273" width="37.2" height="14" rx="3" fill="#334155"/>
-<text x="432" y="284" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">403.1 ms</text>
-<text x="52" y="324" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Go 1.23*</text>
-<rect x="180" y="313" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="180" y="313" width="38.8" height="14" rx="3" fill="#1E293B"/>
-<text x="432" y="324" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">420.0 ms</text>
-<text x="52" y="364" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">C# (.NET)</text>
-<rect x="180" y="353" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="180" y="353" width="60.4" height="14" rx="3" fill="#334155"/>
-<text x="432" y="364" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">654.9 ms</text>
-<text x="52" y="404" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Java</text>
-<rect x="180" y="393" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="180" y="393" width="83.1" height="14" rx="3" fill="#334155"/>
-<text x="432" y="404" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">900.2 ms</text>
-<text x="52" y="444" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">C</text>
-<rect x="180" y="433" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="180" y="433" width="132.6" height="14" rx="3" fill="#334155"/>
-<text x="432" y="444" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">1 436.7 ms</text>
-<text x="52" y="484" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Rust</text>
-<rect x="180" y="473" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="180" y="473" width="220.9" height="14" rx="3" fill="#334155"/>
-<text x="432" y="484" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">2 393.5 ms</text>
-<text x="52" y="524" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">C++</text>
-<rect x="180" y="513" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="180" y="513" width="231.6" height="14" rx="3" fill="#334155"/>
-<text x="432" y="524" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">2 508.8 ms</text>
-<text x="612" y="164" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Java</text>
-<rect x="740" y="153" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="740" y="153" width="27.6" height="14" rx="3" fill="#334155"/>
-<text x="992" y="164" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">3.8 Ko</text>
-<text x="612" y="204" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">C# (.NET)</text>
-<rect x="740" y="193" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="740" y="193" width="33.6" height="14" rx="3" fill="#334155"/>
-<text x="992" y="204" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">5.0 Ko</text>
-<text x="612" y="244" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">C</text>
-<rect x="740" y="233" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="740" y="233" width="88.1" height="14" rx="3" fill="#334155"/>
-<text x="992" y="244" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">68.5 Ko</text>
-<text x="612" y="284" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">C++</text>
-<rect x="740" y="273" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="740" y="273" width="90.4" height="14" rx="3" fill="#334155"/>
-<text x="992" y="284" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">76.5 Ko</text>
-<text x="612" y="324" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Python 3.12</text>
-<rect x="740" y="313" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="740" y="313" width="107.2" height="14" rx="3" fill="#334155"/>
-<text x="992" y="324" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">171.2 Ko</text>
-<rect x="602" y="344" width="516" height="32" rx="5" fill="#052E22" fill-opacity="0.45" stroke="#10B981" stroke-opacity="0.35"/>
-<text x="612" y="364" fill="#34D399" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="700">Vortex v1.0.0</text>
-<rect x="740" y="353" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="740" y="353" width="111.0" height="14" rx="3" fill="#10B981"/>
-<text x="992" y="364" fill="#34D399" font-family="Consolas  monospace" font-size="12" font-weight="700">205.5 Ko</text>
-<text x="612" y="404" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">LuaJIT 2.1*</text>
-<rect x="740" y="393" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="740" y="393" width="130.4" height="14" rx="3" fill="#1E293B"/>
-<text x="992" y="404" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">520.0 Ko</text>
-<text x="612" y="444" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Go 1.23*</text>
-<rect x="740" y="433" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="740" y="433" width="159.5" height="14" rx="3" fill="#1E293B"/>
-<text x="992" y="444" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">2 100.0 Ko</text>
-<text x="612" y="484" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Rust</text>
-<rect x="740" y="473" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="740" y="473" width="174.5" height="14" rx="3" fill="#334155"/>
-<text x="992" y="484" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">4 309.5 Ko</text>
-<text x="612" y="524" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Node.js</text>
-<rect x="740" y="513" width="240" height="14" rx="3" fill="#0E131B"/>
-<rect x="740" y="513" width="239.5" height="14" rx="3" fill="#334155"/>
-<text x="992" y="524" fill="#E2E8F0" font-family="Consolas  monospace" font-size="12" font-weight="400">97 751.8 Ko</text>
+<rect x="42" y="142" width="516" height="32" rx="5" fill="#052E22" fill-opacity="0.45" stroke="#10B981" stroke-opacity="0.35"/>
+<text x="52" y="162" fill="#34D399" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="700">Vortex v1.0.1</text>
+<rect x="188" y="151" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="188" y="151" width="7.6" height="14" rx="3" fill="#10B981"/>
+<text x="424" y="162" fill="#34D399" font-family="Consolas, monospace" font-size="11.5" font-weight="700">0 + 76.0 ms</text>
+<text x="52" y="204" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Node.js v26</text>
+<rect x="188" y="193" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="188" y="193" width="32.5" height="14" rx="3" fill="#334155"/>
+<text x="424" y="204" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">0 + 325.6 ms</text>
+<text x="52" y="246" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">C# (.NET v4.8)</text>
+<rect x="188" y="235" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="188" y="235" width="31.3" height="14" rx="3" fill="#475569"/>
+<rect x="219.3" y="235" width="7.8" height="14" rx="3" fill="#1E293B"/>
+<text x="424" y="246" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">314 + 78 ms</text>
+<text x="52" y="288" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Java (HotSpot 17)</text>
+<rect x="188" y="277" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="188" y="277" width="71.4" height="14" rx="3" fill="#475569"/>
+<rect x="259.4" y="277" width="22.2" height="14" rx="3" fill="#1E293B"/>
+<text x="424" y="288" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">715 + 222 ms</text>
+<text x="52" y="330" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">C (Clang -O3)</text>
+<rect x="188" y="319" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="188" y="319" width="90.4" height="14" rx="3" fill="#475569"/>
+<rect x="278.4" y="319" width="5.3" height="14" rx="3" fill="#1E293B"/>
+<text x="424" y="330" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">904 + 53 ms</text>
+<text x="52" y="372" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Rust (rustc)</text>
+<rect x="188" y="361" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="188" y="361" width="104.7" height="14" rx="3" fill="#475569"/>
+<rect x="292.7" y="361" width="4.8" height="14" rx="3" fill="#1E293B"/>
+<text x="424" y="372" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">1048 + 48 ms</text>
+<text x="52" y="414" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">C++ (Clang++ -O3)</text>
+<rect x="188" y="403" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="188" y="403" width="169.4" height="14" rx="3" fill="#475569"/>
+<rect x="357.4" y="403" width="7.0" height="14" rx="3" fill="#1E293B"/>
+<text x="424" y="414" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">1696 + 70 ms</text>
+<text x="52" y="456" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Python 3.12</text>
+<rect x="188" y="445" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="188" y="445" width="225.0" height="14" rx="3" fill="#334155"/>
+<text x="424" y="456" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">0 + 2252.2 ms</text>
+<text x="612" y="162" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Java (HotSpot 17)</text>
+<rect x="748" y="151" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="748" y="151" width="26.3" height="14" rx="3" fill="#334155"/>
+<text x="984" y="162" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">3.8 Ko (+VM)</text>
+<text x="612" y="204" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">C# (.NET v4.8)</text>
+<rect x="748" y="193" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="748" y="193" width="31.5" height="14" rx="3" fill="#334155"/>
+<text x="984" y="204" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">5.0 Ko (+VM)</text>
+<text x="612" y="246" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">C (Clang -O3)</text>
+<rect x="748" y="235" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="748" y="235" width="82.8" height="14" rx="3" fill="#334155"/>
+<text x="984" y="246" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">68.5 Ko</text>
+<text x="612" y="288" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">C++ (Clang++ -O3)</text>
+<rect x="748" y="277" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="748" y="277" width="84.9" height="14" rx="3" fill="#334155"/>
+<text x="984" y="288" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">76.5 Ko</text>
+<text x="612" y="330" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Python 3.12</text>
+<rect x="748" y="319" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="748" y="319" width="100.7" height="14" rx="3" fill="#334155"/>
+<text x="984" y="330" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">171.2 Ko (+DLL)</text>
+<rect x="602" y="352" width="516" height="32" rx="5" fill="#052E22" fill-opacity="0.45" stroke="#10B981" stroke-opacity="0.35"/>
+<text x="612" y="372" fill="#34D399" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="700">Vortex v1.0.1</text>
+<rect x="748" y="361" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="748" y="361" width="104.4" height="14" rx="3" fill="#10B981"/>
+<text x="984" y="372" fill="#34D399" font-family="Consolas, monospace" font-size="11.5" font-weight="700">206.5 Ko</text>
+<text x="612" y="414" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Rust (rustc)</text>
+<rect x="748" y="403" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="748" y="403" width="163.9" height="14" rx="3" fill="#334155"/>
+<text x="984" y="414" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">4 309.5 Ko</text>
+<text x="612" y="456" fill="#E2E8F0" font-family="Segoe UI, Inter, sans-serif" font-size="12.5" font-weight="500">Node.js v26</text>
+<rect x="748" y="445" width="225" height="14" rx="3" fill="#0E131B"/>
+<rect x="748" y="445" width="225.0" height="14" rx="3" fill="#334155"/>
+<text x="984" y="456" fill="#E2E8F0" font-family="Consolas, monospace" font-size="11.5">97 751.8 Ko</text>
 </svg>

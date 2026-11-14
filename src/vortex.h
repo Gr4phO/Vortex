@@ -63,7 +63,9 @@
 #endif
 #endif
 
-#define VORTEX_VERSION "1.0.0"
+#ifndef VORTEX_VERSION
+#define VORTEX_VERSION "1.0.1"
+#endif
 
 /* ========================================================================= */
 /* 1. MEMORY ARCHITECTURE CONSTANTS & TYPES                                  */

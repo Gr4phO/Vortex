@@ -27,17 +27,22 @@ public final class BenchJava {
         long tAll = System.nanoTime();
 
         // Task 1
-        final long n1 = 100_000_000L;
-        final float step1 = 0.00000001f;
-        float sum1 = 0.0f;
-        float x1 = 0.000000005f;
+        final long reps1 = 100L;
+        final long n1 = 1_000_000L;
+        final float step1 = 0.000001f;
+        float totalPi1 = 0.0f;
         long t1_0 = System.nanoTime();
-        for (long i = 0; i < n1; i++) {
-            sum1 = sum1 + 4.0f / (1.0f + x1 * x1);
-            x1 = x1 + step1;
+        for (long r = 0; r < reps1; r++) {
+            float sum1 = 0.0f;
+            float x1 = 0.0000005f;
+            for (long i = 0; i < n1; i++) {
+                sum1 = sum1 + 4.0f / (1.0f + x1 * x1);
+                x1 = x1 + step1;
+            }
+            totalPi1 += sum1 * step1;
         }
         long us1 = (System.nanoTime() - t1_0) / 1000L;
-        float pi1 = sum1 * step1;
+        float pi1 = totalPi1 * 0.01f;
 
         // Task 2
         final int n2 = 50_000_000;

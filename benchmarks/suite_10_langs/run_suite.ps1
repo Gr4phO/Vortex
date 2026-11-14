@@ -8,7 +8,15 @@ param(
 $ErrorActionPreference = "Stop"
 $SuiteDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Resolve-Path (Join-Path $SuiteDir "..\..")
-$VortexBin = Join-Path $RepoRoot "releases\v1.0.0\vortex-windows-x64.exe"
+$VortexBin = Join-Path $SuiteDir "bench_vortex_cli.exe"
+$clangBuild = Get-Command clang -ErrorAction SilentlyContinue
+if ($clangBuild) {
+    Push-Location $RepoRoot
+    & clang -std=c99 -Os -Wall -Wextra -flto -ffunction-sections -fdata-sections src/arena.c src/lexer_parser.c src/ir_opt.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/runtime.c src/main.c -o $VortexBin -luser32 -lgdi32 "-Wl,--gc-sections" -s
+    Pop-Location
+} elseif (Test-Path (Join-Path $RepoRoot "vortex.exe")) {
+    $VortexBin = Join-Path $RepoRoot "vortex.exe"
+}
 
 function Get-Median {
     param([double[]]$Values)
@@ -100,36 +108,34 @@ function Add-BenchmarkResult {
     $ram = ($RunData | ForEach-Object { [double]$_.PeakMb } | Measure-Object -Maximum).Maximum
     $sample = $RunData[0].Metrics
 
-    $startupOrCompileMs = if ($CompileMs -gt 0) {
-        [math]::Round($CompileMs, 2)
-    } else {
-        [math]::Round([math]::Max(0.1, $wall - $tot), 2)
-    }
+    $aotCompileMs = [math]::Round($CompileMs, 2)
+    $runtimeOverheadMs = [math]::Round([math]::Max(0.1, $wall - $tot), 2)
 
     $obj = [ordered]@{
-        Language         = $Language
-        Toolchain        = $Toolchain
-        Status           = $Status
-        Runs             = $NumRuns
-        Task1Ms          = [math]::Round($t1, 3)
-        Task2Ms          = [math]::Round($t2, 3)
-        Task3Ms          = [math]::Round($t3, 3)
-        Task4Ms          = [math]::Round($t4, 3)
-        Task5Ms          = [math]::Round($t5, 3)
-        TotalMs          = [math]::Round($tot, 3)
-        WallMs           = [math]::Round($wall, 2)
-        CompileStartupMs = $startupOrCompileMs
-        BinaryKb         = [math]::Round($BinaryKb, 2)
-        PeakRamMb        = [math]::Round($ram, 2)
-        Task1Pi          = $sample["TASK1_PI"]
-        Task2Chk         = $sample["TASK2_CHK"]
-        Task3Chk         = $sample["TASK3_CHK"]
-        Task4Chk         = $sample["TASK4_CHK"]
-        Task5Chk         = $sample["TASK5_CHK"]
+        Language          = $Language
+        Toolchain         = $Toolchain
+        Status            = $Status
+        Runs              = $NumRuns
+        Task1Ms           = [math]::Round($t1, 3)
+        Task2Ms           = [math]::Round($t2, 3)
+        Task3Ms           = [math]::Round($t3, 3)
+        Task4Ms           = [math]::Round($t4, 3)
+        Task5Ms           = [math]::Round($t5, 3)
+        TotalMs           = [math]::Round($tot, 3)
+        WallMs            = [math]::Round($wall, 2)
+        CompileAotMs      = $aotCompileMs
+        StartupRuntimeMs  = $runtimeOverheadMs
+        BinaryKb          = [math]::Round($BinaryKb, 2)
+        PeakRamMb         = [math]::Round($ram, 2)
+        Task1Pi           = $sample["TASK1_PI"]
+        Task2Chk          = $sample["TASK2_CHK"]
+        Task3Chk          = $sample["TASK3_CHK"]
+        Task4Chk          = $sample["TASK4_CHK"]
+        Task5Chk          = $sample["TASK5_CHK"]
     }
     [void]$Results.Add($obj)
-    Write-Host ("[{0}] T1={1}ms T2={2}ms T3={3}ms T4={4}ms T5={5}ms | Total={6}ms | Comp/Start={7}ms | Size={8}KB | RAM={9}MB" -f `
-        $Language, $obj.Task1Ms, $obj.Task2Ms, $obj.Task3Ms, $obj.Task4Ms, $obj.Task5Ms, $obj.TotalMs, $obj.CompileStartupMs, $obj.BinaryKb, $obj.PeakRamMb)
+    Write-Host ("[{0}] T1={1}ms T2={2}ms T3={3}ms T4={4}ms T5={5}ms | Total={6}ms | CompileAOT={7}ms | Startup/JIT={8}ms | Size={9}KB | RAM={10}MB" -f `
+        $Language, $obj.Task1Ms, $obj.Task2Ms, $obj.Task3Ms, $obj.Task4Ms, $obj.Task5Ms, $obj.TotalMs, $obj.CompileAotMs, $obj.StartupRuntimeMs, $obj.BinaryKb, $obj.PeakRamMb)
     Write-Host ("    Checksums: PI={0} CHK2={1} CHK3={2} CHK4={3} CHK5={4}" -f `
         $obj.Task1Pi, $obj.Task2Chk, $obj.Task3Chk, $obj.Task4Chk, $obj.Task5Chk)
 }
@@ -162,11 +168,25 @@ if ($clangCmd) {
             [void]$runsC.Add((Invoke-MeasuredProcess -FilePath $cExe -ArgumentList @() -WorkDir $SuiteDir))
         }
         $cVer = (cmd /c "clang --version 2>&1" | Select-Object -First 1).Trim()
-        Add-BenchmarkResult -Language "C" -Toolchain "Clang -O3 -march=native ($cVer)" -Status "Mesure localement" -CompileMs $sw.Elapsed.TotalMilliseconds -BinaryKb $cSizeKb -NumRuns $Runs -RunData $runsC
+        Add-BenchmarkResult -Language "C (-O3)" -Toolchain "Clang -O3 -march=native ($cVer)" -Status "Mesure localement" -CompileMs $sw.Elapsed.TotalMilliseconds -BinaryKb $cSizeKb -NumRuns $Runs -RunData $runsC
+    }
+
+    $cFastExe = Join-Path $SuiteDir "bench_c_fast.exe"
+    $swFast = [System.Diagnostics.Stopwatch]::StartNew()
+    & clang -O3 -march=native -ffast-math (Join-Path $SuiteDir "bench_c.c") -o $cFastExe
+    $swFast.Stop()
+    if ($LASTEXITCODE -eq 0) {
+        $cfSizeKb = (Get-Item $cFastExe).Length / 1024.0
+        $runsCFast = [System.Collections.ArrayList]::new()
+        for ($i = 0; $i -lt $Runs; $i++) {
+            [void]$runsCFast.Add((Invoke-MeasuredProcess -FilePath $cFastExe -ArgumentList @() -WorkDir $SuiteDir))
+        }
+        $cVer2 = (cmd /c "clang --version 2>&1" | Select-Object -First 1).Trim()
+        Add-BenchmarkResult -Language "C (-O3 -ffast-math)" -Toolchain "Clang -O3 -march=native -ffast-math ($cVer2)" -Status "Mesure localement" -CompileMs $swFast.Elapsed.TotalMilliseconds -BinaryKb $cfSizeKb -NumRuns $Runs -RunData $runsCFast
     }
 }
 
-# 3. C++ (Clang++ -O3 -march=native)
+# 3. C++ (Clang++ -O3 -march=native & -ffast-math)
 $clangppCmd = Get-Command clang++ -ErrorAction SilentlyContinue
 if ($clangppCmd) {
     $cppExe = Join-Path $SuiteDir "bench_cpp.exe"
@@ -180,7 +200,21 @@ if ($clangppCmd) {
             [void]$runsCpp.Add((Invoke-MeasuredProcess -FilePath $cppExe -ArgumentList @() -WorkDir $SuiteDir))
         }
         $cppVer = (cmd /c "clang++ --version 2>&1" | Select-Object -First 1).Trim()
-        Add-BenchmarkResult -Language "C++" -Toolchain "Clang++ -O3 -march=native ($cppVer)" -Status "Mesure localement" -CompileMs $sw.Elapsed.TotalMilliseconds -BinaryKb $cppSizeKb -NumRuns $Runs -RunData $runsCpp
+        Add-BenchmarkResult -Language "C++ (-O3)" -Toolchain "Clang++ -O3 -march=native ($cppVer)" -Status "Mesure localement" -CompileMs $sw.Elapsed.TotalMilliseconds -BinaryKb $cppSizeKb -NumRuns $Runs -RunData $runsCpp
+    }
+
+    $cppFastExe = Join-Path $SuiteDir "bench_cpp_fast.exe"
+    $swCppFast = [System.Diagnostics.Stopwatch]::StartNew()
+    & clang++ -std=c++20 -O3 -march=native -ffast-math (Join-Path $SuiteDir "bench_cpp.cpp") -o $cppFastExe
+    $swCppFast.Stop()
+    if ($LASTEXITCODE -eq 0) {
+        $cppfSizeKb = (Get-Item $cppFastExe).Length / 1024.0
+        $runsCppFast = [System.Collections.ArrayList]::new()
+        for ($i = 0; $i -lt $Runs; $i++) {
+            [void]$runsCppFast.Add((Invoke-MeasuredProcess -FilePath $cppFastExe -ArgumentList @() -WorkDir $SuiteDir))
+        }
+        $cppVer2 = (cmd /c "clang++ --version 2>&1" | Select-Object -First 1).Trim()
+        Add-BenchmarkResult -Language "C++ (-O3 -ffast-math)" -Toolchain "Clang++ -O3 -march=native -ffast-math ($cppVer2)" -Status "Mesure localement" -CompileMs $swCppFast.Elapsed.TotalMilliseconds -BinaryKb $cppfSizeKb -NumRuns $Runs -RunData $runsCppFast
     }
 }
 

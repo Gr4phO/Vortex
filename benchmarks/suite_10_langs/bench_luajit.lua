@@ -25,19 +25,24 @@ end
 local t_all = now_us()
 
 -- Task 1 (f32 semantics via float[1])
-local n1 = 100000000
-local step1 = ffi.cast("float", 0.00000001)
-local sum1 = ffi.cast("float", 0.0)
-local x1 = ffi.cast("float", 0.000000005)
+local reps1 = 100
+local n1 = 1000000
+local step1 = ffi.cast("float", 0.000001)
+local total_pi1 = ffi.cast("float", 0.0)
 local four = ffi.cast("float", 4.0)
 local one = ffi.cast("float", 1.0)
 local t1_0 = now_us()
-for i = 0, n1 - 1 do
-    sum1 = ffi.cast("float", sum1 + ffi.cast("float", four / ffi.cast("float", one + ffi.cast("float", x1 * x1))))
-    x1 = ffi.cast("float", x1 + step1)
+for r = 0, reps1 - 1 do
+    local sum1 = ffi.cast("float", 0.0)
+    local x1 = ffi.cast("float", 0.0000005)
+    for i = 0, n1 - 1 do
+        sum1 = ffi.cast("float", sum1 + ffi.cast("float", four / ffi.cast("float", one + ffi.cast("float", x1 * x1))))
+        x1 = ffi.cast("float", x1 + step1)
+    end
+    total_pi1 = ffi.cast("float", total_pi1 + ffi.cast("float", sum1 * step1))
 end
 local us1 = now_us() - t1_0
-local pi1 = tonumber(sum1 * step1)
+local pi1 = tonumber(total_pi1 * 0.01)
 
 -- Task 2 (50,000,000 int64 elements)
 local n2 = 50000000

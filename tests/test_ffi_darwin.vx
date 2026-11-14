@@ -1,0 +1,28 @@
+// Test FFI C Natif Dynamique pour Vortex (macOS Darwin)
+
+extern "libSystem.B.dylib" fn puts(s: str) -> i32;
+extern "libSystem.B.dylib" fn abs(n: i64) -> i64;
+extern "libSystem.B.dylib" fn strlen(s: str) -> i64;
+extern "libSystem.B.dylib" fn pow(x: f64, y: f64) -> f64;
+extern "libSystem.B.dylib" fn sqrt(x: f64) -> f64;
+extern "libSystem.B.dylib" fn memset(dst: ptr, ch: i32, n: i64) -> ptr;
+
+struct TextBuffer {
+    w0: i64,
+    w1: i64,
+    w2: i64,
+    w3: i64
+}
+
+unsafe {
+    puts("--- [DARWIN FFI TEST: libSystem.B.dylib] ---");
+    print(abs(-42));
+    print(pow(2.0, 10.0));
+    print(sqrt(144.0));
+    print(strlen("Vortex"));
+
+    let tb = TextBuffer { w0: 0, w1: 0, w2: 0, w3: 0 };
+    memset(tb, 65, 8);
+    puts(tb);
+    puts("--- [ALL DARWIN FFI TESTS COMPLETED] ---");
+}

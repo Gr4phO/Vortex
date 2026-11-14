@@ -1,4 +1,4 @@
-﻿/*
+/*
  * VORTEX PROGRAMMING LANGUAGE - RUNTIME, GUI, THREAD POOL, BUILTINS & PACKAGER
  */
 
@@ -58,6 +58,15 @@ bool vortex_is_cross_target(void) {
 #define MAX_INTERN_CSTRS 1024
 static const char* g_intern_cstrs[MAX_INTERN_CSTRS];
 static int g_intern_cstr_count = 0;
+
+static void vx_str_copy(char* dst, size_t cap, const char* src) {
+    if (!dst || cap == 0) return;
+    if (!src) { dst[0] = '\0'; return; }
+    size_t slen = strlen(src);
+    if (slen >= cap) slen = cap - 1;
+    if (slen > 0) memcpy(dst, src, slen);
+    dst[slen] = '\0';
+}
 
 const char* vortex_intern_cstr(const char* s) {
     if (!s) return "";
@@ -146,26 +155,19 @@ void vortex_get_self_path(char* out, size_t cap, const char* argv0) {
 #ifdef _WIN32
     DWORD len = GetModuleFileNameA(NULL, out, (DWORD)cap);
     if (len == 0 || len >= cap) {
-        if (argv0) {
-            strncpy(out, argv0, cap - 1);
-            out[cap - 1] = '\0';
-        }
+        if (argv0) vx_str_copy(out, cap, argv0);
     }
 #elif defined(__APPLE__)
     uint32_t sz = (uint32_t)cap;
     if (_NSGetExecutablePath(out, &sz) != 0) {
-        if (argv0) {
-            strncpy(out, argv0, cap - 1);
-            out[cap - 1] = '\0';
-        }
+        if (argv0) vx_str_copy(out, cap, argv0);
     }
 #else
     ssize_t rlen = readlink("/proc/self/exe", out, cap - 1);
-    if (rlen > 0) {
+    if (rlen > 0 && (size_t)rlen < cap) {
         out[rlen] = '\0';
     } else if (argv0) {
-        strncpy(out, argv0, cap - 1);
-        out[cap - 1] = '\0';
+        vx_str_copy(out, cap, argv0);
     }
 #endif
 }
@@ -1321,30 +1323,28 @@ static void import_normalize_slashes(char* s) {
 }
 
 static void import_canonicalize_path(const char* path, char* out, size_t cap) {
+    if (!out || cap == 0) return;
     char raw[1024];
-    strncpy(raw, path ? path : "", sizeof(raw) - 1);
-    raw[sizeof(raw) - 1] = '\0';
+    vx_str_copy(raw, sizeof(raw), path ? path : "");
 #ifdef _WIN32
     char full[1024];
     if (_fullpath(full, raw, sizeof(full)) != NULL) {
-        strncpy(out, full, cap - 1);
-        out[cap - 1] = '\0';
+        vx_str_copy(out, cap, full);
     } else {
-        strncpy(out, raw, cap - 1);
-        out[cap - 1] = '\0';
+        vx_str_copy(out, cap, raw);
     }
     import_normalize_slashes(out);
     for (size_t i = 0; out[i]; i++) {
         if (out[i] >= 'A' && out[i] <= 'Z') out[i] = (char)(out[i] - 'A' + 'a');
     }
 #else
-    char full[1024];
-    if (realpath(raw, full) != NULL) {
-        strncpy(out, full, cap - 1);
-        out[cap - 1] = '\0';
+    /* Pass NULL so POSIX realpath allocates dynamically (avoids __realpath_chk < PATH_MAX abort under _FORTIFY_SOURCE) */
+    char* full = realpath(raw, NULL);
+    if (full != NULL) {
+        vx_str_copy(out, cap, full);
+        free(full);
     } else {
-        strncpy(out, raw, cap - 1);
-        out[cap - 1] = '\0';
+        vx_str_copy(out, cap, raw);
     }
     import_normalize_slashes(out);
 #endif
@@ -1375,12 +1375,12 @@ static bool import_mark_seen(VortexImportResolver* r, const char* canon_path) {
 }
 
 static void import_extract_dir(const char* file_path, char* out_dir, size_t cap) {
+    if (!out_dir || cap == 0) return;
     if (!file_path || !file_path[0]) {
         out_dir[0] = '\0';
         return;
     }
-    strncpy(out_dir, file_path, cap - 1);
-    out_dir[cap - 1] = '\0';
+    vx_str_copy(out_dir, cap, file_path);
     import_normalize_slashes(out_dir);
     char* sep = strrchr(out_dir, '/');
     if (sep) *sep = '\0';
@@ -1399,10 +1399,9 @@ static bool import_is_regular_file(const char* path) {
 }
 
 static bool import_resolve_target(const char* spec, const char* parent_file, char* out, size_t cap) {
-    if (!spec || !spec[0]) return false;
+    if (!spec || !spec[0] || !out || cap == 0) return false;
     char norm_spec[512];
-    strncpy(norm_spec, spec, sizeof(norm_spec) - 1);
-    norm_spec[sizeof(norm_spec) - 1] = '\0';
+    vx_str_copy(norm_spec, sizeof(norm_spec), spec);
     import_normalize_slashes(norm_spec);
 
     char parent_dir[512];
@@ -1410,11 +1409,10 @@ static bool import_resolve_target(const char* spec, const char* parent_file, cha
 
     /* 1. Resolve relative to parent file directory */
     if (parent_dir[0]) {
-        char cand[1024];
-        snprintf(cand, sizeof(cand), "%s/%s", parent_dir, norm_spec);
-        if (import_is_regular_file(cand)) {
-            strncpy(out, cand, cap - 1);
-            out[cap - 1] = '\0';
+        char cand[1280];
+        int n = snprintf(cand, sizeof(cand), "%s/%s", parent_dir, norm_spec);
+        if (n > 0 && (size_t)n < sizeof(cand) && import_is_regular_file(cand)) {
+            vx_str_copy(out, cap, cand);
             return true;
         }
     }
@@ -1883,22 +1881,25 @@ static void ad_hoc_codesign_if_apple(const char* output_path) {
 
 static FILE* open_companion_runtime(const char* self_path, const VortexTargetDesc* td, char* out_found, size_t cap) {
     const char* ext = (td->abi == VORTEX_ABI_WIN64) ? ".exe" : "";
-    char dir[1024] = {0};
-    strncpy(dir, self_path, sizeof(dir) - 1);
+    char dir[1024];
+    vx_str_copy(dir, sizeof(dir), self_path);
     char* slash1 = strrchr(dir, '/');
     char* slash2 = strrchr(dir, '\\');
     char* sep = (slash1 && slash2) ? ((slash1 > slash2) ? slash1 : slash2) : (slash1 ? slash1 : slash2);
     if (sep) {
         *sep = '\0';
     } else {
-        strcpy(dir, ".");
+        vx_str_copy(dir, sizeof(dir), ".");
     }
 
-    snprintf(out_found, cap, "%s/vortex-%s%s", dir, td->name, ext);
+    char cand[1280];
+    snprintf(cand, sizeof(cand), "%s/vortex-%s%s", dir, td->name, ext);
+    vx_str_copy(out_found, cap, cand);
     FILE* f = fopen(out_found, "rb");
     if (f) return f;
 
-    snprintf(out_found, cap, "%s/targets/vortex-%s%s", dir, td->name, ext);
+    snprintf(cand, sizeof(cand), "%s/targets/vortex-%s%s", dir, td->name, ext);
+    vx_str_copy(out_found, cap, cand);
     return fopen(out_found, "rb");
 }
 
@@ -2019,14 +2020,14 @@ static bool emit_macho64_arm64_binary(const char* output_path, const uint8_t* ji
     memset(&pagezero, 0, sizeof(pagezero));
     pagezero.cmd = 0x19U;       /* LC_SEGMENT_64 */
     pagezero.cmdsize = sizeof(VxMachSegCmd64);
-    strncpy(pagezero.segname, "__PAGEZERO", sizeof(pagezero.segname));
+    memcpy(pagezero.segname, "__PAGEZERO", 10);
     pagezero.vmsize = 0x100000000ULL;
 
     VxMachSegCmd64 text_seg;
     memset(&text_seg, 0, sizeof(text_seg));
     text_seg.cmd = 0x19U;
     text_seg.cmdsize = sizeof(VxMachSegCmd64) + sizeof(VxMachSect64);
-    strncpy(text_seg.segname, "__TEXT", sizeof(text_seg.segname));
+    memcpy(text_seg.segname, "__TEXT", 6);
     text_seg.vmaddr = text_vmaddr;
     text_seg.vmsize = seg_size;
     text_seg.fileoff = 0;
@@ -2037,8 +2038,8 @@ static bool emit_macho64_arm64_binary(const char* output_path, const uint8_t* ji
 
     VxMachSect64 text_sect;
     memset(&text_sect, 0, sizeof(text_sect));
-    strncpy(text_sect.sectname, "__text", sizeof(text_sect.sectname));
-    strncpy(text_sect.segname, "__TEXT", sizeof(text_sect.segname));
+    memcpy(text_sect.sectname, "__text", 6);
+    memcpy(text_sect.segname, "__TEXT", 6);
     text_sect.addr = text_vmaddr + text_off;
     text_sect.size = text_size;
     text_sect.offset = (uint32_t)text_off;
@@ -2098,10 +2099,10 @@ int vortex_cmd_build(int argc, char** argv) {
                 return 1;
             }
         } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
-            strncpy(output_path, argv[++i], sizeof(output_path) - 1);
+            vx_str_copy(output_path, sizeof(output_path), argv[++i]);
         } else if (argv[i][0] != '-') {
             if (!input_path) input_path = argv[i];
-            else if (output_path[0] == '\0') strncpy(output_path, argv[i], sizeof(output_path) - 1);
+            else if (output_path[0] == '\0') vx_str_copy(output_path, sizeof(output_path), argv[i]);
         }
     }
 
@@ -2113,11 +2114,12 @@ int vortex_cmd_build(int argc, char** argv) {
 
     const VortexTargetDesc* td = vortex_get_target_desc();
     if (output_path[0] == '\0') {
-        strncpy(output_path, input_path, sizeof(output_path) - 1);
+        vx_str_copy(output_path, sizeof(output_path), input_path);
         char* dot = strrchr(output_path, '.');
         if (dot) *dot = '\0';
         if (td->abi == VORTEX_ABI_WIN64) {
-            strncat(output_path, ".exe", sizeof(output_path) - strlen(output_path) - 1);
+            size_t cur = strlen(output_path);
+            if (cur + 4 < sizeof(output_path)) memcpy(output_path + cur, ".exe", 5);
         }
     }
 

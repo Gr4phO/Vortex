@@ -28,17 +28,22 @@ fn main() {
     let t_all = Instant::now();
 
     // Task 1
-    let n1: i64 = black_box(100_000_000);
-    let step1: f32 = black_box(0.00000001_f32);
-    let mut sum1: f32 = 0.0_f32;
-    let mut x1: f32 = 0.000000005_f32;
+    let reps1: i64 = black_box(100);
+    let n1: i64 = black_box(1_000_000);
+    let step1: f32 = black_box(0.000001_f32);
+    let mut total_pi1: f32 = 0.0_f32;
     let t1 = Instant::now();
-    for _ in 0..n1 {
-        sum1 = sum1 + 4.0_f32 / (1.0_f32 + x1 * x1);
-        x1 = x1 + step1;
+    for _ in 0..reps1 {
+        let mut sum1: f32 = 0.0_f32;
+        let mut x1: f32 = 0.0000005_f32;
+        for _ in 0..n1 {
+            sum1 = sum1 + 4.0_f32 / (1.0_f32 + x1 * x1);
+            x1 = x1 + step1;
+        }
+        total_pi1 += sum1 * step1;
     }
     let us1 = t1.elapsed().as_micros();
-    let pi1: f32 = sum1 * step1;
+    let pi1: f32 = total_pi1 * 0.01_f32;
 
     // Task 2
     let n2: usize = black_box(50_000_000);
