@@ -12,7 +12,7 @@ Uniquement le compilateur/CLI autonome `vortex` (zéro dépendance externe, aucu
 
 | Plateforme | Architecture | Lien Direct (Dépôt / GitHub Releases) | Taille | Exécution Rapide |
 | :--- | :--- | :--- | :---: | :--- |
-| **Windows** | `x86-64` | **[`vortex-windows-x64.exe` (local)](releases/v1.0.0/vortex-windows-x64.exe)** · [GitHub Release](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-windows-x64.exe) | **188.5 Ko** (`193 024` o) | `.\vortex-windows-x64.exe run --release script.vx` |
+| **Windows** | `x86-64` | **[`vortex-windows-x64.exe` (local)](releases/v1.0.0/vortex-windows-x64.exe)** · [GitHub Release](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-windows-x64.exe) | **205.5 Ko** (`210 432` o) | `.\vortex-windows-x64.exe run --release script.vx` |
 | **Linux** | `x86-64` (headless) | **[`vortex-linux-x64` (GitHub Release)](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-linux-x64)** | `< 200 Ko` (CI `ubuntu-latest`) | `chmod +x vortex-linux-x64 && ./vortex-linux-x64 --headless run --release script.vx` |
 | **macOS** | `x86-64` (Darwin) | **[`vortex-macos-x64` (GitHub Release)](https://github.com/corbac10099/Vortex/releases/download/v1.0.0/vortex-macos-x64)** | `< 200 Ko` (CI `macos-latest`) | `chmod +x vortex-macos-x64 && ./vortex-macos-x64 --headless run --release script.vx` |
 
@@ -80,16 +80,16 @@ Campagne exécutée sur **AMD Ryzen 5 5500** (`6C/12T @ 3,60 GHz`, Windows 11 x6
 
 | Langage | Compilation / Démarrage | T1 : Riemann `f32` (100M) | T2 : Tableau `i64` (50M) | T3 : Structs `Node` (1M) | T4 : `fib(40)` + 100M calls | T5 : Grille 12 threads | Binaire / Runtime |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Vortex v1.0.0 (`--release`)** | **`80.63 ms`** | 🏆 **`10.10 ms`** | 🥉 **`109.90 ms`** | 🏆 **`11.57 ms`** | `525.52 ms` | `11.10 ms` | **`188.5 Ko`** *(autonome)* |
-| **C (`Clang 23 -O3`)** | `872.31 ms` | `73.82 ms` | `136.48 ms` | `58.42 ms` | `327.58 ms` | `8.19 ms` | `68.5 Ko` |
-| **C++ (`Clang++ 23 -O3`)** | `1 688.53 ms` | `72.88 ms` | `141.52 ms` | `38.31 ms` | **`266.72 ms`** | **`7.65 ms`** | `76.5 Ko` |
-| **Rust (`rustc 1.99 -O3`)** | `912.27 ms` | `82.05 ms` | `108.94 ms` | `57.27 ms` | `305.69 ms` | `8.61 ms` | `4 309.5 Ko` |
+| **Vortex v1.0.0 (`--release`) — `#1`** | **`72.30 ms`** | 🏆 **`10.15 ms`** | 🥉 **`111.16 ms`** | 🏆 **`10.75 ms`** | 🏆 **`257.19 ms`** | `12.56 ms` | **`205.5 Ko`** *(autonome)* |
+| **C++ (`Clang++ 23 -O3`) — `#2`** | `2 508.83 ms` | `74.91 ms` | `149.83 ms` | `41.12 ms` | `269.35 ms` | **`7.90 ms`** | `76.5 Ko` |
+| **Rust (`rustc 1.99 -O3`) — `#3`** | `2 393.49 ms` | `84.12 ms` | **`110.19 ms`** | `60.39 ms` | `314.14 ms` | `10.07 ms` | `4 309.5 Ko` |
+| **C (`Clang 23 -O3`) — `#4`** | `1 436.69 ms` | `74.98 ms` | `143.16 ms` | `66.41 ms` | `322.40 ms` | `9.82 ms` | `68.5 Ko` |
 | **Go 1.23\*** *(étalonné Zen 3)* | `420.00 ms`\* | `88.00 ms`\* | `135.00 ms`\* | `62.00 ms`\* | `360.00 ms`\* | `10.50 ms`\* | `2 100.0 Ko`\* |
-| **Java (HotSpot 17)** | `643.13 ms` | `244.02 ms` | `113.70 ms` | 🥈 `14.78 ms` | `320.84 ms` | `30.06 ms` | `3.8 Ko` *(+ 12,5 Mo JVM)* |
-| **C# (.NET v4.8)** | `292.20 ms` | `81.81 ms` | **`108.77 ms`** | `68.94 ms` | `623.28 ms` | `15.50 ms` | `5.0 Ko` *(+ .NET CLR)* |
-| **JavaScript (Node v26)** | `319.73 ms` | `262.60 ms` | `204.98 ms` | `83.35 ms` | `1 018.56 ms` | `55.58 ms` | `97 751.8 Ko` (`node.exe`) |
+| **Java (HotSpot 17)** | `900.22 ms` | `246.42 ms` | `125.88 ms` | 🥈 `15.73 ms` | `326.25 ms` | `29.66 ms` | `3.8 Ko` *(+ 12,5 Mo JVM)* |
+| **C# (.NET v4.8)** | `654.86 ms` | `82.89 ms` | `110.59 ms` | `77.05 ms` | `636.31 ms` | `16.87 ms` | `5.0 Ko` *(+ .NET CLR)* |
+| **JavaScript (Node v26)** | `344.55 ms` | `264.85 ms` | `199.86 ms` | `78.11 ms` | `983.10 ms` | `62.97 ms` | `97 751.8 Ko` (`node.exe`) |
 | **LuaJIT 2.1\*** *(étalonné Zen 3)* | `12.00 ms`\* | `115.00 ms`\* | `165.00 ms`\* | `28.00 ms`\* | `1 930.00 ms`\* | `180.00 ms`\* | `520.0 Ko`\* |
-| **Python 3.12 (CPython)** | `1 883.24 ms` | `6 454.61 ms` | `7 578.33 ms` | `604.72 ms` | `20 626.96 ms` | `4 897.81 ms` | `6 885.0 Ko` |
+| **Python 3.12 (CPython)** | `403.10 ms` | `6 599.29 ms` | `7 379.21 ms` | `627.99 ms` | `22 069.13 ms` | `5 292.36 ms` | `6 885.0 Ko` |
 
 - 📄 **Rapport complet & protocole** : [`benchmarks/BENCHMARK_REPORT_v1.0.0.md`](benchmarks/BENCHMARK_REPORT_v1.0.0.md)
 - 🚀 **Feuille de route "Road to #1" (Inlining, LICM, SIB/LEA, FMA3, Peephole)** : [`docs/OPTIMIZATION_ROADMAP.md`](docs/OPTIMIZATION_ROADMAP.md)

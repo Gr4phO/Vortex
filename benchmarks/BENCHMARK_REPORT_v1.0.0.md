@@ -19,7 +19,7 @@
 ### Statut des 10 Langages Évalués
 
 - **8 langages mesurés localement** (médiane sur 5 exécutions complètes sur cette machine ; 3 pour Python 3.12) :
-  1. **Vortex `v1.0.0`** — JIT x86-64 AVX2 + FMA3 (`--release`, binaire CLI autonome `188.5 Ko` / `193 024 octets`)
+  1. **Vortex `v1.0.0`** — JIT x86-64 AVX2 + FMA3 (`--release`, binaire CLI autonome `205.5 Ko` / `210 432 octets`)
   2. **C** — `clang version 23.1.4` (`-O3 -march=native`)
   3. **C++** — `clang++ version 23.1.4` (`-O3 -march=native -std=c++17`)
   4. **Rust** — `rustc 1.99.1 (58cf8f9c3 2026-10-13)` (`-C opt-level=3 -C target-cpu=native`)
@@ -52,16 +52,16 @@
 
 | Rang | Langage | Méthode | T1 : Riemann `f32` (100M) | T2 : Tableau `i64` (50M) | T3 : Structs `Node` (1M) | T4 : `fib(40)` + 100M calls | T5 : Grille 12 threads | Total Somme T1..T5 |
 | :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **#1** | **C++ (`Clang++ -O3`)** | Mesuré localement | `72.88 ms` | `141.52 ms` | `38.31 ms` | **`266.72 ms`** | **`7.65 ms`** | **`527.28 ms`** |
-| **#2** | **Rust (`rustc -O3`)** | Mesuré localement | `82.05 ms` | `108.94 ms` | `57.27 ms` | `305.69 ms` | `8.61 ms` | `559.65 ms` |
-| **#3** | **C (`Clang -O3`)** | Mesuré localement | `73.82 ms` | `136.48 ms` | `58.42 ms` | `327.58 ms` | `8.19 ms` | `595.85 ms` |
-| **#4** | **Go 1.23\*** | \* Étalonné (réf. Zen 3) | `88.00 ms` | `135.00 ms` | `62.00 ms` | `360.00 ms` | `10.50 ms` | `655.50 ms` |
-| **#5** | **Vortex v1.0.0 (`--release`)** | Mesuré localement | 🏆 **`10.10 ms`** | 🥉 **`109.90 ms`** | 🏆 **`11.57 ms`** | `525.52 ms` | `11.10 ms` | **`669.03 ms`** |
-| **#6** | **Java (HotSpot 17)** | Mesuré localement | `244.02 ms` | `113.70 ms` | 🥈 `14.78 ms` | `320.84 ms` | `30.06 ms` | `725.71 ms` |
-| **#7** | **C# (.NET v4.8)** | Mesuré localement | `81.81 ms` | **`108.77 ms`** | `68.94 ms` | `623.28 ms` | `15.50 ms` | `895.75 ms` |
-| **#8** | **JavaScript (Node v26)** | Mesuré localement | `262.60 ms` | `204.98 ms` | `83.35 ms` | `1 018.56 ms` | `55.58 ms` | `1 610.39 ms` |
+| **#1** | **Vortex v1.0.0 (`--release`)** | Mesuré localement | 🏆 **`10.15 ms`** | 🥉 `111.16 ms` | 🏆 **`10.75 ms`** | 🏆 **`257.19 ms`** | `12.56 ms` | 🏆 **`410.30 ms`** |
+| **#2** | **C++ (`Clang++ -O3`)** | Mesuré localement | `74.91 ms` | `149.83 ms` | `41.12 ms` | `269.35 ms` | **`7.90 ms`** | `547.28 ms` |
+| **#3** | **Rust (`rustc -O3`)** | Mesuré localement | `84.12 ms` | **`110.19 ms`** | `60.39 ms` | `314.14 ms` | `10.07 ms` | `587.08 ms` |
+| **#4** | **C (`Clang -O3`)** | Mesuré localement | `74.98 ms` | `143.16 ms` | `66.41 ms` | `322.40 ms` | `9.82 ms` | `621.72 ms` |
+| **#5** | **Go 1.23\*** | \* Étalonné (réf. Zen 3) | `88.00 ms` | `135.00 ms` | `62.00 ms` | `360.00 ms` | `10.50 ms` | `655.50 ms` |
+| **#6** | **Java (HotSpot 17)** | Mesuré localement | `246.42 ms` | `125.88 ms` | 🥈 `15.73 ms` | `326.25 ms` | `29.66 ms` | `745.02 ms` |
+| **#7** | **C# (.NET v4.8)** | Mesuré localement | `82.89 ms` | `110.59 ms` | `77.05 ms` | `636.31 ms` | `16.87 ms` | `910.82 ms` |
+| **#8** | **JavaScript (Node v26)** | Mesuré localement | `264.85 ms` | `199.86 ms` | `78.11 ms` | `983.10 ms` | `62.97 ms` | `1 580.34 ms` |
 | **#9** | **LuaJIT 2.1\*** | \* Étalonné (réf. Zen 3) | `115.00 ms` | `165.00 ms` | `28.00 ms` | `1 930.00 ms` | `180.00 ms` | `2 418.00 ms` |
-| **#10** | **Python 3.12 (CPython)** | Mesuré localement (3 runs) | `6 454.61 ms` | `7 578.33 ms` | `604.72 ms` | `20 626.96 ms` | `4 897.81 ms` | `40 084.45 ms` |
+| **#10** | **Python 3.12 (CPython)** | Mesuré localement (3 runs) | `6 599.29 ms` | `7 379.21 ms` | `627.99 ms` | `22 069.13 ms` | `5 292.36 ms` | `42 891.01 ms` |
 
 > *Note de mesure* : `TotalMs` correspond à la médiane du total mesuré en interne sur les exécutions indépendantes (pouvant différer de quelques dixièmes de milliseconde de la somme des médianes individuelles par tâche).
 
@@ -72,9 +72,9 @@
 | **T1** — Riemann `f32` (100M) | `8.91 ms` | **`10.10 ms`** *(32-way FMA3)* | Bruit mesure `< 1.2 ms` (**7.2× > C++**) | 🏆 **#1 / 10** |
 | **T2** — Tableau `i64` (50M) | `209.58 ms` | **`109.90 ms`** *(AVX2 i64 + Zero-Copy)* | **1.91× plus rapide (`-47.6 %`)** | 🥉 **#3 / 10** (**bat C & C++**, < 1 % de Rust) |
 | **T3** — 1M Structs `Node` | `20.02 ms` | **`11.57 ms`** *(Fast prologue + Arena)* | **1.73× plus rapide (`-42.2 %`)** | 🏆 **#1 / 10** (**bat Java TLAB**, **3.3× > C++**) |
-| **T4** — `fib(40)` + 100M appels | `1 573.51 ms` | **`525.52 ms`** *(Inlining + Reg param)* | **2.99× plus rapide (`-66.6 %`)** | **#6 mesuré** (**bat C#, Node, LuaJIT\*, Python**) |
-| **T5** — Grille 12 threads | `16.23 ms` | **`11.10 ms`** *(LICM + `cmovge` + Fusion)* | **1.46× plus rapide (`-31.6 %`)** | **#5 / 10** (**bat C#, Java, Node, Python**) |
-| **Total Somme T1..T5** | `1 829.33 ms` | **`669.03 ms`** | **2.73× plus rapide (`-63.4 %`)** | **#5 / 10** *(était #8)* — **devant Java & C#** |
+| **T4** — `fib(40)` + 100M appels | `1 573.51 ms` | **`257.19 ms`** *(Inlining + Reg + Omit-FP + Unroll)* | **6.12× plus rapide (`-83.7 %`)** | 🏆 **#1 / 10** (**bat C++ `269.35 ms` & Rust `314.14 ms`**) |
+| **T5** — Grille 12 threads | `16.23 ms` | **`12.56 ms`** *(LICM + `cmovge` + `IR_VEC_GRID_MOD`)* | **1.29× plus rapide (`-22.6 %`)** | **#5 / 10** (**bat C#, Java, Node, Python**) |
+| **Total Somme T1..T5** | `1 829.33 ms` | **`410.30 ms`** | **4.46× plus rapide (`-77.6 %`)** | 🏆 **#1 / 10** *(était #8)* — **devant C++, Rust, C, Java, C#** |
 | **Empreinte RAM Max** | `457.54 Mo` | **`419.35 Mo`** | **`-38.19 Mo`** | Plus sobre que Java (`480.5 Mo`) & Node (`443.0 Mo`) |
 | **Binaire CLI autonome** | `169.00 Ko` (`173 056` o) | **`188.50 Ko`** (`193 024` o) | `+19.5 Ko` *(toujours `< 200 Ko`)* | 100 % autonome (CLI + JIT FMA3/AVX2 + runtime) |
 
@@ -82,16 +82,16 @@
 
 | Langage | Compilation / Démarrage (ms) | Temps Mur Total (ms) | Taille Binaire / Runtime (Ko) | Empreinte RAM Max (Mo) | Notes sur l'empreinte disque |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| **Vortex v1.0.0** | **`80.63 ms`** *(parse + opt + JIT)* | `749.66 ms` | **`188.50 Ko`** (`193 024` o) | `419.35 Mo` | Exécutable CLI **100 % autonome** (compilateur + JIT + runtime) |
-| **C (`Clang -O3`)** | `872.31 ms` | `639.62 ms` | `68.50 Ko` | **`386.36 Mo`** | Binaire AOT natif seul (hors toolchain Clang) |
-| **C++ (`Clang++ -O3`)** | `1 688.53 ms` | `592.77 ms` | `76.50 Ko` | `386.71 Mo` | Binaire AOT natif seul (hors `std::thread` / Clang) |
-| **Rust (`rustc -O3`)** | `912.27 ms` | `619.56 ms` | `4 309.50 Ko` | `386.47 Mo` | Binaire AOT statique (`std` incluse) |
+| **Vortex v1.0.0** | **`72.30 ms`** *(parse + opt + JIT)* | `482.61 ms` | **`205.50 Ko`** (`210 432` o) | `419.09 Mo` | Exécutable CLI **100 % autonome** (compilateur + JIT + runtime) |
+| **C (`Clang -O3`)** | `1 436.69 ms` | `680.96 ms` | `68.50 Ko` | **`386.37 Mo`** | Binaire AOT natif seul (hors toolchain Clang) |
+| **C++ (`Clang++ -O3`)** | `2 508.83 ms` | `617.50 ms` | `76.50 Ko` | `386.72 Mo` | Binaire AOT natif seul (hors `std::thread` / Clang) |
+| **Rust (`rustc -O3`)** | `2 393.49 ms` | `629.71 ms` | `4 309.50 Ko` | `386.48 Mo` | Binaire AOT statique (`std` incluse) |
 | **Go 1.23\*** | `420.00 ms`\* | — | `2 100.00 Ko`\* | `415.00 Mo`\* | \* Référence Zen 3 |
-| **C# (.NET v4.8)** | `292.20 ms` | `966.45 ms` | `5.00 Ko` *(IL seul)* | `395.45 Mo` | Requiert le runtime .NET Framework CLR installé |
-| **Java (HotSpot 17)** | `643.13 ms` (`javac`) | `950.39 ms` | `3.76 Ko` *(+ `12 469.3 Ko` `jvm.dll`)* | `480.45 Mo` | Requiert la JVM HotSpot complète |
-| **JavaScript (Node v26)** | `319.73 ms` | `1 930.12 ms` | `97 751.82 Ko` (`node.exe`) | `442.98 Mo` | Runtime Node.js complet (~95,5 Mo) |
+| **C# (.NET v4.8)** | `654.86 ms` | `991.61 ms` | `5.00 Ko` *(IL seul)* | `395.47 Mo` | Requiert le runtime .NET Framework CLR installé |
+| **Java (HotSpot 17)** | `900.22 ms` (`javac`) | `944.28 ms` | `3.76 Ko` *(+ `12 469.3 Ko` `jvm.dll`)* | `480.23 Mo` | Requiert la JVM HotSpot complète |
+| **JavaScript (Node v26)** | `344.55 ms` | `1 924.89 ms` | `97 751.82 Ko` (`node.exe`) | `456.19 Mo` | Runtime Node.js complet (~95,5 Mo) |
 | **LuaJIT 2.1\*** | `12.00 ms`\* | — | `520.00 Ko`\* | `392.00 Mo`\* | \* Référence Zen 3 (`luajit.exe` + `lua51.dll`) |
-| **Python 3.12** | `1 883.24 ms` *(spawn `multiprocessing`)* | `41 967.69 ms` | `6 884.98 Ko` (`python312.dll` + exe) | `1 801.02 Mo` | `102.5 Ko` `python.exe` + `6 782.5 Ko` `python312.dll` |
+| **Python 3.12** | `403.10 ms` *(spawn `multiprocessing`)* | `43 294.10 ms` | `6 884.98 Ko` (`python312.dll` + exe) | `1 801.07 Mo` | `102.5 Ko` `python.exe` + `6 782.5 Ko` `python312.dll` |
 
 ---
 

@@ -223,6 +223,10 @@ int compute_frame_size(int total_spill_bytes) {
     if (g_x64_frame_ir && g_x64_frame_ir->optimize_frame) {
         int k = x64_callee_push_count(g_x64_frame_ir->callee_save_mask);
         int push_bytes = k * 8;
+        if (g_x64_frame_ir->omit_fp) {
+            if (!g_x64_frame_ir->has_calls) return 0;
+            return (k % 2 == 0) ? 8 : 0;
+        }
         int min_below = push_bytes;
         if (total_spill_bytes > 0) {
             int spill_need = 128 + total_spill_bytes;
@@ -268,12 +272,15 @@ void emit_epilogue(JITBuffer* j, int frame_size) {
 static void emit_store_mem_offset(JITBuffer* j, int base, int32_t offset, int src);
 
 void emit_func_prologue(JITBuffer* j, int frame_size) {
-    emit_u8(j, 0x55);                                     /* push rbp */
-    emit_u8(j, 0x48); emit_u8(j, 0x89); emit_u8(j, 0xE5); /* mov rbp, rsp */
     bool opt = (g_x64_frame_ir && g_x64_frame_ir->optimize_frame);
+    bool omit_fp = (opt && g_x64_frame_ir->omit_fp);
+    if (!omit_fp) {
+        emit_u8(j, 0x55);                                     /* push rbp */
+        emit_u8(j, 0x48); emit_u8(j, 0x89); emit_u8(j, 0xE5); /* mov rbp, rsp */
+    }
     int pc = opt ? g_x64_frame_ir->param_count : 6;
     bool direct_p0 = (opt && pc == 1 && g_x64_frame_ir->vreg_count > 0 && !g_x64_frame_ir->vregs[0].is_float);
-    if (g_target_abi != VORTEX_ABI_SYSV64) {
+    if (g_target_abi != VORTEX_ABI_SYSV64 && !omit_fp) {
         if (pc > 0 && !direct_p0) { emit_u8(j, 0x48); emit_u8(j, 0x89); emit_u8(j, 0x4D); emit_u8(j, 0x10); } /* mov [rbp+16], rcx */
         if (pc > 1) { emit_u8(j, 0x48); emit_u8(j, 0x89); emit_u8(j, 0x55); emit_u8(j, 0x18); } /* mov [rbp+24], rdx */
         if (pc > 2) { emit_u8(j, 0x4C); emit_u8(j, 0x89); emit_u8(j, 0x45); emit_u8(j, 0x20); } /* mov [rbp+32], r8 */
@@ -302,7 +309,7 @@ void emit_func_prologue(JITBuffer* j, int frame_size) {
         emit_u8(j, 0x48); emit_u8(j, 0x81); emit_u8(j, 0xEC); /* sub rsp, frame_size */
         emit_u32(j, (uint32_t)frame_size);
     }
-    if (g_target_abi == VORTEX_ABI_SYSV64) {
+    if (g_target_abi == VORTEX_ABI_SYSV64 && !omit_fp) {
         static const int sysv_p[6] = { PREG_RDI, PREG_RSI, PREG_RDX, PREG_RCX, PREG_R8, PREG_R9 };
         int lim = pc < 6 ? pc : 6;
         for (int i = direct_p0 ? 1 : 0; i < lim; i++) {
@@ -328,7 +335,9 @@ void emit_func_epilogue(JITBuffer* j, int frame_size) {
                 else { emit_u8(j, 0x41); emit_u8(j, (uint8_t)(0x58 + (r & 7))); }
             }
         }
-        emit_u8(j, 0x5D); /* pop rbp */
+        if (!g_x64_frame_ir->omit_fp) {
+            emit_u8(j, 0x5D); /* pop rbp */
+        }
         emit_u8(j, 0xC3); /* ret */
         return;
     }
@@ -1453,36 +1462,57 @@ static void emit_avx2_vector_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins
     emit_vzeroupper(j);
 }
 
+static const int64_t g_simd_i64_03[4] __attribute__((aligned(32))) = { 0, 1, 2, 3 };
+static const int64_t g_simd_i64_47[4] __attribute__((aligned(32))) = { 4, 5, 6, 7 };
+
+static void emit_vex3_ymm(JITBuffer* j, uint8_t mmmmm, uint8_t pp, int reg, int vvvv, int rm, uint8_t opcode) {
+    uint8_t b1 = (uint8_t)(mmmmm & 0x1F);
+    if ((reg & 8) == 0) b1 |= 0x80;
+    b1 |= 0x40;
+    if ((rm & 8) == 0) b1 |= 0x20;
+    uint8_t b2 = (uint8_t)((((~vvvv) & 0x0F) << 3) | 0x04 | (pp & 0x03));
+    emit_u8(j, 0xC4);
+    emit_u8(j, b1);
+    emit_u8(j, b2);
+    emit_u8(j, opcode);
+    emit_u8(j, (uint8_t)(0xC0 | ((reg & 7) << 3) | (rm & 7)));
+}
+
 static void emit_avx2_i64_array_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins) {
-    /* Kernel uses ONLY scratch GPRs (RAX, R10, R11) and YMM0..YMM5 */
+    /* Kernel uses ONLY scratch GPRs (RAX, R10, R11) and YMM0..YMM7 (16x i64 = 128 bytes/iter) */
     int r_i = get_vreg_int_reg(ir, ins->i_vreg, PREG_RAX, j);
     if (r_i != PREG_RAX) emit_mov_rr(j, PREG_RAX, r_i);
 
     int r_arr = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
-    /* R11 = r_arr + RAX * 8 (safe for all 16 base GPRs including R12/R13) */
     emit_mov_rr(j, PREG_R11, PREG_RAX);
     emit_shl_ri(j, PREG_R11, 3);
     emit_add_rr(j, PREG_R11, r_arr);
 
     /* Broadcast 64-bit add_c into ymm2 */
     emit_mov_ri64(j, PREG_R10, ins->known_len);
-    emit_u8(j, 0x66); emit_u8(j, 0x49); emit_u8(j, 0x0F); emit_u8(j, 0x6E); emit_u8(j, 0xD2); /* vmovq/movq xmm2, r10 */
+    emit_u8(j, 0x66); emit_u8(j, 0x49); emit_u8(j, 0x0F); emit_u8(j, 0x6E); emit_u8(j, 0xD2); /* movq xmm2, r10 */
     emit_u8(j, 0xC4); emit_u8(j, 0xE2); emit_u8(j, 0x7D); emit_u8(j, 0x59); emit_u8(j, 0xD2); /* vpbroadcastq ymm2, xmm2 */
 
-    /* Zero 8-wide accumulators ymm0, ymm1 */
+    /* Zero 4x accumulators: ymm0, ymm1, ymm6, ymm7 */
     emit_u8(j, 0xC5); emit_u8(j, 0xFD); emit_u8(j, 0xEF); emit_u8(j, 0xC0); /* vpxor ymm0, ymm0, ymm0 */
     emit_u8(j, 0xC5); emit_u8(j, 0xF5); emit_u8(j, 0xEF); emit_u8(j, 0xC9); /* vpxor ymm1, ymm1, ymm1 */
+    emit_u8(j, 0xC5); emit_u8(j, 0xCD); emit_u8(j, 0xEF); emit_u8(j, 0xF6); /* vpxor ymm6, ymm6, ymm6 */
+    emit_u8(j, 0xC5); emit_u8(j, 0xC5); emit_u8(j, 0xEF); emit_u8(j, 0xFF); /* vpxor ymm7, ymm7, ymm7 */
 
-    /* R10 = lim - 7 */
+    /* R10 = lim - 15 */
     int r_lim = get_vreg_int_reg(ir, ins->lim_vreg, PREG_R10, j);
     if (r_lim != PREG_R10) emit_mov_rr(j, PREG_R10, r_lim);
-    emit_sub_ri(j, PREG_R10, 7);
+    emit_sub_ri(j, PREG_R10, 15);
 
     size_t simd_loop = j->size;
     emit_u8(j, 0x4C); emit_u8(j, 0x39); emit_u8(j, 0xD0); /* cmp rax, r10 */
     size_t simd_exit = emit_jcc_placeholder(j, 0x8D);       /* jge simd_exit */
 
-    /* Chunk 0: ymm3 = [r11]; ymm3 = ymm3*3 + ymm2; [r11] = ymm3; ymm0 += ymm3 */
+    /* Software prefetch 512 bytes ahead */
+    emit_u8(j, 0x41); emit_u8(j, 0x0F); emit_u8(j, 0x18); emit_u8(j, 0x8B);
+    emit_u32(j, 512); /* prefetcht0 [r11 + 512] */
+
+    /* Chunk 0 (+0): ymm3 -> ymm0 */
     emit_u8(j, 0xC4); emit_u8(j, 0xC1); emit_u8(j, 0x7E); emit_u8(j, 0x6F); emit_u8(j, 0x1B);             /* vmovdqu ymm3, [r11] */
     emit_u8(j, 0xC5); emit_u8(j, 0xD5); emit_u8(j, 0x73); emit_u8(j, 0xF3); emit_u8(j, 0x01);             /* vpsllq ymm5, ymm3, 1 */
     emit_u8(j, 0xC5); emit_u8(j, 0xE5); emit_u8(j, 0xD4); emit_u8(j, 0xDD);                               /* vpaddq ymm3, ymm3, ymm5 */
@@ -1490,7 +1520,7 @@ static void emit_avx2_i64_array_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* 
     emit_u8(j, 0xC4); emit_u8(j, 0xC1); emit_u8(j, 0x7E); emit_u8(j, 0x7F); emit_u8(j, 0x1B);             /* vmovdqu [r11], ymm3 */
     emit_u8(j, 0xC5); emit_u8(j, 0xFD); emit_u8(j, 0xD4); emit_u8(j, 0xC3);                               /* vpaddq ymm0, ymm0, ymm3 */
 
-    /* Chunk 1: ymm4 = [r11+32]; ymm4 = ymm4*3 + ymm2; [r11+32] = ymm4; ymm1 += ymm4 */
+    /* Chunk 1 (+32): ymm4 -> ymm1 */
     emit_u8(j, 0xC4); emit_u8(j, 0xC1); emit_u8(j, 0x7E); emit_u8(j, 0x6F); emit_u8(j, 0x63); emit_u8(j, 0x20); /* vmovdqu ymm4, [r11+32] */
     emit_u8(j, 0xC5); emit_u8(j, 0xD5); emit_u8(j, 0x73); emit_u8(j, 0xF4); emit_u8(j, 0x01);             /* vpsllq ymm5, ymm4, 1 */
     emit_u8(j, 0xC5); emit_u8(j, 0xDD); emit_u8(j, 0xD4); emit_u8(j, 0xE5);                               /* vpaddq ymm4, ymm4, ymm5 */
@@ -1498,9 +1528,25 @@ static void emit_avx2_i64_array_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* 
     emit_u8(j, 0xC4); emit_u8(j, 0xC1); emit_u8(j, 0x7E); emit_u8(j, 0x7F); emit_u8(j, 0x63); emit_u8(j, 0x20); /* vmovdqu [r11+32], ymm4 */
     emit_u8(j, 0xC5); emit_u8(j, 0xF5); emit_u8(j, 0xD4); emit_u8(j, 0xCC);                               /* vpaddq ymm1, ymm1, ymm4 */
 
-    /* r11 += 64; rax += 8 */
-    emit_u8(j, 0x49); emit_u8(j, 0x83); emit_u8(j, 0xC3); emit_u8(j, 0x40);
-    emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xC0); emit_u8(j, 0x08);
+    /* Chunk 2 (+64): ymm3 -> ymm6 */
+    emit_u8(j, 0xC4); emit_u8(j, 0xC1); emit_u8(j, 0x7E); emit_u8(j, 0x6F); emit_u8(j, 0x5B); emit_u8(j, 0x40); /* vmovdqu ymm3, [r11+64] */
+    emit_u8(j, 0xC5); emit_u8(j, 0xD5); emit_u8(j, 0x73); emit_u8(j, 0xF3); emit_u8(j, 0x01);             /* vpsllq ymm5, ymm3, 1 */
+    emit_u8(j, 0xC5); emit_u8(j, 0xE5); emit_u8(j, 0xD4); emit_u8(j, 0xDD);                               /* vpaddq ymm3, ymm3, ymm5 */
+    emit_u8(j, 0xC5); emit_u8(j, 0xE5); emit_u8(j, 0xD4); emit_u8(j, 0xDA);                               /* vpaddq ymm3, ymm3, ymm2 */
+    emit_u8(j, 0xC4); emit_u8(j, 0xC1); emit_u8(j, 0x7E); emit_u8(j, 0x7F); emit_u8(j, 0x5B); emit_u8(j, 0x40); /* vmovdqu [r11+64], ymm3 */
+    emit_u8(j, 0xC5); emit_u8(j, 0xCD); emit_u8(j, 0xD4); emit_u8(j, 0xF3);                               /* vpaddq ymm6, ymm6, ymm3 */
+
+    /* Chunk 3 (+96): ymm4 -> ymm7 */
+    emit_u8(j, 0xC4); emit_u8(j, 0xC1); emit_u8(j, 0x7E); emit_u8(j, 0x6F); emit_u8(j, 0x63); emit_u8(j, 0x60); /* vmovdqu ymm4, [r11+96] */
+    emit_u8(j, 0xC5); emit_u8(j, 0xD5); emit_u8(j, 0x73); emit_u8(j, 0xF4); emit_u8(j, 0x01);             /* vpsllq ymm5, ymm4, 1 */
+    emit_u8(j, 0xC5); emit_u8(j, 0xDD); emit_u8(j, 0xD4); emit_u8(j, 0xE5);                               /* vpaddq ymm4, ymm4, ymm5 */
+    emit_u8(j, 0xC5); emit_u8(j, 0xDD); emit_u8(j, 0xD4); emit_u8(j, 0xE2);                               /* vpaddq ymm4, ymm4, ymm2 */
+    emit_u8(j, 0xC4); emit_u8(j, 0xC1); emit_u8(j, 0x7E); emit_u8(j, 0x7F); emit_u8(j, 0x63); emit_u8(j, 0x60); /* vmovdqu [r11+96], ymm4 */
+    emit_u8(j, 0xC5); emit_u8(j, 0xC5); emit_u8(j, 0xD4); emit_u8(j, 0xFC);                               /* vpaddq ymm7, ymm7, ymm4 */
+
+    /* r11 += 128; rax += 16 */
+    emit_u8(j, 0x49); emit_u8(j, 0x81); emit_u8(j, 0xC3); emit_u32(j, 128);
+    emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xC0); emit_u8(j, 0x10);
 
     size_t simd_back = emit_jmp_placeholder(j);
     int32_t simd_rel = (int32_t)(simd_loop - (simd_back + 4));
@@ -1508,8 +1554,10 @@ static void emit_avx2_i64_array_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* 
 
     patch_jump(j, simd_exit);
 
-    /* Horizontal sum of ymm0 + ymm1 -> r10, then add into acc_vreg */
+    /* Horizontal sum of ymm0 + ymm1 + ymm6 + ymm7 -> r10, then add into acc_vreg */
     emit_u8(j, 0xC5); emit_u8(j, 0xFD); emit_u8(j, 0xD4); emit_u8(j, 0xC1);                               /* vpaddq ymm0, ymm0, ymm1 */
+    emit_u8(j, 0xC5); emit_u8(j, 0xCD); emit_u8(j, 0xD4); emit_u8(j, 0xF7);                               /* vpaddq ymm6, ymm6, ymm7 */
+    emit_u8(j, 0xC5); emit_u8(j, 0xFD); emit_u8(j, 0xD4); emit_u8(j, 0xC6);                               /* vpaddq ymm0, ymm0, ymm6 */
     emit_u8(j, 0xC4); emit_u8(j, 0xE3); emit_u8(j, 0x7D); emit_u8(j, 0x39); emit_u8(j, 0xC1); emit_u8(j, 0x01); /* vextracti128 xmm1, ymm0, 1 */
     emit_u8(j, 0xC5); emit_u8(j, 0xF9); emit_u8(j, 0xD4); emit_u8(j, 0xC1);                               /* vpaddq xmm0, xmm0, xmm1 */
     emit_u8(j, 0xC5); emit_u8(j, 0xF9); emit_u8(j, 0x70); emit_u8(j, 0xC8); emit_u8(j, 0xEE);             /* vpshufd xmm1, xmm0, 0xEE */
@@ -1523,7 +1571,7 @@ static void emit_avx2_i64_array_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* 
         emit_add_rr(j, ir->vregs[ins->acc_vreg].preg, PREG_R10);
     }
 
-    /* Scalar tail for remaining < 8 elements */
+    /* Scalar tail for remaining < 16 elements */
     size_t tail_loop = j->size;
     if (ir->vregs[ins->lim_vreg].is_spilled) {
         emit_cmp_reg_rbp(j, PREG_RAX, -ir->vregs[ins->lim_vreg].spill_offset);
@@ -1549,6 +1597,130 @@ static void emit_avx2_i64_array_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* 
     memcpy(&j->code[tail_back], &tail_rel, 4);
 
     patch_jump(j, tail_exit);
+    commit_vreg_int_reg(ir, ins->i_vreg, PREG_RAX, j);
+}
+
+static void emit_avx2_grid_mod_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins) {
+    /* Vectorizes 8 rows of i64 conditional-modulo accumulation at a time using vpcmpgtq + vpand + vpsubq */
+    int r_i = get_vreg_int_reg(ir, ins->i_vreg, PREG_RAX, j);
+    if (r_i != PREG_RAX) emit_mov_rr(j, PREG_RAX, r_i);
+
+    int r_arr = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
+    emit_mov_rr(j, PREG_R11, PREG_RAX);
+    emit_shl_ri(j, PREG_R11, 3);
+    emit_add_rr(j, PREG_R11, r_arr);
+
+    int64_t step_c = ins->imm;
+    int64_t mod_m = ins->known_len;
+
+    /* ymm2 = broadcast(step_c) */
+    emit_mov_ri64(j, PREG_R10, step_c);
+    emit_u8(j, 0x66); emit_u8(j, 0x49); emit_u8(j, 0x0F); emit_u8(j, 0x6E); emit_u8(j, 0xD2); /* movq xmm2, r10 */
+    emit_vex3_ymm(j, 2, 1, 2, 0, 2, 0x59); /* vpbroadcastq ymm2, xmm2 */
+
+    /* ymm3 = broadcast(mod_m) */
+    emit_mov_ri64(j, PREG_R10, mod_m);
+    emit_u8(j, 0x66); emit_u8(j, 0x49); emit_u8(j, 0x0F); emit_u8(j, 0x6E); emit_u8(j, 0xDA); /* movq xmm3, r10 */
+    emit_vex3_ymm(j, 2, 1, 3, 0, 3, 0x59); /* vpbroadcastq ymm3, xmm3 */
+
+    /* ymm4 = broadcast(mod_m - 1) */
+    emit_mov_ri64(j, PREG_R10, mod_m - 1);
+    emit_u8(j, 0x66); emit_u8(j, 0x49); emit_u8(j, 0x0F); emit_u8(j, 0x6E); emit_u8(j, 0xE2); /* movq xmm4, r10 */
+    emit_vex3_ymm(j, 2, 1, 4, 0, 4, 0x59); /* vpbroadcastq ymm4, xmm4 */
+
+    /* ymm8 = [0,1,2,3], ymm9 = [4,5,6,7] */
+    emit_mov_ri64(j, PREG_R10, (int64_t)(uintptr_t)g_simd_i64_03);
+    emit_u8(j, 0xC4); emit_u8(j, 0x41); emit_u8(j, 0x7D); emit_u8(j, 0x6F); emit_u8(j, 0x02); /* vmovdqa ymm8, [r10] */
+    emit_mov_ri64(j, PREG_R10, (int64_t)(uintptr_t)g_simd_i64_47);
+    emit_u8(j, 0xC4); emit_u8(j, 0x41); emit_u8(j, 0x7D); emit_u8(j, 0x6F); emit_u8(j, 0x0A); /* vmovdqa ymm9, [r10] */
+
+    size_t simd_loop = j->size;
+    int r_lim = get_vreg_int_reg(ir, ins->lim_vreg, PREG_R10, j);
+    if (r_lim != PREG_R10) emit_mov_rr(j, PREG_R10, r_lim);
+    emit_sub_ri(j, PREG_R10, 7);
+    emit_u8(j, 0x4C); emit_u8(j, 0x39); emit_u8(j, 0xD0); /* cmp rax, r10 */
+    size_t simd_exit = emit_jcc_placeholder(j, 0x8D);       /* jge simd_exit */
+
+    /* ymm0 = broadcast(rax) + ymm8; ymm1 = broadcast(rax) + ymm9 */
+    emit_u8(j, 0x66); emit_u8(j, 0x48); emit_u8(j, 0x0F); emit_u8(j, 0x6E); emit_u8(j, 0xC0); /* movq xmm0, rax */
+    emit_vex3_ymm(j, 2, 1, 0, 0, 0, 0x59); /* vpbroadcastq ymm0, xmm0 */
+    emit_vex3_ymm(j, 1, 1, 1, 0, 9, 0xD4); /* vpaddq ymm1, ymm0, ymm9 */
+    emit_vex3_ymm(j, 1, 1, 0, 0, 8, 0xD4); /* vpaddq ymm0, ymm0, ymm8 */
+
+    int r_cols = get_vreg_int_reg(ir, ins->src2, PREG_R10, j);
+    if (r_cols != PREG_R10) emit_mov_rr(j, PREG_R10, r_cols);
+    emit_test_rr(j, PREG_R10, PREG_R10);
+    size_t inner_done = emit_jcc_placeholder(j, 0x8E); /* jle inner_done */
+
+    size_t inner_loop = j->size;
+    emit_vex3_ymm(j, 1, 1, 0, 0, 2, 0xD4); /* vpaddq ymm0, ymm0, ymm2 */
+    emit_vex3_ymm(j, 1, 1, 1, 1, 2, 0xD4); /* vpaddq ymm1, ymm1, ymm2 */
+    emit_vex3_ymm(j, 2, 1, 5, 0, 4, 0x37); /* vpcmpgtq ymm5, ymm0, ymm4 */
+    emit_vex3_ymm(j, 2, 1, 6, 1, 4, 0x37); /* vpcmpgtq ymm6, ymm1, ymm4 */
+    emit_vex3_ymm(j, 1, 1, 5, 5, 3, 0xDB); /* vpand ymm5, ymm5, ymm3 */
+    emit_vex3_ymm(j, 1, 1, 6, 6, 3, 0xDB); /* vpand ymm6, ymm6, ymm3 */
+    emit_vex3_ymm(j, 1, 1, 0, 0, 5, 0xFB); /* vpsubq ymm0, ymm0, ymm5 */
+    emit_vex3_ymm(j, 1, 1, 1, 1, 6, 0xFB); /* vpsubq ymm1, ymm1, ymm6 */
+
+    emit_u8(j, 0x49); emit_u8(j, 0xFF); emit_u8(j, 0xCA); /* dec r10 */
+    size_t inner_back = emit_jcc_placeholder(j, 0x85);    /* jnz inner_loop */
+    int32_t inner_rel = (int32_t)(inner_loop - (inner_back + 4));
+    memcpy(&j->code[inner_back], &inner_rel, 4);
+
+    patch_jump(j, inner_done);
+    emit_u8(j, 0xC4); emit_u8(j, 0xC1); emit_u8(j, 0x7E); emit_u8(j, 0x7F); emit_u8(j, 0x03);             /* vmovdqu [r11], ymm0 */
+    emit_u8(j, 0xC4); emit_u8(j, 0xC1); emit_u8(j, 0x7E); emit_u8(j, 0x7F); emit_u8(j, 0x4B); emit_u8(j, 0x20); /* vmovdqu [r11+32], ymm1 */
+
+    emit_u8(j, 0x49); emit_u8(j, 0x83); emit_u8(j, 0xC3); emit_u8(j, 0x40); /* add r11, 64 */
+    emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xC0); emit_u8(j, 0x08); /* add rax, 8 */
+
+    size_t simd_back = emit_jmp_placeholder(j);
+    int32_t simd_rel = (int32_t)(simd_loop - (simd_back + 4));
+    memcpy(&j->code[simd_back], &simd_rel, 4);
+
+    patch_jump(j, simd_exit);
+    emit_vzeroupper(j);
+
+    /* Scalar tail for remaining < 8 rows (save cols, lim, rcx, rdx on stack) */
+    int r_cols_t = get_vreg_int_reg(ir, ins->src2, PREG_R10, j);
+    emit_push_r(j, r_cols_t); /* [rsp+24] */
+    int r_lim_t = get_vreg_int_reg(ir, ins->lim_vreg, PREG_R10, j);
+    emit_push_r(j, r_lim_t);  /* [rsp+16] */
+    emit_push_r(j, PREG_RCX); /* [rsp+8] */
+    emit_push_r(j, PREG_RDX); /* [rsp] */
+
+    size_t tail_loop = j->size;
+    emit_u8(j, 0x48); emit_u8(j, 0x3B); emit_u8(j, 0x44); emit_u8(j, 0x24); emit_u8(j, 0x10); /* cmp rax, [rsp+16] */
+    size_t tail_exit = emit_jcc_placeholder(j, 0x8D); /* jge tail_exit */
+
+    emit_mov_rr(j, PREG_R10, PREG_RAX);
+    emit_u8(j, 0x48); emit_u8(j, 0x8B); emit_u8(j, 0x4C); emit_u8(j, 0x24); emit_u8(j, 0x18); /* mov rcx, [rsp+24] */
+    emit_test_rr(j, PREG_RCX, PREG_RCX);
+    size_t tail_store = emit_jcc_placeholder(j, 0x8E); /* jle tail_store */
+
+    size_t tail_inner = j->size;
+    emit_add_ri(j, PREG_R10, (int32_t)step_c);
+    emit_u8(j, 0x49); emit_u8(j, 0x8D); emit_u8(j, 0x92); emit_u32(j, (uint32_t)(-(int32_t)mod_m)); /* lea rdx, [r10 - mod_m] */
+    emit_u8(j, 0x49); emit_u8(j, 0x81); emit_u8(j, 0xFA); emit_u32(j, (uint32_t)mod_m);              /* cmp r10, mod_m */
+    emit_u8(j, 0x49); emit_u8(j, 0x0F); emit_u8(j, 0x4D); emit_u8(j, 0xD2);                          /* cmovge r10, rdx */
+    emit_u8(j, 0x48); emit_u8(j, 0xFF); emit_u8(j, 0xC9);                                            /* dec rcx */
+    size_t tail_inner_back = emit_jcc_placeholder(j, 0x85); /* jnz tail_inner */
+    int32_t ti_rel = (int32_t)(tail_inner - (tail_inner_back + 4));
+    memcpy(&j->code[tail_inner_back], &ti_rel, 4);
+
+    patch_jump(j, tail_store);
+    emit_store_mem_offset(j, PREG_R11, 0, PREG_R10);
+    emit_add_ri(j, PREG_RAX, 1);
+    emit_add_ri(j, PREG_R11, 8);
+
+    size_t tail_back = emit_jmp_placeholder(j);
+    int32_t tail_rel = (int32_t)(tail_loop - (tail_back + 4));
+    memcpy(&j->code[tail_back], &tail_rel, 4);
+
+    patch_jump(j, tail_exit);
+    emit_u8(j, 0x5A); /* pop rdx */
+    emit_u8(j, 0x59); /* pop rcx */
+    emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xC4); emit_u8(j, 0x10); /* add rsp, 16 */
     commit_vreg_int_reg(ir, ins->i_vreg, PREG_RAX, j);
 }
 
@@ -2421,6 +2593,11 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
 
             case IR_VEC_ARR_OP: {
                 emit_avx2_i64_array_loop(j, ir, ins);
+                break;
+            }
+
+            case IR_VEC_GRID_MOD: {
+                emit_avx2_grid_mod_loop(j, ir, ins);
                 break;
             }
         }

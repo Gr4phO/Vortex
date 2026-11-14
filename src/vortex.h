@@ -495,7 +495,8 @@ typedef enum {
     IR_RAW_RIEMANN,
     IR_VEC_LOOP,
     IR_SUB_MOD_IMM,
-    IR_VEC_ARR_OP
+    IR_VEC_ARR_OP,
+    IR_VEC_GRID_MOD
 } IROpcode;
 
 typedef int VReg;
@@ -571,8 +572,11 @@ typedef struct {
     bool uses_avx;
     bool has_calls;
     bool optimize_frame;
+    bool omit_fp;
     int param_count;
+    int max_call_args;
     uint32_t callee_save_mask;
+    char func_name[64];
 } IRBuffer;
 
 typedef struct {

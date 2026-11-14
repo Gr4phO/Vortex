@@ -1,4 +1,4 @@
-﻿/*
+/*
  * VORTEX PROGRAMMING LANGUAGE - LEXER, TYPE/UNSAFE/REGION RESOLVER & IR FRONTEND PARSER
  */
 
@@ -1463,6 +1463,8 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
         ir_emit_ret(&fn_ir, VREG_NONE, TYPE_VOID);
     }
     fn_ir.param_count = uf->param_count;
+    strncpy(fn_ir.func_name, uf->name, sizeof(fn_ir.func_name) - 1);
+    fn_ir.func_name[sizeof(fn_ir.func_name) - 1] = '\0';
 
     ir_region_verify(&fn_ir);
     if (g_lsp_capture_errors) {
