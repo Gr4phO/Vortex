@@ -118,7 +118,11 @@ fn crypto_find_openssl_libcrypto() -> i64 {
     unsafe {
         let mut h = ffi_load("libcrypto.so.3");
         if h == 0 { h = ffi_load("libcrypto.so"); }
+        if h == 0 { h = ffi_load("libcrypto.3.dylib"); }
         if h == 0 { h = ffi_load("libcrypto.dylib"); }
+        if h == 0 { h = ffi_load("/opt/homebrew/opt/openssl@3/lib/libcrypto.dylib"); }
+        if h == 0 { h = ffi_load("/opt/homebrew/opt/openssl/lib/libcrypto.dylib"); }
+        if h == 0 { h = ffi_load("/usr/local/opt/openssl@3/lib/libcrypto.dylib"); }
         return h;
     }
 }
@@ -128,7 +132,11 @@ fn crypto_find_openssl_libssl() -> i64 {
     unsafe {
         let mut h = ffi_load("libssl.so.3");
         if h == 0 { h = ffi_load("libssl.so"); }
+        if h == 0 { h = ffi_load("libssl.3.dylib"); }
         if h == 0 { h = ffi_load("libssl.dylib"); }
+        if h == 0 { h = ffi_load("/opt/homebrew/opt/openssl@3/lib/libssl.dylib"); }
+        if h == 0 { h = ffi_load("/opt/homebrew/opt/openssl/lib/libssl.dylib"); }
+        if h == 0 { h = ffi_load("/usr/local/opt/openssl@3/lib/libssl.dylib"); }
         return h;
     }
 }
@@ -138,12 +146,24 @@ fn crypto_sha256_hex(msg: str) -> str {
     let mlen = str_len(msg);
     unsafe {
         let h = crypto_find_openssl_libcrypto();
-        if h == 0 { return ""; }
-        let p_sha = ffi_symbol(h, "SHA256");
-        if p_sha == 0 { return ""; }
-        let digest = alloc(32) as i64;
-        ffi_call3(p_sha, msg as i64, mlen, digest);
-        return crypto_bytes_to_hex(digest, 32);
+        if h != 0 {
+            let p_sha = ffi_symbol(h, "SHA256");
+            if p_sha != 0 {
+                let digest = alloc(32) as i64;
+                ffi_call3(p_sha, msg as i64, mlen, digest);
+                return crypto_bytes_to_hex(digest, 32);
+            }
+        }
+        let sys = ffi_load("libSystem.B.dylib");
+        if sys != 0 {
+            let p_cc = ffi_symbol(sys, "CC_SHA256");
+            if p_cc != 0 {
+                let digest = alloc(32) as i64;
+                ffi_call3(p_cc, msg as i64, mlen, digest);
+                return crypto_bytes_to_hex(digest, 32);
+            }
+        }
+        return "";
     }
 }
 
@@ -169,12 +189,24 @@ fn crypto_random_hex(byte_count: i64) -> str {
     if byte_count <= 0 { return ""; }
     unsafe {
         let h = crypto_find_openssl_libcrypto();
-        if h == 0 { return ""; }
-        let p_rng = ffi_symbol(h, "RAND_bytes");
-        if p_rng == 0 { return ""; }
-        let buf = alloc(byte_count) as i64;
-        ffi_call2(p_rng, buf, byte_count);
-        return crypto_bytes_to_hex(buf, byte_count);
+        if h != 0 {
+            let p_rng = ffi_symbol(h, "RAND_bytes");
+            if p_rng != 0 {
+                let buf = alloc(byte_count) as i64;
+                ffi_call2(p_rng, buf, byte_count);
+                return crypto_bytes_to_hex(buf, byte_count);
+            }
+        }
+        let sys = ffi_load("libSystem.B.dylib");
+        if sys != 0 {
+            let p_arc = ffi_symbol(sys, "arc4random_buf");
+            if p_arc != 0 {
+                let buf = alloc(byte_count) as i64;
+                ffi_call2(p_arc, buf, byte_count);
+                return crypto_bytes_to_hex(buf, byte_count);
+            }
+        }
+        return "";
     }
 }
 

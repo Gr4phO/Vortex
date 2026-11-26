@@ -85,14 +85,16 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
     IRBuffer fn_ir;
     ir_init(&fn_ir);
 
-    SymbolTable fn_st;
-    fn_st.count = 0;
-    fn_st.stack_alloc_bytes = 0;
+    SymbolTable* fn_st = (SymbolTable*)calloc(1, sizeof(SymbolTable));
+    if (!fn_st) {
+        ir_free(&fn_ir);
+        vortex_error("[VORTEX PANIC] Out of memory allocating function SymbolTable");
+    }
 
     Compiler fn_comp;
     memset(&fn_comp, 0, sizeof(fn_comp));
     fn_comp.lex = c->lex;
-    fn_comp.st = &fn_st;
+    fn_comp.st = fn_st;
     fn_comp.j = c->j;
     fn_comp.ir = &fn_ir;
     fn_comp.last_struct_id = -1;
@@ -102,7 +104,7 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
 
     for (int p = 0; p < uf->param_count; p++) {
         VortexType pt = uf->param_types[p];
-        Symbol* ps = vortex_symtab_add(&fn_st, uf->param_names[p], pt, true);
+        Symbol* ps = vortex_symtab_add(fn_st, uf->param_names[p], pt, true);
         ps->struct_id = uf->param_struct_ids[p];
         ps->vreg = ir_new_vreg(&fn_ir, pt);
         if (param_is_slice[p] &&
@@ -167,7 +169,7 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
     }
 
     if (g_ultrasafe_level >= 1) {
-        vortex_ultrasafe_audit_ir(&fn_ir, &fn_st, uf->name, explicit_ret_type ? uf->ret_type : TYPE_VOID, fn_decl_line);
+        vortex_ultrasafe_audit_ir(&fn_ir, fn_st, uf->name, explicit_ret_type ? uf->ret_type : TYPE_VOID, fn_decl_line);
     }
 
     if (g_diag_error_count > err_before) {
@@ -176,6 +178,7 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
 
     if (g_lsp_capture_errors || fn_had_error || g_check_only || g_diag_error_count > 0) {
         uf->code_offset = 0;
+        free(fn_st);
         ir_free(&fn_ir);
         return;
     }
@@ -314,6 +317,7 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
     debug_info_set_current_func("__main__");
 
     bk->patch_jump(c->j, skip_func_jmp);
+    free(fn_st);
     ir_free(&fn_ir);
 }
 
@@ -815,14 +819,16 @@ static void parse_parallel_for_stmt(Compiler* c) {
 
     IRBuffer worker_ir;
     ir_init(&worker_ir);
-    SymbolTable worker_st;
-    worker_st.count = 0;
-    worker_st.stack_alloc_bytes = 0;
+    SymbolTable* worker_st = (SymbolTable*)calloc(1, sizeof(SymbolTable));
+    if (!worker_st) {
+        ir_free(&worker_ir);
+        vortex_error("[VORTEX PANIC] Out of memory allocating worker SymbolTable");
+    }
 
     Compiler worker_c;
     memset(&worker_c, 0, sizeof(worker_c));
     worker_c.lex = c->lex;
-    worker_c.st = &worker_st;
+    worker_c.st = worker_st;
     worker_c.j = c->j;
     worker_c.ir = &worker_ir;
     worker_c.last_struct_id = -1;
@@ -841,7 +847,7 @@ static void parse_parallel_for_stmt(Compiler* c) {
     int load_ip_base = worker_ir.count;
     for (int s = 0; s < num_captures; s++) {
         Symbol* parent_sym = &c->st->symbols[s];
-        Symbol* ws = vortex_symtab_add(&worker_st, parent_sym->name, parent_sym->type, parent_sym->is_mut);
+        Symbol* ws = vortex_symtab_add(worker_st, parent_sym->name, parent_sym->type, parent_sym->is_mut);
         ws->struct_id = parent_sym->struct_id;
         ws->is_ref = parent_sym->is_ref;
         ws->is_slice_ptr = parent_sym->is_slice_ptr;
@@ -851,7 +857,7 @@ static void parse_parallel_for_stmt(Compiler* c) {
         ir_emit_load_offset(&worker_ir, ws->vreg, v_w_ctx, s * 8, parent_sym->type);
     }
 
-    Symbol* wi_sym = vortex_symtab_add(&worker_st, var_name, TYPE_I64, true);
+    Symbol* wi_sym = vortex_symtab_add(worker_st, var_name, TYPE_I64, true);
     wi_sym->vreg = ir_new_vreg(&worker_ir, TYPE_I64);
     ir_emit_mov(&worker_ir, wi_sym->vreg, v_w_start);
 
@@ -924,6 +930,7 @@ static void parse_parallel_for_stmt(Compiler* c) {
     jit_set_active_ir_frame(NULL);
 
     bk->patch_jump(c->j, skip_worker);
+    free(worker_st);
     ir_free(&worker_ir);
 
     VReg v_fn = ir_new_vreg(c->ir, TYPE_I64);

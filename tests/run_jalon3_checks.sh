@@ -115,7 +115,7 @@ echo 'fn lm_triple(x: i64) -> i64 { return x * 3; }' > "$WORK_DIR/pkg_env/local_
 
 pushd "$WORK_DIR/pkg_env/app" >/dev/null
 "$VORTEX_BIN" pkg init app_demo >/dev/null 2>&1
-"$VORTEX_BIN" pkg add local_math --path "$WORK_DIR/pkg_env/local_math" >/dev/null 2>&1
+"$VORTEX_BIN" pkg add local_math "$WORK_DIR/pkg_env/local_math" >/dev/null 2>&1
 printf 'import "local_math";\nprint(lm_triple(10));\n' > src/main.vx
 if "$VORTEX_BIN" pkg install >/dev/null 2>&1 && "$VORTEX_BIN" pkg verify >/dev/null 2>&1 && grep -q "sha256" vortex.lock; then
     echo '// tamper' >> "$WORK_DIR/pkg_env/local_math/src/lib.vx"

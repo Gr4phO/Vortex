@@ -1,5 +1,5 @@
 CC      ?= clang
-CFLAGS  ?= -std=c99 -O2 -Wall -Wextra
+CFLAGS  ?= -std=c99 -O2 -fno-omit-frame-pointer -Wall -Wextra
 UNAME_S := $(shell uname -s)
 
 SRCS = src/arena.c src/lexer.c src/modules.c src/parser_expr.c src/parser_stmt.c src/ir_core.c src/ir_opt.c src/ir_vec_ra.c src/ffi.c src/jit_x64_simd.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/gui.c src/packager.c src/runtime.c src/main.c
@@ -27,7 +27,7 @@ else ifeq ($(UNAME_S),Linux)
         VORTEX_GUI_FLAGS ?= -DVORTEX_NO_X11 -DVORTEX_HEADLESS
         LDFLAGS ?= -pthread -ldl -lm
     endif
-    RELEASE_CFLAGS ?= -std=c99 -Os -Wall -Wextra -ffunction-sections -fdata-sections -Wl,--gc-sections
+    RELEASE_CFLAGS ?= -std=c99 -Os -fno-omit-frame-pointer -Wall -Wextra -ffunction-sections -fdata-sections -Wl,--gc-sections
     POST_RELEASE = strip --strip-all $(TARGET)
 else
     VORTEX_GUI_FLAGS ?= -DVORTEX_NO_X11 -DVORTEX_HEADLESS

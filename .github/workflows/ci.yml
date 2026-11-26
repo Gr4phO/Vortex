@@ -32,7 +32,7 @@ jobs:
         run: |
           chmod +x build.sh tests/*.sh
           sudo apt-get update && sudo apt-get install -y libx11-dev
-          make clean && make CC=gcc CFLAGS="-std=c99 -O2 -D_FORTIFY_SOURCE=2 -Wall -Wextra"
+          make clean && make CC=gcc CFLAGS="-std=c99 -O2 -fno-omit-frame-pointer -D_FORTIFY_SOURCE=2 -Wall -Wextra"
           VORTEX_HEADLESS=1 bash ./tests/run_tests.sh
 
       - name: Build & Test with Clang + Shared Library

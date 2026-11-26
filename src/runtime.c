@@ -919,9 +919,10 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
     Lexer lexer;
     lexer_init(&lexer, source);
 
-    SymbolTable symtab;
-    symtab.count = 0;
-    symtab.stack_alloc_bytes = 0;
+    SymbolTable* symtab = (SymbolTable*)calloc(1, sizeof(SymbolTable));
+    if (!symtab) {
+        vortex_error("[VORTEX PANIC] Out of memory allocating SymbolTable");
+    }
 
     JITBuffer jit;
     jit.code = (uint8_t*)exec_mem;
@@ -936,7 +937,7 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
     Compiler comp;
     memset(&comp, 0, sizeof(comp));
     comp.lex = &lexer;
-    comp.st = &symtab;
+    comp.st = symtab;
     comp.j = &jit;
     comp.ir = &main_ir;
     comp.last_struct_id = -1;
@@ -965,10 +966,10 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
         }
     }
 
-    g_last_symtab.count = symtab.count;
-    g_last_symtab.stack_alloc_bytes = symtab.stack_alloc_bytes;
-    if (symtab.count > 0) {
-        memcpy(g_last_symtab.symbols, symtab.symbols, (size_t)symtab.count * sizeof(Symbol));
+    g_last_symtab.count = symtab->count;
+    g_last_symtab.stack_alloc_bytes = symtab->stack_alloc_bytes;
+    if (symtab->count > 0) {
+        memcpy(g_last_symtab.symbols, symtab->symbols, (size_t)symtab->count * sizeof(Symbol));
     }
     g_has_last_symtab = true;
 
@@ -1018,7 +1019,7 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
     }
 
     if (g_ultrasafe_level >= 1) {
-        vortex_ultrasafe_audit_ir(&main_ir, &symtab, "__main__", TYPE_VOID, 1);
+        vortex_ultrasafe_audit_ir(&main_ir, symtab, "__main__", TYPE_VOID, 1);
         vortex_ultrasafe_audit_program();
     }
 
@@ -1029,17 +1030,20 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
     }
 
     if (g_diag_error_count > 0) {
+        free(symtab);
         ir_free(&main_ir);
         *out_jit = jit;
         return false;
     }
 
     if (g_check_only) {
+        free(symtab);
         ir_free(&main_ir);
         *out_jit = jit;
         return true;
     }
 
+    free(symtab);
     ir_optimize_bounds_and_licm(&main_ir);
     ir_loop_vectorize(&main_ir);
     ir_liveness_analysis(&main_ir);
@@ -1078,8 +1082,8 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
 
 bool vortex_frontend_check(const char* source, const char* file_path, char* diag_out, size_t diag_cap) {
     if (diag_out && diag_cap > 0) diag_out[0] = '\0';
-    bool prev_capture = g_lsp_capture_errors;
-    const char* prev_file = g_current_filename;
+    volatile bool prev_capture = g_lsp_capture_errors;
+    const char* volatile prev_file = g_current_filename;
     jmp_buf saved_jmp;
     memcpy(&saved_jmp, &g_error_jmp, sizeof(saved_jmp));
 
@@ -1088,12 +1092,14 @@ bool vortex_frontend_check(const char* source, const char* file_path, char* diag
     g_lsp_diag_buf[0] = '\0';
     g_current_filename = (file_path && file_path[0]) ? file_path : "<lsp>";
 
-    bool ok = false;
+    volatile bool ok = false;
+    SymbolTable* volatile symtab = NULL;
     if (setjmp(g_error_jmp) == 0) {
         arena_init();
         debug_info_reset();
         lexer_reset_imports();
         g_struct_type_count = 0;
+        g_enum_type_count = 0;
         vortex_parser_reset_tables(true);
         g_user_func_count = 0;
         g_user_func_reloc_count = 0;
@@ -1103,9 +1109,10 @@ bool vortex_frontend_check(const char* source, const char* file_path, char* diag
         Lexer lexer;
         lexer_init(&lexer, source ? source : "");
 
-        SymbolTable symtab;
-        symtab.count = 0;
-        symtab.stack_alloc_bytes = 0;
+        symtab = (SymbolTable*)calloc(1, sizeof(SymbolTable));
+        if (!symtab) {
+            vortex_error("Out of memory allocating SymbolTable");
+        }
 
         uint8_t dummy_code[64];
         JITBuffer dummy_jit;
@@ -1119,7 +1126,7 @@ bool vortex_frontend_check(const char* source, const char* file_path, char* diag
         Compiler comp;
         memset(&comp, 0, sizeof(comp));
         comp.lex = &lexer;
-        comp.st = &symtab;
+        comp.st = symtab;
         comp.j = &dummy_jit;
         comp.ir = &main_ir;
         comp.last_struct_id = -1;
@@ -1149,9 +1156,13 @@ bool vortex_frontend_check(const char* source, const char* file_path, char* diag
             }
         }
 
+        free(symtab);
+        symtab = NULL;
         ir_free(&main_ir);
         ok = true;
     } else {
+        free(symtab);
+        symtab = NULL;
         ir_free_all_active();
         if (diag_out && diag_cap > 0) {
             strncpy(diag_out, g_lsp_diag_buf, diag_cap - 1);

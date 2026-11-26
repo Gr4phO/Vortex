@@ -167,6 +167,14 @@ try {
     }
     if ($proc.ExitCode -ne 0) { throw "vortex lsp exited with $($proc.ExitCode)" }
     Write-Host "LSP_PROBE_ALL_OK"
+} catch {
+    Start-Sleep -Milliseconds 100
+    if ($proc.HasExited) {
+        $errOut = $proc.StandardError.ReadToEnd()
+        Write-Host "LSP_EXIT_CODE=$($proc.ExitCode)"
+        if ($errOut) { Write-Host "LSP_STDERR=$errOut" }
+    }
+    throw
 } finally {
     if (-not $proc.HasExited) { $proc.Kill() }
 }

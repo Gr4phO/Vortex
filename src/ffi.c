@@ -30,7 +30,9 @@ void* vortex_load_dynlib(const char* lib_name) {
 #else
     handle = dlopen(lib_name, RTLD_NOW | RTLD_GLOBAL);
 #ifdef __APPLE__
-    if (!handle && (strcmp(lib_name, "msvcrt") == 0 || strcmp(lib_name, "c") == 0 || strcmp(lib_name, "m") == 0)) {
+    if (!handle && (strcmp(lib_name, "msvcrt") == 0 || strcmp(lib_name, "msvcrt.dll") == 0 ||
+                    strcmp(lib_name, "c") == 0 || strcmp(lib_name, "m") == 0 ||
+                    strcmp(lib_name, "libc.so.6") == 0 || strcmp(lib_name, "libm.so.6") == 0)) {
         handle = dlopen("libSystem.B.dylib", RTLD_NOW | RTLD_GLOBAL);
     }
     if (!handle && !strstr(lib_name, ".dylib")) {
@@ -43,7 +45,8 @@ void* vortex_load_dynlib(const char* lib_name) {
         handle = dlopen(alt_name, RTLD_NOW | RTLD_GLOBAL);
     }
 #else
-    if (!handle && (strcmp(lib_name, "msvcrt") == 0 || strcmp(lib_name, "c") == 0)) {
+    if (!handle && (strcmp(lib_name, "msvcrt") == 0 || strcmp(lib_name, "msvcrt.dll") == 0 ||
+                    strcmp(lib_name, "c") == 0 || strcmp(lib_name, "libSystem.B.dylib") == 0)) {
         handle = dlopen("libc.so.6", RTLD_NOW | RTLD_GLOBAL);
     } else if (!handle && strcmp(lib_name, "m") == 0) {
         handle = dlopen("libm.so.6", RTLD_NOW | RTLD_GLOBAL);

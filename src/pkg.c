@@ -1142,9 +1142,17 @@ int vortex_cmd_pkg(int argc, char** argv) {
             return 1;
         }
         const char* dep_name = argv[3];
-        const char* dep_src = argv[4];
+        int arg_idx = 4;
+        if (strcmp(argv[arg_idx], "--path") == 0) {
+            arg_idx++;
+            if (arg_idx >= argc) {
+                fprintf(stderr, "[VORTEX PKG ERROR] Missing path after --path\n");
+                return 1;
+            }
+        }
+        const char* dep_src = argv[arg_idx++];
         const char* rev = "";
-        for (int i = 5; i < argc; i++) {
+        for (int i = arg_idx; i < argc; i++) {
             if (strcmp(argv[i], "--rev") == 0 && i + 1 < argc) rev = argv[++i];
         }
         VortexManifest m;
