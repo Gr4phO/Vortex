@@ -79,8 +79,10 @@ function Recv-Lsp {
     return ($utf8.GetString($buf) | ConvertFrom-Json)
 }
 
+$stage = "start"
 try {
     # 1. initialize
+    $stage = "initialize"
     Send-Lsp @{
         jsonrpc = "2.0"; id = 1; method = "initialize"
         params = @{ processId = $PID; rootUri = $null; capabilities = @{} }
@@ -97,6 +99,7 @@ try {
     $src = "struct Vec2 { x: f32, y: f32 }`nfn add_x(v: Vec2, dx: f32) -> f32 { return v.x + dx; }`nlet p = Vec2 { x: 1.0, y: 2.0 };`nlet s = add_x(p, 3.0);`n"
 
     # 2. didOpen clean -> empty diagnostics
+    $stage = "didOpen"
     Send-Lsp @{
         jsonrpc = "2.0"; method = "textDocument/didOpen"
         params = @{ textDocument = @{ uri = $uri; languageId = "vortex"; version = 1; text = $src } }
@@ -106,6 +109,7 @@ try {
     if ($d1.params.diagnostics.Count -ne 0) { throw "Expected 0 diagnostics on clean file" }
 
     # 3. definition on add_x (line 3, col 9)
+    $stage = "definition"
     Send-Lsp @{
         jsonrpc = "2.0"; id = 2; method = "textDocument/definition"
         params = @{ textDocument = @{ uri = $uri }; position = @{ line = 3; character = 9 } }
@@ -114,6 +118,7 @@ try {
     if ($r2.result.range.start.line -ne 1) { throw "Definition line mismatch: $($r2.result.range.start.line)" }
 
     # 4. hover on add_x
+    $stage = "hover"
     Send-Lsp @{
         jsonrpc = "2.0"; id = 3; method = "textDocument/hover"
         params = @{ textDocument = @{ uri = $uri }; position = @{ line = 3; character = 9 } }
@@ -122,6 +127,7 @@ try {
     if ($r3.result.contents.value -notmatch "add_x") { throw "Hover missing fn signature" }
 
     # 5. completion after 'p.' (add dot test line)
+    $stage = "completion"
     $src2 = $src + "let z = p."
     Send-Lsp @{
         jsonrpc = "2.0"; method = "textDocument/didChange"
@@ -142,6 +148,7 @@ try {
     }
 
     # 6. didChange introducing unsafe violation -> non-empty diagnostic
+    $stage = "didChange_bad"
     $badSrc = "let k = 1;`nlet bad = 1 as *i64;`n"
     Send-Lsp @{
         jsonrpc = "2.0"; method = "textDocument/didChange"
@@ -155,6 +162,7 @@ try {
     if ($d2.params.diagnostics[0].range.start.line -ne 1) { throw "Expected error on line 1, got $($d2.params.diagnostics[0].range.start.line)" }
 
     # 7. shutdown + exit
+    $stage = "shutdown"
     Send-Lsp @{ jsonrpc = "2.0"; id = 5; method = "shutdown"; params = $null }
     $r5 = Recv-Lsp
     if ($r5.id -ne 5) { throw "Shutdown response mismatch" }
@@ -168,6 +176,7 @@ try {
     if ($proc.ExitCode -ne 0) { throw "vortex lsp exited with $($proc.ExitCode)" }
     Write-Host "LSP_PROBE_ALL_OK"
 } catch {
+    Write-Host "LSP_STAGE=$stage"
     Start-Sleep -Milliseconds 100
     if ($proc.HasExited) {
         $errOut = $proc.StandardError.ReadToEnd()

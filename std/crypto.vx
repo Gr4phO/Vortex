@@ -113,30 +113,40 @@ fn crypto_sha256_hex(msg: str) -> str {
     }
 }
 
-#[cfg(unix)]
+#[cfg(linux)]
 fn crypto_find_openssl_libcrypto() -> i64 {
     unsafe {
         let mut h = ffi_load("libcrypto.so.3");
         if h == 0 { h = ffi_load("libcrypto.so"); }
-        if h == 0 { h = ffi_load("libcrypto.3.dylib"); }
-        if h == 0 { h = ffi_load("libcrypto.dylib"); }
-        if h == 0 { h = ffi_load("/opt/homebrew/opt/openssl@3/lib/libcrypto.dylib"); }
-        if h == 0 { h = ffi_load("/opt/homebrew/opt/openssl/lib/libcrypto.dylib"); }
-        if h == 0 { h = ffi_load("/usr/local/opt/openssl@3/lib/libcrypto.dylib"); }
         return h;
     }
 }
 
-#[cfg(unix)]
+#[cfg(macos)]
+fn crypto_find_openssl_libcrypto() -> i64 {
+    unsafe {
+        let mut h = ffi_load("/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib");
+        if h == 0 { h = ffi_load("/opt/homebrew/opt/openssl/lib/libcrypto.3.dylib"); }
+        if h == 0 { h = ffi_load("/usr/local/opt/openssl@3/lib/libcrypto.3.dylib"); }
+        return h;
+    }
+}
+
+#[cfg(linux)]
 fn crypto_find_openssl_libssl() -> i64 {
     unsafe {
         let mut h = ffi_load("libssl.so.3");
         if h == 0 { h = ffi_load("libssl.so"); }
-        if h == 0 { h = ffi_load("libssl.3.dylib"); }
-        if h == 0 { h = ffi_load("libssl.dylib"); }
-        if h == 0 { h = ffi_load("/opt/homebrew/opt/openssl@3/lib/libssl.dylib"); }
-        if h == 0 { h = ffi_load("/opt/homebrew/opt/openssl/lib/libssl.dylib"); }
-        if h == 0 { h = ffi_load("/usr/local/opt/openssl@3/lib/libssl.dylib"); }
+        return h;
+    }
+}
+
+#[cfg(macos)]
+fn crypto_find_openssl_libssl() -> i64 {
+    unsafe {
+        let mut h = ffi_load("/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib");
+        if h == 0 { h = ffi_load("/opt/homebrew/opt/openssl/lib/libssl.3.dylib"); }
+        if h == 0 { h = ffi_load("/usr/local/opt/openssl@3/lib/libssl.3.dylib"); }
         return h;
     }
 }

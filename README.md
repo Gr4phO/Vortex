@@ -2,11 +2,11 @@
 
 **Langage système et de calcul haute performance compilé à la volée (JIT `x86-64` AVX2 & `ARM64` NEON)** — *zéro garbage collector, arènes paginées à régions statiques, FFI C dynamique et compilation en binaire autonome.*
 
-[![Version](https://img.shields.io/github/v/tag/corbac10099/Vortex?label=version&color=10B981&style=flat-square)](https://github.com/corbac10099/Vortex/releases/latest)
+[![Version](https://img.shields.io/github/v/tag/Gr4phO/Vortex?label=version&color=10B981&style=flat-square)](https://github.com/Gr4phO/Vortex/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=flat-square)](LICENSE)
 [![Architecture](https://img.shields.io/badge/arch-x86--64%20AVX2%20%7C%20ARM64%20NEON-334155?style=flat-square)](#architecture-sécurité--limites-connues)
 [![Standard](https://img.shields.io/badge/C99-zero%20external%20deps-334155?style=flat-square)](#compilation-depuis-les-sources--tests)
-[![CI](https://img.shields.io/github/actions/workflow/status/corbac10099/Vortex/ci.yml?style=flat-square&label=CI)](.github/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/Gr4phO/Vortex/ci.yml?style=flat-square&label=CI)](.github/workflows/ci.yml)
 
 Vortex compile les scripts `.vx` et sessions REPL directement en code machine natif en mémoire (~16 450 lignes de C99 pur modulaire dans `src/`, sans LLVM ni dépendance externe). Il combine une gestion mémoire sans GC basée sur des arènes paginées (`2 Mo`) avec contrôle statique d'échappement, un allocateur de registres Linear-Scan sur IR 3-adresses, une vectorisation SIMD automatique (`AVX2/FMA3` / `NEON`), un serveur LSP intégré, un gestionnaire de paquets (`vortex pkg`) et une bibliothèque standard modulaire (`std/`).
 

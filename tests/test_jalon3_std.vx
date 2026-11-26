@@ -12,6 +12,7 @@ let mut passed = 0;
 let mut failed = 0;
 
 // 1. std/json inside arena scope (zero allocation per object across scope_pop)
+print_str("[STD1:json]\n");
 let mark = scope_push();
 let doc = json_parse("{\"lang\":\"vortex\",\"ver\":3,\"ok\":true,\"arr\":[10,20,30]}");
 let ser = json_stringify(doc);
@@ -30,6 +31,7 @@ if doc.kind == 6 {
 scope_pop(mark);
 
 // 2. std/crypto (OS CNG/OpenSSL SHA-256 + CSPRNG + TLS probe)
+print_str("[STD2:crypto]\n");
 let h_abc = crypto_sha256_hex("abc");
 let rnd = crypto_random_hex(16);
 let tls_ok = crypto_tls_available();
@@ -58,6 +60,7 @@ if tls_ok == 1 {
 }
 
 // 3. std/net + std/http non-blocking loopback roundtrip
+print_str("[STD3:net]\n");
 let ni = net_init();
 let srv = net_tcp_listen(0, 1);
 let port = net_bound_port(srv);
@@ -92,6 +95,7 @@ if ni == 0 {
 } else { failed = failed + 1; print_str("[FAIL] net init\n"); }
 
 // 4. std/db (SQLite native FFI)
+print_str("[STD4:db]\n");
 let sq_avail = db_sqlite_available();
 let _pg_avail = db_postgres_available();
 if sq_avail == 1 {
@@ -114,6 +118,7 @@ if sq_avail == 1 {
 }
 
 // 5. std/gpu (Vulkan/DX12/Metal probe + SIMD SAXPY compute kernel)
+print_str("[STD5:gpu]\n");
 let ginfo = gpu_probe();
 let y = slice_f32(4);
 let x = slice_f32(4);
