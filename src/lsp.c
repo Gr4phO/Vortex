@@ -312,6 +312,12 @@ static bool lsp_read_message(char** out_json, size_t* out_len) {
             continue;
         }
         got_header = true;
+        if (getenv("VORTEX_LSP_DEBUG")) {
+            fprintf(stderr, "[LSP_DBG] hdr(%zu) [%02x %02x %02x]: '%s'\n",
+                    l, (unsigned char)line[0], l > 1 ? (unsigned char)line[1] : 0,
+                    l > 2 ? (unsigned char)line[2] : 0, line);
+            fflush(stderr);
+        }
         /* Case-insensitive Content-Length prefix */
         if (l > 15) {
             char hdr_low[16];
