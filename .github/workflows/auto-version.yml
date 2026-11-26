@@ -41,7 +41,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          LAST_TAG=$(git describe --tags --abbrev=0 --match "v[0-9]*.[0-9]*.[0-9]*" 2>/dev/null || echo "v1.0.0")
+          LAST_TAG=$(git tag -l "v[0-9]*.[0-9]*.[0-9]*" | sort -V | tail -n 1)
+          if [ -z "$LAST_TAG" ]; then LAST_TAG="v1.0.0"; fi
           TAG_VER="${LAST_TAG#v}"
           FILE_VER=$(tr -d ' \r\n' < VERSION 2>/dev/null || echo "$TAG_VER")
 
@@ -86,7 +87,7 @@ jobs:
             git push origin HEAD:main
           fi
           git tag -a "$NEW_TAG" -m "Release ${NEW_TAG}"
-          git push origin "$NEW_TAG"
+          git push origin "$NEW_TAG" || (sleep 2 && git push origin "$NEW_TAG")
 
           echo "Released version $NEW_TAG (bump=$BUMP)"
           gh workflow run release.yml --ref "$NEW_TAG" || true

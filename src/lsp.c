@@ -306,35 +306,30 @@ static bool lsp_read_message(char** out_json, size_t* out_len) {
     bool got_header = false;
 
     while (lsp_read_line(line, sizeof(line))) {
-        size_t l = strlen(line);
+        char* h = line;
+        /* Strip optional UTF-8 BOM or leading spaces prepended by Windows pipe hosts */
+        while ((unsigned char)h[0] == 0xEF && (unsigned char)h[1] == 0xBB && (unsigned char)h[2] == 0xBF) {
+            h += 3;
+        }
+        while (*h == ' ' || *h == '\t') h++;
+        size_t l = strlen(h);
         if (l == 0) {
             if (got_header) break;
             continue;
         }
         got_header = true;
-        if (getenv("VORTEX_LSP_DEBUG")) {
-            fprintf(stderr, "[LSP_DBG] hdr(%zu) [%02x %02x %02x]: '%s'\n",
-                    l, (unsigned char)line[0], l > 1 ? (unsigned char)line[1] : 0,
-                    l > 2 ? (unsigned char)line[2] : 0, line);
-            fflush(stderr);
-        }
         /* Case-insensitive Content-Length prefix */
         if (l > 15) {
             char hdr_low[16];
-            for (int i = 0; i < 15; i++) hdr_low[i] = (char)tolower((unsigned char)line[i]);
+            for (int i = 0; i < 15; i++) hdr_low[i] = (char)tolower((unsigned char)h[i]);
             hdr_low[15] = '\0';
             if (strcmp(hdr_low, "content-length:") == 0) {
-                content_len = (size_t)strtoull(line + 15, NULL, 10);
+                content_len = (size_t)strtoull(h + 15, NULL, 10);
             }
         }
     }
 
     if (!got_header || content_len == 0 || content_len > (16U * 1024U * 1024U)) {
-        if (getenv("VORTEX_LSP_DEBUG")) {
-            fprintf(stderr, "[LSP_DBG] read_message abort: got_header=%d content_len=%zu\n",
-                    got_header ? 1 : 0, content_len);
-            fflush(stderr);
-        }
         return false;
     }
 
@@ -1368,11 +1363,6 @@ static void lsp_handle_completion(const char* id_json, const char* params) {
 int vortex_cmd_lsp(int argc, char** argv) {
     (void)argc;
     (void)argv;
-    bool dbg = (getenv("VORTEX_LSP_DEBUG") != NULL);
-    if (dbg) {
-        fprintf(stderr, "[LSP_DBG] vortex_cmd_lsp enter\n");
-        fflush(stderr);
-    }
 #ifdef _WIN32
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
@@ -1383,10 +1373,6 @@ int vortex_cmd_lsp(int argc, char** argv) {
     size_t msg_len = 0;
 
     while (lsp_read_message(&msg, &msg_len)) {
-        if (dbg) {
-            fprintf(stderr, "[LSP_DBG] recv %zu bytes\n", msg_len);
-            fflush(stderr);
-        }
         char id_json[128] = "null";
         bool has_id = json_extract_raw_id(msg, id_json, sizeof(id_json));
         const char* mpos = json_find_key(msg, "method");

@@ -28,7 +28,6 @@ $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $VortexBin
 $psi.Arguments = "lsp"
 $psi.UseShellExecute = $false
-$psi.EnvironmentVariables["VORTEX_LSP_DEBUG"] = "1"
 $psi.RedirectStandardInput = $true
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
