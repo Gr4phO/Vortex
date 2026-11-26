@@ -28,6 +28,7 @@ $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $VortexBin
 $psi.Arguments = "lsp"
 $psi.UseShellExecute = $false
+$psi.EnvironmentVariables["VORTEX_LSP_DEBUG"] = "1"
 $psi.RedirectStandardInput = $true
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
@@ -177,7 +178,7 @@ try {
     Write-Host "LSP_PROBE_ALL_OK"
 } catch {
     Write-Host "LSP_STAGE=$stage"
-    Start-Sleep -Milliseconds 100
+    [void]$proc.WaitForExit(1000)
     if ($proc.HasExited) {
         $errOut = $proc.StandardError.ReadToEnd()
         Write-Host "LSP_EXIT_CODE=$($proc.ExitCode)"
