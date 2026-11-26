@@ -116,6 +116,30 @@ static void a64_cset(JITBuffer* j, int rd, int cond) {
     a64_emit32(j, 0x9A9F07E0U | (inv << 12) | ((uint32_t)rd & 31U));
 }
 
+static void a64_and_rr(JITBuffer* j, int rd, int rn, int rm) {
+    a64_emit32(j, 0x8A000000U | (((uint32_t)rm & 31U) << 16) | (((uint32_t)rn & 31U) << 5) | ((uint32_t)rd & 31U));
+}
+
+static void a64_orr_rr(JITBuffer* j, int rd, int rn, int rm) {
+    a64_emit32(j, 0xAA000000U | (((uint32_t)rm & 31U) << 16) | (((uint32_t)rn & 31U) << 5) | ((uint32_t)rd & 31U));
+}
+
+static void a64_eor_rr(JITBuffer* j, int rd, int rn, int rm) {
+    a64_emit32(j, 0xCA000000U | (((uint32_t)rm & 31U) << 16) | (((uint32_t)rn & 31U) << 5) | ((uint32_t)rd & 31U));
+}
+
+static void a64_mvn_rr(JITBuffer* j, int rd, int rm) {
+    a64_emit32(j, 0xAA2003E0U | (((uint32_t)rm & 31U) << 16) | ((uint32_t)rd & 31U));
+}
+
+static void a64_lslv_rr(JITBuffer* j, int rd, int rn, int rm) {
+    a64_emit32(j, 0x9AC02000U | (((uint32_t)rm & 31U) << 16) | (((uint32_t)rn & 31U) << 5) | ((uint32_t)rd & 31U));
+}
+
+static void a64_asrv_rr(JITBuffer* j, int rd, int rn, int rm) {
+    a64_emit32(j, 0x9AC02800U | (((uint32_t)rm & 31U) << 16) | (((uint32_t)rn & 31U) << 5) | ((uint32_t)rd & 31U));
+}
+
 static void a64_sxtw(JITBuffer* j, int rd, int rn) {
     /* SBFM Xd, Xn, #0, #31 */
     a64_emit32(j, 0x93407C00U | (((uint32_t)rn & 31U) << 5) | ((uint32_t)rd & 31U));
@@ -818,6 +842,7 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 break;
             }
 
+
             case IR_CONST_F32: {
                 int sd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
                 a64_load_f32_imm(j, ins->fimm, sd);
@@ -849,6 +874,7 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 break;
             }
 
+
             case IR_DIV:
             case IR_MOD: {
                 int r1 = a64_get_int_reg(ir, ins->src1, A64_X13, j);
@@ -863,6 +889,7 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 a64_commit_int_reg(ir, ins->dest, rd, j);
                 break;
             }
+
 
             case IR_FADD:
             case IR_FSUB:
@@ -904,6 +931,7 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 break;
             }
 
+
             case IR_FEQ:
             case IR_FNE:
             case IR_FLT:
@@ -929,6 +957,7 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 break;
             }
 
+
             case IR_CAST_I64_TO_F32: {
                 int rs = a64_get_int_reg(ir, ins->src1, A64_X13, j);
                 int sd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
@@ -944,6 +973,59 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 a64_commit_int_reg(ir, ins->dest, rd, j);
                 break;
             }
+
+            case IR_BAND:
+            case IR_BOR:
+            case IR_BXOR:
+            case IR_SHL:
+            case IR_SHR: {
+                int r1 = a64_get_int_reg(ir, ins->src1, A64_X13, j);
+                int r2;
+                if (ins->src2 == VREG_NONE) {
+                    a64_mov_imm64(j, A64_X14, (uint64_t)ins->imm);
+                    r2 = A64_X14;
+                } else {
+                    r2 = a64_get_int_reg(ir, ins->src2, A64_X14, j);
+                }
+                int rd = ir->vregs[ins->dest].is_spilled ? A64_X15 : ir->vregs[ins->dest].preg;
+                if (ins->op == IR_BAND) a64_and_rr(j, rd, r1, r2);
+                else if (ins->op == IR_BOR) a64_orr_rr(j, rd, r1, r2);
+                else if (ins->op == IR_BXOR) a64_eor_rr(j, rd, r1, r2);
+                else if (ins->op == IR_SHL) a64_lslv_rr(j, rd, r1, r2);
+                else a64_asrv_rr(j, rd, r1, r2);
+                a64_commit_int_reg(ir, ins->dest, rd, j);
+                break;
+            }
+
+            case IR_BNOT: {
+                int r1 = a64_get_int_reg(ir, ins->src1, A64_X13, j);
+                int rd = ir->vregs[ins->dest].is_spilled ? A64_X13 : ir->vregs[ins->dest].preg;
+                a64_mvn_rr(j, rd, r1);
+                a64_commit_int_reg(ir, ins->dest, rd, j);
+                break;
+            }
+
+            case IR_LNOT: {
+                int r1 = a64_get_int_reg(ir, ins->src1, A64_X13, j);
+                a64_cmp_rr(j, r1, A64_XZR);
+                int rd = ir->vregs[ins->dest].is_spilled ? A64_X13 : ir->vregs[ins->dest].preg;
+                a64_cset(j, rd, 0); /* EQ */
+                a64_commit_int_reg(ir, ins->dest, rd, j);
+                break;
+            }
+
+            case IR_DIV_CHECK: {
+                A64CallArg cargs[2];
+                int r_div = a64_get_int_reg(ir, ins->src1, A64_X13, j);
+                size_t cbnz_pos = j->size;
+                a64_emit32(j, 0xB5000000U | ((uint32_t)r_div & 31U)); /* CBNZ Xr, +ok */
+                cargs[0] = (A64CallArg){ A64_ARG_IMM, VREG_NONE, (int64_t)(uintptr_t)vortex_intern_cstr(ins->file ? ins->file : "<input>"), TYPE_I64 };
+                cargs[1] = (A64CallArg){ A64_ARG_IMM, VREG_NONE, (int64_t)ins->line, TYPE_I64 };
+                a64_emit_stage_and_call(j, ir, (void*)vortex_ultrasafe_div_zero, cargs, 2, false, false, 2);
+                a64_patch_branch(j, cbnz_pos, j->size, true);
+                break;
+            }
+
 
             case IR_LOAD_OFFSET: {
                 int r_base = a64_get_int_reg(ir, ins->src1, A64_X13, j);
@@ -1136,10 +1218,13 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
             }
 
             case IR_CALL: {
-                if (ins->func_ptr == (void*)helper_print_f32) {
+                if (ins->func_ptr == (void*)helper_print_f32 ||
+                    ins->func_ptr == (void*)vortex_math_sinf ||
+                    ins->func_ptr == (void*)vortex_math_cosf ||
+                    ins->func_ptr == (void*)vortex_math_sqrtf) {
                     int s = a64_get_float_reg(ir, ins->args[0], 0, j);
                     a64_fmov_ss(j, 0, s);
-                    a64_mov_imm64(j, A64_X16, (uint64_t)(uintptr_t)helper_print_f32);
+                    a64_mov_imm64(j, A64_X16, (uint64_t)(uintptr_t)ins->func_ptr);
                     a64_blr(j, A64_X16);
                 } else {
                     A64CallArg cargs[MAX_CALL_ARGS];

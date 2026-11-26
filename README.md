@@ -100,23 +100,41 @@ build.bat
 make            # Détection automatique OS / X11
 make headless   # Sans dépendance X11 (-DVORTEX_NO_X11)
 make release    # Binaire LTO strippé
+make shared     # Bibliothèque partagée libvortex.so / libvortex.dylib
 ```
 
-### Utilisation CLI & REPL
+### Utilisation CLI & Outils AI-Friendly (`v1.1.0`)
 
 ```sh
 ./vortex                                                 # REPL interactif
 ./vortex run --release benchmarks/suite_10_langs/bench_vortex.vx
-./vortex --headless run --safe tests/test_safety_pass.vx # Validation mémoire/bornes
-./vortex eval "let mut x = 21; x = x * 2; print(x);"
-./vortex build examples/app_3d.vx -o app_3d.exe          # Binaire autonome
+./vortex --headless run --safe tests/test_safety_pass.vx # Validation mémoire/bornes + frames exactes
+./vortex --ultrasafe 1 script.vx                         # + div/0 runtime & warnings (W101..W104)
+./vortex --ultrasafe 2 --check script.vx                 # + audits statiques (E201..E204) & garde récursion
+./vortex --ultrasafe 3 --check --json script.vx          # Multi-erreurs en un passage + sortie JSON structurée
+./vortex test [chemin] [--json]                          # Exécuteur natif de tests (assert / assert_eq / test_*)
+./vortex spec [--json]                                   # Spécification auto-générée depuis le compilateur
+./vortex eval "let mut x = 21; x *= 2; print(x);"
+./vortex build examples/app_3d.vx -o app_3d.exe          # Binaire autonome (Windows / Linux / macOS)
 ./vortex lsp                                             # Serveur LSP (JSON-RPC)
 ```
+
+### Nouveautés Ergonomie (`v1.1.0`)
+
+- **Opérateurs logiques & bit-à-bit** : court-circuit `&&` et `||`, `!`, `&`, `|`, `^`, `~`, `<<`, `>>`
+- **Affectations composées** : `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` sur variables, champs et slices
+- **Contrôle de flux & Types** : `break`, `continue`, `true`, `false`, `enum Nom { A, B = 10, C }` (`Nom::B` / `Nom.B`), commentaires `/* ... */`, chaînes littérales jusqu'à **4095 octets**
+- **Assertions natives** : `assert(cond)` et `assert_eq(a, b)` intégrés pour `vortex test`
+
+### Transparence Benchmarks & Limites Connues
+
+- `--safe` conserve intentionnellement les vérifications d'indices/pointeurs à l'exécution ainsi que les frames d'appel non-inlinées pour des stacktraces exactes (`--safe` profite tout de même du constant folding, propagation de copies, LICM constante et DCE). `--release` active l'élimination des bornes (`RCE`), l'inlining, le déroulage et la vectorisation AVX2/NEON (`~214 ms` vs `~1702 ms` en `--safe` sur `bench_vortex.vx`).
+- **Types scalaires & limites actuelles** : scalaires natifs centrés sur `i64`, `i32`, `f32`, `str`, `ptr` et `enum` ; jusqu'à **64 champs par struct** et **8192 fonctions utilisateur**.
 
 ### Suite de tests automatisés
 
 ```bat
-tests\run_tests.bat   :: Windows (unitaires, test_opt_regression.vx, 16 sécurité, 7 ARM64, 9 outillage & stdlib)
+tests\run_tests.bat   :: Windows (unitaires, ergonomics, opt_regression, 16 sécurité, 7 ARM64, 9 outillage & stdlib, ultrasafe 1/2/3)
 ```
 
 ```sh
@@ -130,16 +148,17 @@ tests\run_tests.bat   :: Windows (unitaires, test_opt_regression.vx, 16 sécurit
 ```text
 .
 ├── .github/workflows/   # CI (ci.yml), release multi-OS (release.yml) & SemVer auto (auto-version.yml)
-├── src/                 # Compilateur C99 modulaire (~16 450 lignes : lexer, modules, parser_expr/stmt, ir_core/ir_opt/ir_vec_ra, jit_x64/jit_x64_simd/ffi/jit_arm64, lsp, pkg, arena, gui, packager, runtime)
+├── src/                 # Compilateur C99 modulaire : lexer, modules, parser_expr/stmt, ir_core/ir_opt/ir_vec_ra, jit_x64/jit_x64_simd/ffi/jit_arm64, lsp, pkg, arena, gui, packager, runtime
 ├── std/                 # Bibliothèque standard modulaire (.vx : math, str, fs, json, crypto, net, http, db, gpu)
 ├── benchmarks/          # Banc d'essai suite_10_langs/ & rapport BENCHMARK_REPORT_v1.0.0.md
 ├── docs/                # Spécification (VORTEX_SPEC.md), roadmap & graphiques SVG (assets/)
 ├── examples/            # Démonstrations 3D et GUI natives (.vx)
-├── tests/               # Tests fonctionnels, sécurité (--safe/neg_*), régression opt, FFI multi-OS, ARM64, LSP/pkg & stdlib
+├── tests/               # Tests fonctionnels, ergonomie, sécurité (--safe/--ultrasafe), régression opt, FFI multi-OS, ARM64, LSP/pkg & stdlib
 ├── LICENSE              # Licence Apache-2.0
 ├── VERSION              # Version courante SemVer (lue par build.bat / Makefile)
-├── build.bat            # Script de compilation Windows
-└── Makefile             # Build multiplateforme Linux / macOS (GCC & Clang)
+├── build.bat            # Script de compilation Windows (CLI + vortex.dll)
+├── build.sh             # Script de compilation Linux / macOS
+└── Makefile             # Build multiplateforme Linux / macOS (GCC & Clang + shared)
 ```
 
 ---

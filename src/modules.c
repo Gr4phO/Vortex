@@ -6,7 +6,7 @@
 
 VortexImportHookFn g_pkg_import_hook = NULL;
 
-#define MAX_IMPORTED_PATHS 256
+#define MAX_IMPORTED_PATHS 1024
 static char g_imported_paths[MAX_IMPORTED_PATHS][512];
 static int g_imported_path_count = 0;
 

@@ -482,15 +482,108 @@ static bool emit_macho64_arm64_binary(const char* output_path, const uint8_t* ji
     return ok;
 }
 
+static bool vortex_has_suffix(const char* str, const char* suffix) {
+    if (!str || !suffix) return false;
+    size_t sl = strlen(str);
+    size_t xl = strlen(suffix);
+    if (sl < xl) return false;
+#ifdef _WIN32
+    return _stricmp(str + sl - xl, suffix) == 0;
+#else
+    return strcmp(str + sl - xl, suffix) == 0;
+#endif
+}
+
+bool vortex_load_embedded_module_payload(void* module_handle, char** out_src, uint32_t* out_flags) {
+    if (out_src) *out_src = NULL;
+    if (out_flags) *out_flags = 0;
+    char mod_path[1024] = {0};
+#ifdef _WIN32
+    HMODULE hm = (HMODULE)module_handle;
+    if (!hm) return false;
+    DWORD len = GetModuleFileNameA(hm, mod_path, (DWORD)sizeof(mod_path));
+    if (len == 0 || len >= sizeof(mod_path)) return false;
+#else
+    (void)module_handle;
+    vortex_get_self_path(mod_path, sizeof(mod_path), NULL);
+    if (mod_path[0] == '\0') return false;
+#endif
+
+    FILE* f = fopen(mod_path, "rb");
+    if (!f) return false;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
+    long file_size = ftell(f);
+    if (file_size < (long)sizeof(VortexPackageFooter)) { fclose(f); return false; }
+    if (fseek(f, file_size - (long)sizeof(VortexPackageFooter), SEEK_SET) != 0) { fclose(f); return false; }
+
+    VortexPackageFooter footer;
+    if (fread(&footer, sizeof(footer), 1, f) != 1 ||
+        memcmp(footer.footer_magic, VORTEX_PACK_MAGIC_FOOTER, 8) != 0 ||
+        footer.payload_offset >= (uint64_t)(file_size - (long)sizeof(VortexPackageFooter))) {
+        fclose(f);
+        return false;
+    }
+
+    if (fseek(f, (long)footer.payload_offset, SEEK_SET) != 0) { fclose(f); return false; }
+    VortexPackageHeader hdr;
+    if (fread(&hdr, sizeof(hdr), 1, f) != 1 ||
+        memcmp(hdr.header_magic, VORTEX_PACK_MAGIC_HEADER, 4) != 0 ||
+        hdr.version != VORTEX_PACK_VERSION ||
+        hdr.source_len == 0 || hdr.source_len > 100 * 1024 * 1024) {
+        fclose(f);
+        return false;
+    }
+
+    char* src_buf = (char*)malloc((size_t)hdr.source_len + 1);
+    if (!src_buf) { fclose(f); return false; }
+    size_t n = fread(src_buf, 1, hdr.source_len, f);
+    fclose(f);
+    if (n != hdr.source_len) {
+        free(src_buf);
+        return false;
+    }
+    src_buf[n] = '\0';
+    if (out_src) *out_src = src_buf;
+    else free(src_buf);
+    if (out_flags) *out_flags = hdr.flags;
+    return true;
+}
+
+static FILE* open_companion_shared_runtime(const char* self_path, const VortexTargetDesc* td, char* out_found, size_t cap) {
+    const char* prefix = (td->abi == VORTEX_ABI_WIN64) ? "" : "lib";
+    const char* ext = (td->abi == VORTEX_ABI_WIN64) ? ".dll"
+                    : ((td->abi == VORTEX_ABI_DARWIN64) ? ".dylib" : ".so");
+    char dir[1024];
+    vx_str_copy(dir, sizeof(dir), self_path);
+    char* slash1 = strrchr(dir, '/');
+    char* slash2 = strrchr(dir, '\\');
+    char* sep = (slash1 && slash2) ? ((slash1 > slash2) ? slash1 : slash2) : (slash1 ? slash1 : slash2);
+    if (sep) *sep = '\0';
+    else vx_str_copy(dir, sizeof(dir), ".");
+
+    char cand[1280];
+    snprintf(cand, sizeof(cand), "%s/%svortex-%s%s", dir, prefix, td->name, ext);
+    vx_str_copy(out_found, cap, cand);
+    FILE* f = fopen(out_found, "rb");
+    if (f) return f;
+
+    snprintf(cand, sizeof(cand), "%s/%svortex%s", dir, prefix, ext);
+    vx_str_copy(out_found, cap, cand);
+    return fopen(out_found, "rb");
+}
+
 int vortex_cmd_build(int argc, char** argv) {
     const char* input_path = NULL;
     char output_path[1024] = {0};
+    bool is_shared = false;
 
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--release") == 0) {
             g_compile_mode = VORTEX_MODE_RELEASE;
         } else if (strcmp(argv[i], "--safe") == 0) {
             g_compile_mode = VORTEX_MODE_SAFE;
+        } else if (strcmp(argv[i], "--shared") == 0 || strcmp(argv[i], "--dll") == 0) {
+            is_shared = true;
         } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
             const char* tname = argv[++i];
             if (!vortex_set_target_name(tname)) {
@@ -517,11 +610,23 @@ int vortex_cmd_build(int argc, char** argv) {
     }
 
     const VortexTargetDesc* td = vortex_get_target_desc();
+    if (output_path[0] != '\0' &&
+        (vortex_has_suffix(output_path, ".dll") ||
+         vortex_has_suffix(output_path, ".so") ||
+         vortex_has_suffix(output_path, ".dylib"))) {
+        is_shared = true;
+    }
     if (output_path[0] == '\0') {
         vx_str_copy(output_path, sizeof(output_path), input_path);
         char* dot = strrchr(output_path, '.');
         if (dot) *dot = '\0';
-        if (td->abi == VORTEX_ABI_WIN64) {
+        if (is_shared) {
+            const char* ext = (td->abi == VORTEX_ABI_WIN64) ? ".dll"
+                            : ((td->abi == VORTEX_ABI_DARWIN64) ? ".dylib" : ".so");
+            size_t cur = strlen(output_path);
+            size_t exl = strlen(ext);
+            if (cur + exl < sizeof(output_path)) memcpy(output_path + cur, ext, exl + 1);
+        } else if (td->abi == VORTEX_ABI_WIN64) {
             size_t cur = strlen(output_path);
             if (cur + 4 < sizeof(output_path)) memcpy(output_path + cur, ".exe", 5);
         }
@@ -545,7 +650,9 @@ int vortex_cmd_build(int argc, char** argv) {
     char companion_path[1024] = {0};
     bool is_cross = vortex_is_cross_target();
 
-    if (!is_cross) {
+    if (is_shared) {
+        rt_f = open_companion_shared_runtime(self_path, td, companion_path, sizeof(companion_path));
+    } else if (!is_cross) {
         rt_f = fopen(self_path, "rb");
     } else {
         rt_f = open_companion_runtime(self_path, td, companion_path, sizeof(companion_path));

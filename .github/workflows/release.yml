@@ -17,26 +17,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Compile standalone Vortex CLI (vortex-windows-x64.exe)
+      - name: Compile standalone Vortex CLI & Host DLL (Windows x64)
         shell: cmd
         run: |
-          if not exist releases\v1.0.0 mkdir releases\v1.0.0
-          set VORTEX_VER=1.0.1
+          if not exist dist mkdir dist
+          set VORTEX_VER=1.1.0
           if exist VERSION set /p VORTEX_VER=<VERSION
           for /f "tokens=* delims= " %%a in ("%VORTEX_VER%") do set VORTEX_VER=%%a
-          clang -std=c99 -Oz -s -flto -ffunction-sections -fdata-sections -Wl,--gc-sections -Wall -Wextra -DVORTEX_VERSION=\"%VORTEX_VER%\" src/arena.c src/lexer.c src/modules.c src/parser_expr.c src/parser_stmt.c src/ir_core.c src/ir_opt.c src/ir_vec_ra.c src/ffi.c src/jit_x64_simd.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/gui.c src/packager.c src/runtime.c src/main.c -o releases/v1.0.0/vortex-windows-x64.exe -luser32 -lgdi32
-          copy /Y releases\v1.0.0\vortex-windows-x64.exe vortex.exe >nul
-          .\releases\v1.0.0\vortex-windows-x64.exe --version
+          set VORTEX_SRCS=src/arena.c src/lexer.c src/modules.c src/parser_expr.c src/parser_stmt.c src/ir_core.c src/ir_opt.c src/ir_vec_ra.c src/ffi.c src/jit_x64_simd.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/gui.c src/packager.c src/runtime.c src/main.c
+          clang -std=c99 -O2 -s -Wall -Wextra -DVORTEX_VERSION=\"%VORTEX_VER%\" %VORTEX_SRCS% -o dist/vortex-windows-x64.exe -luser32 -lgdi32
+          clang -std=c99 -O2 -s -shared -DVORTEX_SHARED_LIB -DVORTEX_HEADLESS -Wall -Wextra -DVORTEX_VERSION=\"%VORTEX_VER%\" %VORTEX_SRCS% -o dist/vortex-windows-x64.dll -luser32 -lgdi32
+          copy /Y dist\vortex-windows-x64.exe vortex.exe >nul
+          .\dist\vortex-windows-x64.exe --version
 
-      - name: Run Vortex test suite
+      - name: Run Vortex test suite (Windows x64)
         shell: cmd
         run: .\tests\run_tests.bat
 
-      - name: Upload Windows binary artifact
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: vortex-windows-x64
-          path: releases/v1.0.0/vortex-windows-x64.exe
+          path: |
+            dist/vortex-windows-x64.exe
+            dist/vortex-windows-x64.dll
 
   build-linux:
     name: Build & Test Linux x86-64
@@ -45,64 +49,68 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify GCC _FORTIFY_SOURCE & X11 build, then compile portable headless release binary
+      - name: Build & Test Linux x86-64 (CLI + libvortex.so)
         run: |
+          chmod +x build.sh tests/*.sh
           sudo apt-get update && sudo apt-get install -y libx11-dev
           make clean && make CC=gcc CFLAGS="-std=c99 -O2 -D_FORTIFY_SOURCE=2 -Wall -Wextra"
-          VORTEX_HEADLESS=1 ./tests/run_tests.sh
-          make clean && make CC=clang
-          ./vortex --headless --version
+          VORTEX_HEADLESS=1 bash ./tests/run_tests.sh
           make clean
           make HEADLESS=1 CC=clang release TARGET=vortex
-          mkdir -p releases/v1.0.0
-          cp vortex releases/v1.0.0/vortex-linux-x64
-          chmod +x releases/v1.0.0/vortex-linux-x64
-          ./releases/v1.0.0/vortex-linux-x64 --version
+          make HEADLESS=1 CC=clang shared
+          mkdir -p dist
+          cp vortex dist/vortex-linux-x64
+          cp libvortex.so dist/libvortex-linux-x64.so
+          chmod +x dist/vortex-linux-x64
+          ./dist/vortex-linux-x64 --version
+          VORTEX_HEADLESS=1 bash ./tests/run_tests.sh
 
-      - name: Run Vortex test suite (Linux x86-64)
-        run: |
-          cp releases/v1.0.0/vortex-linux-x64 ./vortex
-          VORTEX_HEADLESS=1 ./tests/run_tests.sh
-
-      - name: Upload Linux binary artifact
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
           name: vortex-linux-x64
-          path: releases/v1.0.0/vortex-linux-x64
+          path: |
+            dist/vortex-linux-x64
+            dist/libvortex-linux-x64.so
 
   build-macos:
-    name: Build & Test macOS x86-64
+    name: Build & Test macOS (ARM64 + x86-64)
     runs-on: macos-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Compile standalone Vortex CLI (vortex-macos-x64)
+      - name: Build & Test macOS Apple Silicon (arm64) & Intel (x86_64)
         run: |
+          chmod +x build.sh tests/*.sh
+          mkdir -p dist
+
+          make clean
+          make CC="clang -arch arm64" release TARGET=vortex
+          cp vortex dist/vortex-macos-arm64
+          chmod +x dist/vortex-macos-arm64
+          make CC="clang -arch arm64" shared
+          cp libvortex.dylib dist/libvortex-macos-arm64.dylib
+          ./dist/vortex-macos-arm64 --version
+          VORTEX_HEADLESS=1 bash ./tests/run_tests.sh
+
           make clean
           make CC="clang -arch x86_64" release TARGET=vortex
-          mkdir -p releases/v1.0.0
-          cp vortex releases/v1.0.0/vortex-macos-x64
-          chmod +x releases/v1.0.0/vortex-macos-x64
-          file releases/v1.0.0/vortex-macos-x64
-          if arch -x86_64 ./releases/v1.0.0/vortex-macos-x64 --version 2>/dev/null; then
-            echo "Rosetta x86_64 execution verified"
-          fi
+          cp vortex dist/vortex-macos-x64
+          chmod +x dist/vortex-macos-x64
+          file dist/vortex-macos-arm64 dist/vortex-macos-x64
 
-      - name: Run Vortex test suite (macOS host verification)
-        run: |
-          make clean
-          make CC=clang TARGET=vortex
-          VORTEX_HEADLESS=1 ./tests/run_tests.sh
-
-      - name: Upload macOS binary artifact
+      - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: vortex-macos-x64
-          path: releases/v1.0.0/vortex-macos-x64
+          name: vortex-macos
+          path: |
+            dist/vortex-macos-arm64
+            dist/libvortex-macos-arm64.dylib
+            dist/vortex-macos-x64
 
   publish-release:
-    name: Publish GitHub Release Assets (CLI Only)
+    name: Publish GitHub Release Assets (All Platforms)
     needs: [build-windows, build-linux, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -112,18 +120,29 @@ jobs:
         with:
           path: dist_artifacts
 
-      - name: Gather official CLI executables
+      - name: Gather official CLI & shared library executables + SHA256SUMS
         run: |
           mkdir -p release_assets
           cp dist_artifacts/vortex-windows-x64/vortex-windows-x64.exe release_assets/
+          cp dist_artifacts/vortex-windows-x64/vortex-windows-x64.dll release_assets/
           cp dist_artifacts/vortex-linux-x64/vortex-linux-x64 release_assets/
-          cp dist_artifacts/vortex-macos-x64/vortex-macos-x64 release_assets/
+          cp dist_artifacts/vortex-linux-x64/libvortex-linux-x64.so release_assets/
+          cp dist_artifacts/vortex-macos/vortex-macos-arm64 release_assets/
+          cp dist_artifacts/vortex-macos/libvortex-macos-arm64.dylib release_assets/
+          cp dist_artifacts/vortex-macos/vortex-macos-x64 release_assets/
+          (cd release_assets && sha256sum * > SHA256SUMS.txt)
           ls -lh release_assets/
 
-      - name: Attach CLI binaries to GitHub Release
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          generate_release_notes: true
           files: |
             release_assets/vortex-windows-x64.exe
+            release_assets/vortex-windows-x64.dll
             release_assets/vortex-linux-x64
+            release_assets/libvortex-linux-x64.so
+            release_assets/vortex-macos-arm64
+            release_assets/libvortex-macos-arm64.dylib
             release_assets/vortex-macos-x64
+            release_assets/SHA256SUMS.txt

@@ -4,6 +4,25 @@
 
 #include "vortex.h"
 
+#ifdef VORTEX_SHARED_LIB
+
+extern void* g_vortex_dll_handle;
+
+#ifdef _WIN32
+BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
+    (void)lpvReserved;
+    if (fdwReason == DLL_PROCESS_ATTACH) {
+        g_vortex_dll_handle = (void*)hinstDLL;
+        DisableThreadLibraryCalls(hinstDLL);
+    } else if (fdwReason == DLL_PROCESS_DETACH) {
+        vortex_host_shutdown();
+    }
+    return TRUE;
+}
+#endif
+
+#else /* !VORTEX_SHARED_LIB */
+
 static const char* vortex_type_name(VortexType t, int struct_id) {
     static char buf[96];
     switch (t) {
@@ -64,9 +83,16 @@ static void print_usage(const char* exe_name) {
     printf("  %s --version | -v           Display version and architecture info\n", exe_name);
     printf("  %s --help | -h              Display this help message\n", exe_name);
     printf("  %s pkg <subcmd>             Package manager (init, add, install, verify, run, build)\n", exe_name);
-    printf("  %s lsp                      Start Language Server Protocol (JSON-RPC over stdio)\n\n", exe_name);
+    printf("  %s lsp                      Start Language Server Protocol (JSON-RPC over stdio)\n", exe_name);
+    printf("  %s test [path] [--json]     Run native Vortex unit tests (assert / assert_eq / test_*)\n", exe_name);
+    printf("  %s spec [--json]            Emit live compiler specification (Markdown or JSON)\n\n", exe_name);
     printf("FLAGS / MODES:\n");
     printf("  --safe             (Default) Bounds, arena epoch & FFI boundary validation\n");
+    printf("  --ultrasafe <1|2|3> Strict safety & static checks (1: runtime div0 + warnings,\n");
+    printf("                     2: static audits + recursion guard, 3: multi-error recovery)\n");
+    printf("  --check            Type/region/safety-check script without running JIT code\n");
+    printf("  --json             Emit structured JSON diagnostics / test / spec output\n");
+    printf("  --error-format=json Alias for --json\n");
     printf("  --release          Range check elimination / LICM + max SIMD throughput\n");
     printf("  --headless         Disable GUI/X11 window creation (or set VORTEX_HEADLESS=1)\n");
     printf("  --target <triple>  Target ABI/arch (x86_64-windows, x86_64-linux, arm64-linux, arm64-darwin)\n");
@@ -173,7 +199,7 @@ static bool repl_eval_snippet(const char* snippet, char* session_code, size_t se
         snprintf(to_eval, sizeof(to_eval), "%s\n%s%s", session_code, snippet, maybe_semi);
     }
 
-    bool persist = (is_decl || (is_stmt && has_top_level_assign(snippet)));
+    volatile bool persist = (is_decl || (is_stmt && has_top_level_assign(snippet)));
     if (out_persisted) *out_persisted = false;
 
     if (setjmp(g_error_jmp) == 0) {
@@ -234,9 +260,9 @@ static void vortex_repl(void) {
 
         if (strcmp(trimmed, ":clear") == 0 || strcmp(trimmed, ":cls") == 0) {
 #ifdef _WIN32
-            system("cls");
+            int _cls_rc = system("cls"); (void)_cls_rc;
 #else
-            system("clear");
+            int _cls_rc = system("clear"); (void)_cls_rc;
 #endif
             continue;
         }
@@ -323,8 +349,33 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc && filtered_argc < 127; i++) {
         if (strcmp(argv[i], "--release") == 0) {
             g_compile_mode = VORTEX_MODE_RELEASE;
+            g_ultrasafe_level = 0;
         } else if (strcmp(argv[i], "--safe") == 0) {
             g_compile_mode = VORTEX_MODE_SAFE;
+        } else if (strcmp(argv[i], "--ultrasafe") == 0) {
+            g_compile_mode = VORTEX_MODE_SAFE;
+            if (i + 1 < argc && isdigit((unsigned char)argv[i + 1][0]) && argv[i + 1][1] == '\0') {
+                int lvl = argv[++i][0] - '0';
+                if (lvl < 1 || lvl > 3) {
+                    fprintf(stderr, "[VORTEX ERROR] --ultrasafe level must be 1, 2, or 3 (got %d)\n", lvl);
+                    return 1;
+                }
+                g_ultrasafe_level = lvl;
+            } else {
+                g_ultrasafe_level = 3;
+            }
+        } else if (strncmp(argv[i], "--ultrasafe=", 12) == 0) {
+            g_compile_mode = VORTEX_MODE_SAFE;
+            int lvl = atoi(argv[i] + 12);
+            if (lvl < 1 || lvl > 3) {
+                fprintf(stderr, "[VORTEX ERROR] --ultrasafe level must be 1, 2, or 3 (got '%s')\n", argv[i] + 12);
+                return 1;
+            }
+            g_ultrasafe_level = lvl;
+        } else if (strcmp(argv[i], "--json") == 0 || strcmp(argv[i], "--error-format=json") == 0) {
+            g_json_errors = true;
+        } else if (strcmp(argv[i], "--check") == 0) {
+            g_check_only = true;
         } else if (strcmp(argv[i], "--headless") == 0) {
             g_headless_mode = true;
         } else if (strcmp(argv[i], "--target") == 0) {
@@ -392,6 +443,12 @@ int main(int argc, char** argv) {
     if (strcmp(arg1, "lsp") == 0) {
         return vortex_cmd_lsp(filtered_argc, filtered_argv);
     }
+    if (strcmp(arg1, "test") == 0) {
+        return vortex_cmd_test(filtered_argc, filtered_argv);
+    }
+    if (strcmp(arg1, "spec") == 0) {
+        return vortex_cmd_spec(filtered_argc, filtered_argv);
+    }
     if (strcmp(arg1, "eval") == 0) {
         if (filtered_argc < 3) {
             fprintf(stderr, "[VORTEX ERROR] Missing code string after 'eval'.\n\n");
@@ -419,3 +476,5 @@ int main(int argc, char** argv) {
     print_usage(filtered_argv[0]);
     return 1;
 }
+
+#endif /* !VORTEX_SHARED_LIB */

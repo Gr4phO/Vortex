@@ -721,12 +721,12 @@ static void lsp_index_source_rec(const char* text, const char* file_path, const 
                 lsp_add_sym(fn_name, LSYM_FN, fn_line, fn_col, file_path, file_uri, sig, "", "", ret_t);
                 for (int p = 0; p < pcnt; p++) {
                     char pdet[256];
-                    snprintf(pdet, sizeof(pdet), "(parameter) %s: %s", pnames[p], ptypes[p]);
+                    snprintf(pdet, sizeof(pdet), "(parameter) %.63s: %.63s", pnames[p], ptypes[p]);
                     lsp_add_sym(pnames[p], LSYM_VAR, plines[p], pcols[p], file_path, file_uri,
                                 pdet, "", fn_name, ptypes[p]);
                 }
                 if (!is_extern && strcmp(sc.cur.text, "{") == 0) {
-                    strncpy(current_fn, fn_name, sizeof(current_fn) - 1);
+                    vx_str_copy(current_fn, sizeof(current_fn), fn_name);
                     fn_brace_depth = brace_depth + 1;
                     brace_depth++;
                     scan_next(&sc);
@@ -978,8 +978,7 @@ static void lsp_parse_diag_loc(const char* msg, const char* fallback_path,
                                int* out_line1, int* out_col1, char* out_clean, size_t clean_cap) {
     *out_line1 = 1;
     *out_col1 = 1;
-    strncpy(out_clean, msg ? msg : "Compilation error", clean_cap - 1);
-    out_clean[clean_cap - 1] = '\0';
+    vx_str_copy(out_clean, clean_cap, msg ? msg : "Compilation error");
     size_t n = strlen(out_clean);
     while (n > 0 && (out_clean[n - 1] == '\n' || out_clean[n - 1] == '\r')) out_clean[--n] = '\0';
 

@@ -1,0 +1,148 @@
+/*
+ * Vortex v1.1.0 Ergonomics & Syntax Test Suite
+ * Tests block comments, enums, booleans, short-circuit &&/||, !, bitwise &/|/^/~/<<</>>,
+ * compound assignments (+= .. >>=), break/continue, >128B strings, assert & assert_eq.
+ */
+
+struct Vec2 {
+    x: i64,
+    y: i64
+}
+
+enum State {
+    Idle,
+    Running = 10,
+    Paused,
+    Neg = -5,
+    AfterNeg
+}
+
+fn no_div_zero_boom() -> i64 {
+    return 1 / 0;
+}
+
+fn test_booleans_and_logic() {
+    assert(true);
+    assert(!false);
+    assert_eq(!true, 0);
+    assert_eq(!0, 1);
+    assert_eq(!42, 0);
+
+    let mut side = 0;
+    /* Short-circuit &&: rhs must NOT run when lhs is false */
+    if false && (10 / side) == 1 {
+        assert(false);
+    }
+    if true && true {
+        side += 1;
+    }
+    assert_eq(side, 1);
+
+    /* Short-circuit ||: rhs must NOT run when lhs is true */
+    if true || (10 / 0) == 1 {
+        side += 2;
+    }
+    if false || true {
+        side += 4;
+    }
+    assert_eq(side, 7);
+
+    /* Expression precedence: & ^ | << >> < == && || */
+    let expr_ok = ((1 + 2 << 1) == 6) && ((7 & 3) == 3) && ((5 | 2) == 7) && ((5 ^ 3) == 6);
+    assert(expr_ok);
+}
+
+fn test_bitwise_and_shifts() {
+    assert_eq(0xFF & 0x0F, 15);
+    assert_eq(0xF0 | 0x0F, 255);
+    assert_eq(0xAA ^ 0xFF, 85);
+    assert_eq(~0, -1);
+    assert_eq(1 << 10, 1024);
+    assert_eq(1024 >> 5, 32);
+    assert_eq(-16 >> 2, -4);
+}
+
+fn test_compound_assignments() {
+    let mut x = 10;
+    x += 5;   assert_eq(x, 15);
+    x -= 3;   assert_eq(x, 12);
+    x *= 4;   assert_eq(x, 48);
+    x /= 6;   assert_eq(x, 8);
+    x %= 5;   assert_eq(x, 3);
+    x |= 4;   assert_eq(x, 7);
+    x &= 6;   assert_eq(x, 6);
+    x ^= 3;   assert_eq(x, 5);
+    x <<= 3;  assert_eq(x, 40);
+    x >>= 2;  assert_eq(x, 10);
+
+    let p = Vec2 { x: 20, y: 30 };
+    p.x += 5;
+    p.y *= 2;
+    assert_eq(p.x, 25);
+    assert_eq(p.y, 60);
+
+    let arr = slice_i64(4);
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[0] += 5;
+    arr[1] |= 3;
+    assert_eq(arr[0], 15);
+    assert_eq(arr[1], 23);
+
+    unsafe {
+        let pts = alloc(16) as *Vec2;
+        pts[0] = Vec2 { x: 3, y: 7 };
+        pts[0].x += 9;
+        assert_eq(pts[0].x, 12);
+    }
+}
+
+fn test_break_and_continue() {
+    let mut sum_for = 0;
+    for i in 0..10 {
+        if i % 2 == 0 {
+            continue;
+        }
+        if i > 7 {
+            break;
+        }
+        sum_for += i;
+    }
+    /* Odd numbers < 10 and <= 7: 1 + 3 + 5 + 7 = 16 */
+    assert_eq(sum_for, 16);
+
+    let mut w = 0;
+    let mut sum_w = 0;
+    while w < 20 {
+        w += 1;
+        if w == 3 || w == 4 {
+            continue;
+        }
+        if w > 6 {
+            break;
+        }
+        sum_w += w;
+    }
+    /* 1 + 2 + 5 + 6 = 14 */
+    assert_eq(sum_w, 14);
+}
+
+fn test_enums_and_long_strings() {
+    assert_eq(State::Idle, 0);
+    assert_eq(State::Running, 10);
+    assert_eq(State.Paused, 11);
+    assert_eq(State::Neg, -5);
+    assert_eq(State::AfterNeg, -4);
+
+    let long_s = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef_LONG_OK";
+    assert(str_len(long_s) > 250);
+    print_str("[OK] Ergonomics test_enums_and_long_strings len=");
+    print(str_len(long_s));
+}
+
+test_booleans_and_logic();
+test_bitwise_and_shifts();
+test_compound_assignments();
+test_break_and_continue();
+test_enums_and_long_strings();
+print_str("[PASS] test_ergonomics.vx completed!");

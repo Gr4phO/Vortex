@@ -119,6 +119,7 @@ void ir_init(IRBuffer* ir) {
     ir->param_count = 0;
     ir->max_call_args = 0;
     ir->callee_save_mask = 0;
+    ir->float_callee_save_mask = 0;
     ir->func_name[0] = '\0';
     if (g_active_ir_count < 16) {
         g_active_ir_bufs[g_active_ir_count++] = ir;
@@ -455,40 +456,59 @@ void ir_region_verify(IRBuffer* ir) {
 
         /* Check operand liveness against popped regions */
         VReg uses[4] = { ins->src1, ins->src2, ins->src3, ins->src4 };
+        bool reported_use = false;
         for (int u = 0; u < 4; u++) {
             VReg uv = uses[u];
             if (uv >= 0 && uv < n_vregs && is_ref[uv]) {
                 int rid = reg_id[uv];
                 if (rid > 0 && rid < 512 && popped[rid]) {
-                    fprintf(stderr,
-                            "[VORTEX REGION ERROR] Reference allocated in arena scope #%d used after scope_pop() at %s:%d\n",
-                            rid, ins->file ? ins->file : "<unknown>", ins->line);
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "[VORTEX REGION ERROR] Reference allocated in arena scope #%d used after scope_pop()", rid);
+                    if (g_ultrasafe_level >= 3 && g_recover_active) {
+                        vortex_diag_add(VDIAG_ERROR, "E301", ins->file ? ins->file : g_current_filename,
+                                        ins->line, 1, msg, "Keep arena references within their scope_push/scope_pop lifetime.");
+                        reported_use = true;
+                        break;
+                    }
+                    fprintf(stderr, "%s at %s:%d\n", msg, ins->file ? ins->file : "<unknown>", ins->line);
                     free(is_ref); free(reg_id); free(reg_depth); free(is_mark); free(mark_rid);
                     vortex_error("");
                 }
             }
         }
+        if (reported_use) continue;
         for (int a = 0; a < ins->arg_count; a++) {
             VReg av = ins->args[a];
             if (av >= 0 && av < n_vregs && is_ref[av]) {
                 int rid = reg_id[av];
                 if (rid > 0 && rid < 512 && popped[rid]) {
-                    fprintf(stderr,
-                            "[VORTEX REGION ERROR] Reference allocated in arena scope #%d passed to call after scope_pop() at %s:%d\n",
-                            rid, ins->file ? ins->file : "<unknown>", ins->line);
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "[VORTEX REGION ERROR] Reference allocated in arena scope #%d passed to call after scope_pop()", rid);
+                    if (g_ultrasafe_level >= 3 && g_recover_active) {
+                        vortex_diag_add(VDIAG_ERROR, "E301", ins->file ? ins->file : g_current_filename,
+                                        ins->line, 1, msg, "Keep arena references within their scope_push/scope_pop lifetime.");
+                        reported_use = true;
+                        break;
+                    }
+                    fprintf(stderr, "%s at %s:%d\n", msg, ins->file ? ins->file : "<unknown>", ins->line);
                     free(is_ref); free(reg_id); free(reg_depth); free(is_mark); free(mark_rid);
                     vortex_error("");
                 }
             }
         }
+        if (reported_use) continue;
 
         /* Return escape check: cannot return reference from inner/popped scope_push region */
         if (ins->op == IR_RET && ins->src1 >= 0 && ins->src1 < n_vregs) {
             VReg rv = ins->src1;
             if (is_ref[rv] && reg_depth[rv] > 0) {
-                fprintf(stderr,
-                        "[VORTEX REGION ERROR] Cannot return reference allocated inside internal scope_push() region at %s:%d\n",
-                        ins->file ? ins->file : "<unknown>", ins->line);
+                const char* msg = "[VORTEX REGION ERROR] Cannot return reference allocated inside internal scope_push() region";
+                if (g_ultrasafe_level >= 3 && g_recover_active) {
+                    vortex_diag_add(VDIAG_ERROR, "E301", ins->file ? ins->file : g_current_filename,
+                                    ins->line, 1, msg, "Allocate returned data in the caller's outer arena scope.");
+                    continue;
+                }
+                fprintf(stderr, "%s at %s:%d\n", msg, ins->file ? ins->file : "<unknown>", ins->line);
                 free(is_ref); free(reg_id); free(reg_depth); free(is_mark); free(mark_rid);
                 vortex_error("");
             }
@@ -505,10 +525,15 @@ void ir_region_verify(IRBuffer* ir) {
                 if (ir->vregs[ins->dest].region_depth >= 0 &&
                     reg_depth[ins->src1] > ir->vregs[ins->dest].region_depth &&
                     is_ref[ins->dest]) {
-                    fprintf(stderr,
-                            "[VORTEX REGION ERROR] Reference from inner arena scope (depth %d) cannot escape to outer binding (depth %d) at %s:%d\n",
-                            reg_depth[ins->src1], ir->vregs[ins->dest].region_depth,
-                            ins->file ? ins->file : "<unknown>", ins->line);
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "[VORTEX REGION ERROR] Reference from inner arena scope (depth %d) cannot escape to outer binding (depth %d)",
+                             reg_depth[ins->src1], ir->vregs[ins->dest].region_depth);
+                    if (g_ultrasafe_level >= 3 && g_recover_active) {
+                        vortex_diag_add(VDIAG_ERROR, "E301", ins->file ? ins->file : g_current_filename,
+                                        ins->line, 1, msg, "Bind the value inside the same arena scope or copy it safely.");
+                        continue;
+                    }
+                    fprintf(stderr, "%s at %s:%d\n", msg, ins->file ? ins->file : "<unknown>", ins->line);
                     free(is_ref); free(reg_id); free(reg_depth); free(is_mark); free(mark_rid);
                     vortex_error("");
                 }
@@ -525,10 +550,15 @@ void ir_region_verify(IRBuffer* ir) {
                    ins->src2 >= 0 && ins->src2 < n_vregs) {
             if (is_ref[ins->src2] && is_ref[ins->src1] &&
                 reg_depth[ins->src2] > reg_depth[ins->src1]) {
-                fprintf(stderr,
-                        "[VORTEX REGION ERROR] Inner arena reference (depth %d) cannot be stored in outer struct (depth %d) at %s:%d\n",
-                        reg_depth[ins->src2], reg_depth[ins->src1],
-                        ins->file ? ins->file : "<unknown>", ins->line);
+                char msg[256];
+                snprintf(msg, sizeof(msg), "[VORTEX REGION ERROR] Inner arena reference (depth %d) cannot be stored in outer struct (depth %d)",
+                         reg_depth[ins->src2], reg_depth[ins->src1]);
+                if (g_ultrasafe_level >= 3 && g_recover_active) {
+                    vortex_diag_add(VDIAG_ERROR, "E301", ins->file ? ins->file : g_current_filename,
+                                    ins->line, 1, msg, "Ensure struct and field share an outer arena scope.");
+                    continue;
+                }
+                fprintf(stderr, "%s at %s:%d\n", msg, ins->file ? ins->file : "<unknown>", ins->line);
                 free(is_ref); free(reg_id); free(reg_depth); free(is_mark); free(mark_rid);
                 vortex_error("");
             }
@@ -537,10 +567,15 @@ void ir_region_verify(IRBuffer* ir) {
                    ins->src3 >= 0 && ins->src3 < n_vregs) {
             if (is_ref[ins->src3] && is_ref[ins->src1] &&
                 reg_depth[ins->src3] > reg_depth[ins->src1]) {
-                fprintf(stderr,
-                        "[VORTEX REGION ERROR] Inner arena reference (depth %d) cannot be stored in outer array (depth %d) at %s:%d\n",
-                        reg_depth[ins->src3], reg_depth[ins->src1],
-                        ins->file ? ins->file : "<unknown>", ins->line);
+                char msg[256];
+                snprintf(msg, sizeof(msg), "[VORTEX REGION ERROR] Inner arena reference (depth %d) cannot be stored in outer array (depth %d)",
+                         reg_depth[ins->src3], reg_depth[ins->src1]);
+                if (g_ultrasafe_level >= 3 && g_recover_active) {
+                    vortex_diag_add(VDIAG_ERROR, "E301", ins->file ? ins->file : g_current_filename,
+                                    ins->line, 1, msg, "Ensure array and element share an outer arena scope.");
+                    continue;
+                }
+                fprintf(stderr, "%s at %s:%d\n", msg, ins->file ? ins->file : "<unknown>", ins->line);
                 free(is_ref); free(reg_id); free(reg_depth); free(is_mark); free(mark_rid);
                 vortex_error("");
             }
@@ -558,4 +593,11 @@ void ir_region_verify(IRBuffer* ir) {
     free(reg_depth);
     free(is_mark);
     free(mark_rid);
+}
+
+void ir_emit_div_check(IRBuffer* ir, VReg divisor, const char* file, int line) {
+    IRInstruction* ins = ir_emit(ir, IR_DIV_CHECK);
+    ins->src1 = divisor;
+    ins->file = file ? file : g_current_filename;
+    ins->line = line;
 }

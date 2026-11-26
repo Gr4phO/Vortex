@@ -21,7 +21,7 @@ echo ========================================================
 set "FAILED=0"
 set "PASSED=0"
 
-for %%t in (test_struct.vx test_vec_struct.vx test_fib.vx test_ffi.vx test_memory_1m.vx test_safety_pass.vx test_import_main.vx test_opt_regression.vx) do (
+for %%t in (test_struct.vx test_vec_struct.vx test_fib.vx test_ffi.vx test_memory_1m.vx test_safety_pass.vx test_import_main.vx test_opt_regression.vx test_ergonomics.vx) do (
     echo.
     echo --- [RUN] %%t ---
     "%VORTEX_BIN%" "%SCRIPT_DIR%%%t"
@@ -61,6 +61,16 @@ if !errorlevel! neq 0 (
     set /a FAILED+=1
 ) else (
     echo [PASS] run_jalon3_checks.bat
+    set /a PASSED+=1
+)
+
+echo.
+call "%SCRIPT_DIR%run_ultrasafe_checks.bat"
+if !errorlevel! neq 0 (
+    echo [FAIL] run_ultrasafe_checks.bat exited with code !errorlevel!
+    set /a FAILED+=1
+) else (
+    echo [PASS] run_ultrasafe_checks.bat
     set /a PASSED+=1
 )
 

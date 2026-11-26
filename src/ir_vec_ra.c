@@ -16,15 +16,17 @@ static void ir_record_use(IRBuffer* ir, VReg v, int ip) {
 }
 
 void ir_liveness_analysis(IRBuffer* ir) {
-    int* label_ips = (int*)malloc(MAX_LABELS * sizeof(int));
+    int label_cap = (ir->next_label > 0) ? (ir->next_label + 1) : 1;
+    int small_label_ips[64];
+    int* label_ips = (label_cap <= 64) ? small_label_ips : (int*)malloc((size_t)label_cap * sizeof(int));
     if (!label_ips) return;
-    for (int i = 0; i < MAX_LABELS; i++) label_ips[i] = -1;
+    for (int i = 0; i < label_cap; i++) label_ips[i] = -1;
 
     for (int ip = 0; ip < ir->count; ip++) {
         IRInstruction* ins = &ir->instrs[ip];
         if (ins->op == IR_LABEL) {
             int lbl = (int)ins->imm;
-            if (lbl >= 0 && lbl < MAX_LABELS) label_ips[lbl] = ip;
+            if (lbl >= 0 && lbl < label_cap) label_ips[lbl] = ip;
         }
         ir_record_use(ir, ins->dest, ip);
         ir_record_use(ir, ins->src1, ip);
@@ -59,7 +61,7 @@ void ir_liveness_analysis(IRBuffer* ir) {
             IRInstruction* ins = &ir->instrs[ip];
             if (ins->op == IR_JMP || ins->op == IR_JZ || ins->op == IR_JNZ) {
                 int lbl = (int)ins->imm;
-                if (lbl >= 0 && lbl < MAX_LABELS) {
+                if (lbl >= 0 && lbl < label_cap) {
                     int target_ip = label_ips[lbl];
                     if (target_ip >= 0 && target_ip < ip) {
                         for (int v = 0; v < ir->vreg_count; v++) {
@@ -82,7 +84,7 @@ void ir_liveness_analysis(IRBuffer* ir) {
         IRInstruction* ins = &ir->instrs[ip];
         if (ins->op == IR_CALL || ins->op == IR_CALL_USER || ins->op == IR_CALL_FFI ||
             ins->op == IR_BOUNDS_CHECK || ins->op == IR_RANGE_CHECK ||
-            ins->op == IR_PTR_CHECK || ins->op == IR_FFI_CHECK) {
+            ins->op == IR_PTR_CHECK || ins->op == IR_FFI_CHECK || ins->op == IR_DIV_CHECK) {
             for (int v = 0; v < ir->vreg_count; v++) {
                 VRegInfo* vi = &ir->vregs[v];
                 if (vi->start_ip != -1 && vi->start_ip < ip && vi->end_ip > ip) {
@@ -99,7 +101,7 @@ void ir_liveness_analysis(IRBuffer* ir) {
             }
         }
     }
-    free(label_ips);
+    if (label_ips != small_label_ips) free(label_ips);
 }
 
 static int compare_live_intervals(const void* a, const void* b) {
@@ -215,7 +217,7 @@ void ir_loop_vectorize(IRBuffer* ir) {
             IROpcode op = ir->instrs[k].op;
             if (op == IR_CALL || op == IR_CALL_USER || op == IR_CALL_FFI ||
                 op == IR_RET ||
-                op == IR_BOUNDS_CHECK || op == IR_RANGE_CHECK || op == IR_PTR_CHECK || op == IR_FFI_CHECK) {
+                op == IR_BOUNDS_CHECK || op == IR_RANGE_CHECK || op == IR_PTR_CHECK || op == IR_FFI_CHECK || op == IR_DIV_CHECK) {
                 safe = false;
                 break;
             }
@@ -811,16 +813,18 @@ void ir_linear_scan_allocate(IRBuffer* ir) {
     ir->max_call_args = 0;
 
     /* Compute loop nesting weights per VReg for hot-loop eviction decisions */
+    int lbl_cap = (ir->next_label > 0) ? (ir->next_label + 1) : 1;
+    int small_lbl_ips[64];
     int* ip_depth = (int*)calloc((size_t)(ir->count + 2), sizeof(int));
     int* weight = (int*)calloc((size_t)ir->vreg_count, sizeof(int));
-    int* lbl_ips = (int*)malloc(MAX_LABELS * sizeof(int));
+    int* lbl_ips = (lbl_cap <= 64) ? small_lbl_ips : (int*)malloc((size_t)lbl_cap * sizeof(int));
     if (ip_depth && weight && lbl_ips) {
-        for (int l = 0; l < MAX_LABELS; l++) lbl_ips[l] = -1;
+        for (int l = 0; l < lbl_cap; l++) lbl_ips[l] = -1;
         for (int p = 0; p < ir->count; p++) {
             IRInstruction* ins = &ir->instrs[p];
             if (ins->op == IR_LABEL) {
                 int lbl = (int)ins->imm;
-                if (lbl >= 0 && lbl < MAX_LABELS) lbl_ips[lbl] = p;
+                if (lbl >= 0 && lbl < lbl_cap) lbl_ips[lbl] = p;
             }
             if (ins->op == IR_RAW_RIEMANN || ins->op == IR_VEC_LOOP ||
                 ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD || ins->op == IR_VEC_MOD_FILL) {
@@ -837,7 +841,7 @@ void ir_linear_scan_allocate(IRBuffer* ir) {
             IROpcode op = ir->instrs[p].op;
             if (op == IR_JMP || op == IR_JZ || op == IR_JNZ) {
                 int lbl = (int)ir->instrs[p].imm;
-                if (lbl >= 0 && lbl < MAX_LABELS && lbl_ips[lbl] >= 0 && lbl_ips[lbl] < p) {
+                if (lbl >= 0 && lbl < lbl_cap && lbl_ips[lbl] >= 0 && lbl_ips[lbl] < p) {
                     ip_depth[lbl_ips[lbl]]++;
                     ip_depth[p + 1]--;
                 }
@@ -869,7 +873,7 @@ void ir_linear_scan_allocate(IRBuffer* ir) {
         }
     }
     free(ip_depth);
-    free(lbl_ips);
+    if (lbl_ips != small_lbl_ips) free(lbl_ips);
 
     LiveInterval* intervals = (LiveInterval*)malloc(ir->vreg_count * sizeof(LiveInterval));
     int interval_count = 0;
@@ -1030,10 +1034,22 @@ void ir_linear_scan_allocate(IRBuffer* ir) {
                 }
             }
         }
+        uint32_t fmask = 0;
+        if (g_target_abi == VORTEX_ABI_WIN64) {
+            for (int v = 0; v < ir->vreg_count; v++) {
+                if (!ir->vregs[v].is_spilled && ir->vregs[v].is_float && ir->vregs[v].preg != PREG_NONE) {
+                    if (preg_in_list(ir->vregs[v].preg, td->float_callee_regs, td->float_callee_count)) {
+                        fmask |= (1u << ir->vregs[v].preg);
+                    }
+                }
+            }
+        }
         ir->callee_save_mask = mask;
+        ir->float_callee_save_mask = fmask;
         ir->optimize_frame = true;
         ir->omit_fp = (g_compile_mode == VORTEX_MODE_RELEASE &&
                        ir->total_spill_bytes == 0 &&
+                       fmask == 0 &&
                        (ir->param_count == 0 ||
                         (ir->param_count == 1 && ir->vreg_count > 0 && !ir->vregs[0].is_float)));
     }

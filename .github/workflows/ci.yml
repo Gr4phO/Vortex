@@ -30,14 +30,15 @@ jobs:
 
       - name: Build & Test with GCC (-D_FORTIFY_SOURCE=2)
         run: |
+          chmod +x build.sh tests/*.sh
           sudo apt-get update && sudo apt-get install -y libx11-dev
           make clean && make CC=gcc CFLAGS="-std=c99 -O2 -D_FORTIFY_SOURCE=2 -Wall -Wextra"
-          VORTEX_HEADLESS=1 ./tests/run_tests.sh
+          VORTEX_HEADLESS=1 bash ./tests/run_tests.sh
 
-      - name: Build & Test with Clang
+      - name: Build & Test with Clang + Shared Library
         run: |
-          make clean && make CC=clang
-          VORTEX_HEADLESS=1 ./tests/run_tests.sh
+          make clean && make CC=clang && make CC=clang shared
+          VORTEX_HEADLESS=1 bash ./tests/run_tests.sh
 
   test-macos:
     name: macOS (Clang)
@@ -46,7 +47,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build & Test with Clang (macOS)
+      - name: Build & Test with Clang (macOS ARM64 + Shared Library)
         run: |
-          make clean && make CC=clang TARGET=vortex
-          VORTEX_HEADLESS=1 ./tests/run_tests.sh
+          chmod +x build.sh tests/*.sh
+          make clean && make CC=clang TARGET=vortex && make CC=clang shared
+          VORTEX_HEADLESS=1 bash ./tests/run_tests.sh

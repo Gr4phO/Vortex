@@ -36,7 +36,7 @@ else
     POST_RELEASE = strip $(TARGET)
 endif
 
-.PHONY: all headless release clean test
+.PHONY: all headless shared release clean test
 
 all: $(TARGET)
 
@@ -46,12 +46,15 @@ $(TARGET): $(SRCS) src/vortex.h
 headless: $(SRCS) src/vortex.h
 	$(CC) $(CFLAGS) $(VORTEX_VER_FLAG) -DVORTEX_NO_X11 -DVORTEX_HEADLESS $(SRCS) -o $(TARGET) $(if $(filter Darwin,$(UNAME_S)),-pthread -lm,-pthread -ldl -lm)
 
+shared: $(SRCS) src/vortex.h
+	$(CC) $(CFLAGS) -fPIC -shared $(VORTEX_VER_FLAG) -DVORTEX_SHARED_LIB -DVORTEX_NO_X11 -DVORTEX_HEADLESS $(SRCS) -o $(if $(filter Darwin,$(UNAME_S)),libvortex.dylib,libvortex.so) $(if $(filter Darwin,$(UNAME_S)),-pthread -lm,-pthread -ldl -lm)
+
 release: $(SRCS) src/vortex.h
 	$(CC) $(RELEASE_CFLAGS) $(VORTEX_VER_FLAG) $(VORTEX_GUI_FLAGS) $(SRCS) -o $(TARGET) $(LDFLAGS)
 	$(POST_RELEASE)
 
 test: $(TARGET)
-	./tests/run_tests.sh
+	bash ./tests/run_tests.sh
 
 clean:
-	rm -f $(TARGET) *.o
+	rm -f $(TARGET) libvortex.so libvortex.dylib *.o

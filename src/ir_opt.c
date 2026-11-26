@@ -46,6 +46,7 @@ static bool ir_has_side_effect(IROpcode op) {
         case IR_RANGE_CHECK:
         case IR_PTR_CHECK:
         case IR_FFI_CHECK:
+        case IR_DIV_CHECK:
         case IR_LABEL:
         case IR_JMP:
         case IR_JZ:
@@ -571,11 +572,12 @@ static void ir_dedup_checks(IRBuffer* ir) {
 void ir_optimize_bounds_and_licm(IRBuffer* ir) {
     if (!ir || ir->count == 0 || ir->vreg_count == 0) return;
     ir_dedup_checks(ir);
-    if (g_compile_mode != VORTEX_MODE_RELEASE) return;
 
-    /* Pillar #1: Inline short user functions in caller IR before RCE/LICM */
-    ir_inline_small_functions(ir);
-    ir_unroll_binary_recursion(ir);
+    /* Release-only aggressive cross-function optimizations (preserve exact stack frames in --safe) */
+    if (g_compile_mode == VORTEX_MODE_RELEASE) {
+        ir_inline_small_functions(ir);
+        ir_unroll_binary_recursion(ir);
+    }
 
     int n_vregs = ir->vreg_count;
     bool* has_const = (bool*)calloc((size_t)n_vregs, sizeof(bool));
@@ -616,142 +618,144 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
         }
     }
 
-    /* Pass 1: Static constant range check elimination */
-    for (int ip = 0; ip < ir->count; ip++) {
-        IRInstruction* ins = &ir->instrs[ip];
-        if (ins->op == IR_BOUNDS_CHECK) {
-            int64_t len_c = ins->known_len;
-            if (len_c < 0 && ins->src3 >= 0 && has_const[ins->src3]) {
-                len_c = const_val[ins->src3];
-            }
-            if (len_c >= 0 && ins->src2 >= 0 && has_const[ins->src2]) {
-                int64_t idx_c = const_val[ins->src2];
-                if (idx_c >= 0 && idx_c < len_c) {
-                    ins->op = IR_NOP;
-                }
-            }
-        }
-    }
-
-    /* Pass 2: Loop-Invariant Bounds Check Elimination & Hoisting (LICM) */
-    bool* modified = (bool*)calloc((size_t)n_vregs, sizeof(bool));
-    if (modified) {
+    if (g_compile_mode == VORTEX_MODE_RELEASE) {
+        /* Pass 1: Static constant range check elimination */
         for (int ip = 0; ip < ir->count; ip++) {
-            if (ir->instrs[ip].op != IR_LABEL) continue;
-            int lbl_start = (int)ir->instrs[ip].imm;
-            if (ip + 2 >= ir->count) continue;
-            IRInstruction* ins_cmp = &ir->instrs[ip + 1];
-            IRInstruction* ins_jz = &ir->instrs[ip + 2];
-            if (ins_cmp->op != IR_LT || ins_jz->op != IR_JZ || ins_jz->src1 != ins_cmp->dest) continue;
-
-            int lbl_exit = (int)ins_jz->imm;
-            VReg i_vreg = ins_cmp->src1;
-            VReg lim_vreg = ins_cmp->src2;
-
-            int ip_jmp = -1;
-            for (int j = ip + 3; j < ir->count; j++) {
-                if (ir->instrs[j].op == IR_JMP && (int)ir->instrs[j].imm == lbl_start) {
-                    ip_jmp = j;
-                    break;
+            IRInstruction* ins = &ir->instrs[ip];
+            if (ins->op == IR_BOUNDS_CHECK) {
+                int64_t len_c = ins->known_len;
+                if (len_c < 0 && ins->src3 >= 0 && has_const[ins->src3]) {
+                    len_c = const_val[ins->src3];
                 }
-            }
-            if (ip_jmp == -1 || ip_jmp + 1 >= ir->count) continue;
-            if (ir->instrs[ip_jmp + 1].op != IR_LABEL || (int)ir->instrs[ip_jmp + 1].imm != lbl_exit) continue;
-
-            /* Verify i_vreg only increments by +1 at end of loop */
-            bool valid_ind = false;
-            int ind_writes = 0;
-            for (int k = ip + 3; k < ip_jmp; k++) {
-                if (ir->instrs[k].dest == i_vreg) {
-                    ind_writes++;
-                    if (ir->instrs[k].op == IR_ADD && ir->instrs[k].src1 == i_vreg &&
-                        ir->instrs[k].src2 >= 0 && has_const[ir->instrs[k].src2] &&
-                        const_val[ir->instrs[k].src2] == 1) {
-                        valid_ind = true;
+                if (len_c >= 0 && ins->src2 >= 0 && has_const[ins->src2]) {
+                    int64_t idx_c = const_val[ins->src2];
+                    if (idx_c >= 0 && idx_c < len_c) {
+                        ins->op = IR_NOP;
                     }
                 }
             }
-            if (!valid_ind || ind_writes != 1) continue;
+        }
 
-            /* Determine pre-loop starting value of i_vreg */
-            VReg start_vreg = VREG_NONE;
-            for (int pre = ip - 1; pre >= 0; pre--) {
-                if (ir->instrs[pre].dest == i_vreg) {
-                    if (ir->instrs[pre].op == IR_MOV) {
-                        start_vreg = ir->instrs[pre].src1;
-                    } else {
-                        start_vreg = i_vreg;
+        /* Pass 2: Loop-Invariant Bounds Check Elimination & Hoisting (LICM) */
+        bool* modified = (bool*)calloc((size_t)n_vregs, sizeof(bool));
+        if (modified) {
+            for (int ip = 0; ip < ir->count; ip++) {
+                if (ir->instrs[ip].op != IR_LABEL) continue;
+                int lbl_start = (int)ir->instrs[ip].imm;
+                if (ip + 2 >= ir->count) continue;
+                IRInstruction* ins_cmp = &ir->instrs[ip + 1];
+                IRInstruction* ins_jz = &ir->instrs[ip + 2];
+                if (ins_cmp->op != IR_LT || ins_jz->op != IR_JZ || ins_jz->src1 != ins_cmp->dest) continue;
+
+                int lbl_exit = (int)ins_jz->imm;
+                VReg i_vreg = ins_cmp->src1;
+                VReg lim_vreg = ins_cmp->src2;
+
+                int ip_jmp = -1;
+                for (int j = ip + 3; j < ir->count; j++) {
+                    if (ir->instrs[j].op == IR_JMP && (int)ir->instrs[j].imm == lbl_start) {
+                        ip_jmp = j;
+                        break;
                     }
-                    break;
                 }
-            }
-            if (start_vreg == VREG_NONE) continue;
+                if (ip_jmp == -1 || ip_jmp + 1 >= ir->count) continue;
+                if (ir->instrs[ip_jmp + 1].op != IR_LABEL || (int)ir->instrs[ip_jmp + 1].imm != lbl_exit) continue;
 
-            memset(modified, 0, (size_t)n_vregs * sizeof(bool));
-            for (int k = ip + 1; k < ip_jmp; k++) {
-                if (ir->instrs[k].dest >= 0 && ir->instrs[k].dest < n_vregs) {
-                    modified[ir->instrs[k].dest] = true;
+                /* Verify i_vreg only increments by +1 at end of loop */
+                bool valid_ind = false;
+                int ind_writes = 0;
+                for (int k = ip + 3; k < ip_jmp; k++) {
+                    if (ir->instrs[k].dest == i_vreg) {
+                        ind_writes++;
+                        if (ir->instrs[k].op == IR_ADD && ir->instrs[k].src1 == i_vreg &&
+                            ir->instrs[k].src2 >= 0 && has_const[ir->instrs[k].src2] &&
+                            const_val[ir->instrs[k].src2] == 1) {
+                            valid_ind = true;
+                        }
+                    }
                 }
-            }
+                if (!valid_ind || ind_writes != 1) continue;
 
-            /* Hoist or eliminate checks inside loop body */
-            for (int k = ip + 3; k < ip_jmp; k++) {
-                IRInstruction* chk = &ir->instrs[k];
-                if (chk->op == IR_PTR_CHECK) {
-                    if (chk->src1 >= 0 && !modified[chk->src1]) {
+                /* Determine pre-loop starting value of i_vreg */
+                VReg start_vreg = VREG_NONE;
+                for (int pre = ip - 1; pre >= 0; pre--) {
+                    if (ir->instrs[pre].dest == i_vreg) {
+                        if (ir->instrs[pre].op == IR_MOV) {
+                            start_vreg = ir->instrs[pre].src1;
+                        } else {
+                            start_vreg = i_vreg;
+                        }
+                        break;
+                    }
+                }
+                if (start_vreg == VREG_NONE) continue;
+
+                memset(modified, 0, (size_t)n_vregs * sizeof(bool));
+                for (int k = ip + 1; k < ip_jmp; k++) {
+                    if (ir->instrs[k].dest >= 0 && ir->instrs[k].dest < n_vregs) {
+                        modified[ir->instrs[k].dest] = true;
+                    }
+                }
+
+                /* Hoist or eliminate checks inside loop body */
+                for (int k = ip + 3; k < ip_jmp; k++) {
+                    IRInstruction* chk = &ir->instrs[k];
+                    if (chk->op == IR_PTR_CHECK) {
+                        if (chk->src1 >= 0 && !modified[chk->src1]) {
+                            chk->op = IR_NOP;
+                        }
+                        continue;
+                    }
+                    if (chk->op != IR_BOUNDS_CHECK) continue;
+                    VReg base = chk->src1;
+                    VReg idx = chk->src2;
+                    VReg len_v = chk->src3;
+
+                    if (base < 0 || modified[base]) continue;
+                    if (len_v >= 0 && modified[len_v]) continue;
+
+                    bool idx_is_ind = (idx == i_vreg);
+                    if (!idx_is_ind) continue;
+
+                    bool start_nonneg = (has_const[start_vreg] && const_val[start_vreg] >= 0);
+                    bool lim_fits_len = false;
+                    if (len_v >= 0 && equiv[lim_vreg] == equiv[len_v]) {
+                        lim_fits_len = true;
+                    } else if (has_const[lim_vreg]) {
+                        int64_t lc = const_val[lim_vreg];
+                        int64_t lenc = chk->known_len;
+                        if (lenc < 0 && len_v >= 0 && has_const[len_v]) lenc = const_val[len_v];
+                        if (lenc >= 0 && lc <= lenc) lim_fits_len = true;
+                    }
+
+                    if (start_nonneg && lim_fits_len) {
                         chk->op = IR_NOP;
+                    } else if (len_v >= 0 || chk->known_len >= 0) {
+                        IRInstruction hoisted = *chk;
+                        hoisted.op = IR_RANGE_CHECK;
+                        hoisted.src1 = base;
+                        hoisted.src2 = start_vreg;
+                        hoisted.src3 = lim_vreg;
+                        hoisted.src4 = len_v;
+                        chk->op = IR_NOP;
+                        ir_insert_before(ir, ip, &hoisted);
+                        ip++;
+                        ip_jmp++;
+                        k++;
                     }
-                    continue;
-                }
-                if (chk->op != IR_BOUNDS_CHECK) continue;
-                VReg base = chk->src1;
-                VReg idx = chk->src2;
-                VReg len_v = chk->src3;
-
-                if (base < 0 || modified[base]) continue;
-                if (len_v >= 0 && modified[len_v]) continue;
-
-                bool idx_is_ind = (idx == i_vreg);
-                if (!idx_is_ind) continue;
-
-                bool start_nonneg = (has_const[start_vreg] && const_val[start_vreg] >= 0);
-                bool lim_fits_len = false;
-                if (len_v >= 0 && equiv[lim_vreg] == equiv[len_v]) {
-                    lim_fits_len = true;
-                } else if (has_const[lim_vreg]) {
-                    int64_t lc = const_val[lim_vreg];
-                    int64_t lenc = chk->known_len;
-                    if (lenc < 0 && len_v >= 0 && has_const[len_v]) lenc = const_val[len_v];
-                    if (lenc >= 0 && lc <= lenc) lim_fits_len = true;
-                }
-
-                if (start_nonneg && lim_fits_len) {
-                    chk->op = IR_NOP;
-                } else if (len_v >= 0 || chk->known_len >= 0) {
-                    IRInstruction hoisted = *chk;
-                    hoisted.op = IR_RANGE_CHECK;
-                    hoisted.src1 = base;
-                    hoisted.src2 = start_vreg;
-                    hoisted.src3 = lim_vreg;
-                    hoisted.src4 = len_v;
-                    chk->op = IR_NOP;
-                    ir_insert_before(ir, ip, &hoisted);
-                    ip++;
-                    ip_jmp++;
-                    k++;
                 }
             }
+            free(modified);
         }
-        free(modified);
-    }
 
-    /* Pass 3: Strip remaining IR_PTR_CHECK / IR_FFI_CHECK in --release mode */
-    for (int ip = 0; ip < ir->count; ip++) {
-        if (ir->instrs[ip].op == IR_PTR_CHECK || ir->instrs[ip].op == IR_FFI_CHECK) {
-            ir->instrs[ip].op = IR_NOP;
+        /* Pass 3: Strip remaining IR_PTR_CHECK / IR_FFI_CHECK in --release mode */
+        for (int ip = 0; ip < ir->count; ip++) {
+            if (ir->instrs[ip].op == IR_PTR_CHECK || ir->instrs[ip].op == IR_FFI_CHECK) {
+                ir->instrs[ip].op = IR_NOP;
+            }
         }
+        ir_compact_nops(ir);
     }
-    ir_compact_nops(ir);
 
     /* Pass 4 (Pillar #5): Constant folding on 2 constants & Copy propagation / Coalescing */
     for (int pass = 0; pass < 2; pass++) {
@@ -790,6 +794,11 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
                 else if (ins->op == IR_LE) res = (sa <= sb) ? 1 : 0;
                 else if (ins->op == IR_GT) res = (sa > sb) ? 1 : 0;
                 else if (ins->op == IR_GE) res = (sa >= sb) ? 1 : 0;
+                else if (ins->op == IR_BAND) res = (int64_t)(a & b);
+                else if (ins->op == IR_BOR) res = (int64_t)(a | b);
+                else if (ins->op == IR_BXOR) res = (int64_t)(a ^ b);
+                else if (ins->op == IR_SHL && b < 64) res = (int64_t)(a << b);
+                else if (ins->op == IR_SHR && b < 64) res = (int64_t)(sa >> b);
                 else folded = false;
                 if (folded) {
                     ins->op = IR_CONST_I64;
@@ -1020,15 +1029,23 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
                 }
             }
             if ((ins->op == IR_ADD || ins->op == IR_SUB || ins->op == IR_MUL ||
+                 ins->op == IR_BAND || ins->op == IR_BOR || ins->op == IR_BXOR ||
+                 ins->op == IR_SHL || ins->op == IR_SHR ||
                  (ins->op >= IR_EQ && ins->op <= IR_GE)) &&
                 ins->type == TYPE_I64 && ins->src1 >= 0 && ins->src2 >= 0) {
                 if (has_const[ins->src2]) {
                     int64_t cv = const_val[ins->src2];
-                    if (cv >= -2147483648LL && cv <= 2147483647LL) {
+                    if (ins->op == IR_SHL || ins->op == IR_SHR) {
+                        if (cv >= 0 && cv < 64) {
+                            ins->imm = cv;
+                            ins->src2 = VREG_NONE;
+                        }
+                    } else if (cv >= -2147483648LL && cv <= 2147483647LL) {
                         ins->imm = cv;
                         ins->src2 = VREG_NONE;
                     }
-                } else if ((ins->op == IR_ADD || ins->op == IR_MUL) && has_const[ins->src1]) {
+                } else if ((ins->op == IR_ADD || ins->op == IR_MUL ||
+                            ins->op == IR_BAND || ins->op == IR_BOR || ins->op == IR_BXOR) && has_const[ins->src1]) {
                     int64_t cv = const_val[ins->src1];
                     if (cv >= -2147483648LL && cv <= 2147483647LL) {
                         ins->src1 = ins->src2;

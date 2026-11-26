@@ -8,16 +8,81 @@
 VortexStructType g_struct_types[MAX_STRUCT_TYPES];
 int g_struct_type_count = 0;
 
+#define ST_HASH_CAP 4096
+#define UF_HASH_CAP 32768
+static uint32_t g_st_hash_epoch_arr[ST_HASH_CAP];
+static int      g_st_hash_idx[ST_HASH_CAP];
+static uint32_t g_st_epoch = 1;
+
+static uint32_t g_uf_hash_epoch_arr[UF_HASH_CAP];
+static int      g_uf_hash_idx[UF_HASH_CAP];
+static uint32_t g_uf_epoch = 1;
+
+static uint32_t vortex_fnv1a(const char* s) {
+    uint32_t h = 2166136261u;
+    while (*s) {
+        h ^= (uint8_t)(*s++);
+        h *= 16777619u;
+    }
+    return h;
+}
+
+void vortex_parser_reset_tables(bool reset_structs) {
+    g_uf_epoch++;
+    if (g_uf_epoch == 0) {
+        memset(g_uf_hash_epoch_arr, 0, sizeof(g_uf_hash_epoch_arr));
+        g_uf_epoch = 1;
+    }
+    if (reset_structs) {
+        g_st_epoch++;
+        if (g_st_epoch == 0) {
+            memset(g_st_hash_epoch_arr, 0, sizeof(g_st_hash_epoch_arr));
+            g_st_epoch = 1;
+        }
+    }
+}
+
+void struct_type_hash_insert(const char* name, int idx) {
+    if (!name) return;
+    uint32_t mask = ST_HASH_CAP - 1;
+    uint32_t slot = vortex_fnv1a(name) & mask;
+    for (uint32_t probe = 0; probe < ST_HASH_CAP; probe++) {
+        uint32_t pos = (slot + probe) & mask;
+        if (g_st_hash_epoch_arr[pos] != g_st_epoch || g_st_hash_idx[pos] == idx) {
+            g_st_hash_epoch_arr[pos] = g_st_epoch;
+            g_st_hash_idx[pos] = idx;
+            return;
+        }
+    }
+}
+
 VortexStructType* struct_type_find(const char* name) {
-    if (!name) return NULL;
-    for (int i = 0; i < g_struct_type_count; i++) {
-        if (strcmp(g_struct_types[i].name, name) == 0) return &g_struct_types[i];
+    if (!name || g_struct_type_count == 0) return NULL;
+    uint32_t mask = ST_HASH_CAP - 1;
+    uint32_t slot = vortex_fnv1a(name) & mask;
+    for (uint32_t probe = 0; probe < ST_HASH_CAP; probe++) {
+        uint32_t pos = (slot + probe) & mask;
+        if (g_st_hash_epoch_arr[pos] != g_st_epoch) return NULL;
+        int idx = g_st_hash_idx[pos];
+        if (idx >= 0 && idx < g_struct_type_count && strcmp(g_struct_types[idx].name, name) == 0) {
+            return &g_struct_types[idx];
+        }
     }
     return NULL;
 }
 
 VortexStructType* struct_type_find_by_id(int id) {
     if (id >= 0 && id < g_struct_type_count) return &g_struct_types[id];
+    return NULL;
+}
+
+VortexEnumType* enum_type_find(const char* name) {
+    if (!name) return NULL;
+    for (int i = 0; i < g_enum_type_count; i++) {
+        if (strcmp(g_enum_types[i].name, name) == 0) {
+            return &g_enum_types[i];
+        }
+    }
     return NULL;
 }
 
@@ -186,9 +251,31 @@ int g_user_func_reloc_count = 0;
 UserFunc g_user_funcs[MAX_USER_FUNCS];
 int g_user_func_count = 0;
 
+void user_func_hash_insert(const char* name, int idx) {
+    if (!name) return;
+    uint32_t mask = UF_HASH_CAP - 1;
+    uint32_t slot = vortex_fnv1a(name) & mask;
+    for (uint32_t probe = 0; probe < UF_HASH_CAP; probe++) {
+        uint32_t pos = (slot + probe) & mask;
+        if (g_uf_hash_epoch_arr[pos] != g_uf_epoch || g_uf_hash_idx[pos] == idx) {
+            g_uf_hash_epoch_arr[pos] = g_uf_epoch;
+            g_uf_hash_idx[pos] = idx;
+            return;
+        }
+    }
+}
+
 UserFunc* user_func_find(const char* name) {
-    for (int i = 0; i < g_user_func_count; i++) {
-        if (strcmp(g_user_funcs[i].name, name) == 0) return &g_user_funcs[i];
+    if (!name || g_user_func_count == 0) return NULL;
+    uint32_t mask = UF_HASH_CAP - 1;
+    uint32_t slot = vortex_fnv1a(name) & mask;
+    for (uint32_t probe = 0; probe < UF_HASH_CAP; probe++) {
+        uint32_t pos = (slot + probe) & mask;
+        if (g_uf_hash_epoch_arr[pos] != g_uf_epoch) return NULL;
+        int idx = g_uf_hash_idx[pos];
+        if (idx >= 0 && idx < g_user_func_count && strcmp(g_user_funcs[idx].name, name) == 0) {
+            return &g_user_funcs[idx];
+        }
     }
     return NULL;
 }
@@ -339,6 +426,24 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
     int line = l->cur.line;
     int col = l->cur.col;
 
+    if (l->cur.type == TOK_BANG) {
+        next_token(l);
+        VReg v_inner;
+        vortex_parse_primary(c, &v_inner);
+        *out_vreg = ir_new_vreg(c->ir, TYPE_I64);
+        ir_emit_binop(c->ir, IR_LNOT, *out_vreg, v_inner, v_inner, TYPE_I64);
+        return TYPE_I64;
+    }
+
+    if (l->cur.type == TOK_TILDE) {
+        next_token(l);
+        VReg v_inner;
+        vortex_parse_primary(c, &v_inner);
+        *out_vreg = ir_new_vreg(c->ir, TYPE_I64);
+        ir_emit_binop(c->ir, IR_BNOT, *out_vreg, v_inner, v_inner, TYPE_I64);
+        return TYPE_I64;
+    }
+
     if (l->cur.type == TOK_MINUS) {
         next_token(l);
         VReg v_inner;
@@ -380,7 +485,9 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
             if (l->cur.type == TOK_LET || l->cur.type == TOK_FOR ||
                 l->cur.type == TOK_PARALLEL_FOR || l->cur.type == TOK_WHILE ||
                 l->cur.type == TOK_IF || l->cur.type == TOK_RETURN ||
-                l->cur.type == TOK_UNSAFE || l->cur.type == TOK_STAR) {
+                l->cur.type == TOK_UNSAFE || l->cur.type == TOK_STAR ||
+                l->cur.type == TOK_BREAK || l->cur.type == TOK_CONTINUE ||
+                l->cur.type == TOK_ENUM) {
                 parse_statement(c);
                 last_v = VREG_NONE;
             } else {
@@ -388,14 +495,21 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                 if (l->cur.type == TOK_IDENT && l->pos < l->len) {
                     Lexer saved = *l;
                     next_token(l);
-                    if (l->cur.type == TOK_EQ || l->cur.type == TOK_DOT || l->cur.type == TOK_LBRACKET) {
-                        if (l->cur.type == TOK_EQ) is_assign = true;
+                    VortexTokenType nt = l->cur.type;
+                    if (nt == TOK_EQ || (nt >= TOK_PLUS_EQ && nt <= TOK_SHR_EQ) ||
+                        nt == TOK_DOT || nt == TOK_LBRACKET) {
+                        if (nt == TOK_EQ || (nt >= TOK_PLUS_EQ && nt <= TOK_SHR_EQ)) is_assign = true;
                         else {
                             int depth = 0;
                             while (l->cur.type != TOK_EOF && l->cur.type != TOK_SEMI && l->cur.type != TOK_RBRACE) {
                                 if (l->cur.type == TOK_LBRACKET || l->cur.type == TOK_LPAREN) depth++;
                                 else if (l->cur.type == TOK_RBRACKET || l->cur.type == TOK_RPAREN) depth--;
-                                else if (l->cur.type == TOK_EQ && depth == 0) { is_assign = true; break; }
+                                else if ((l->cur.type == TOK_EQ ||
+                                          (l->cur.type >= TOK_PLUS_EQ && l->cur.type <= TOK_SHR_EQ)) &&
+                                         depth == 0) {
+                                    is_assign = true;
+                                    break;
+                                }
                                 next_token(l);
                             }
                         }
@@ -420,6 +534,20 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
         }
         *out_vreg = last_v;
         return last_t;
+    }
+
+    if (l->cur.type == TOK_TRUE) {
+        next_token(l);
+        *out_vreg = ir_new_vreg(c->ir, TYPE_I64);
+        ir_emit_const_i64(c->ir, *out_vreg, 1);
+        return TYPE_I64;
+    }
+
+    if (l->cur.type == TOK_FALSE) {
+        next_token(l);
+        *out_vreg = ir_new_vreg(c->ir, TYPE_I64);
+        ir_emit_const_i64(c->ir, *out_vreg, 0);
+        return TYPE_I64;
     }
 
     if (l->cur.type == TOK_INT) {
@@ -458,6 +586,37 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
         strncpy(name, l->cur.text, sizeof(name) - 1);
         name[sizeof(name) - 1] = '\0';
         next_token(l);
+
+        /* Enum Variant: EnumName::Variant or EnumName.Variant */
+        if (l->cur.type == TOK_COLONCOLON || l->cur.type == TOK_DOT) {
+            VortexEnumType* en = enum_type_find(name);
+            if (en) {
+                next_token(l);
+                if (l->cur.type != TOK_IDENT) {
+                    fprintf(stderr, "[VORTEX SYNTAX ERROR] Expected variant name after '%s' at %s:%d:%d\n",
+                            name, g_current_filename ? g_current_filename : "<input>", l->cur.line, l->cur.col);
+                    vortex_error("");
+                }
+                int64_t eval = 0;
+                bool found_v = false;
+                for (int vi = 0; vi < en->variant_count; vi++) {
+                    if (strcmp(en->variants[vi].name, l->cur.text) == 0) {
+                        eval = en->variants[vi].value;
+                        found_v = true;
+                        break;
+                    }
+                }
+                if (!found_v) {
+                    fprintf(stderr, "[VORTEX ERROR] Unknown enum variant '%s::%s' at %s:%d:%d\n",
+                            name, l->cur.text, g_current_filename ? g_current_filename : "<input>", l->cur.line, l->cur.col);
+                    vortex_error("");
+                }
+                next_token(l);
+                *out_vreg = ir_new_vreg(c->ir, TYPE_I64);
+                ir_emit_const_i64(c->ir, *out_vreg, eval);
+                return TYPE_I64;
+            }
+        }
 
         /* Struct Instantiation: StructName { f1: v1, ... } */
         VortexStructType* st_def = struct_type_find(name);
@@ -683,6 +842,9 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                 } else if (strcmp(name, "ffi_load") == 0 || strcmp(name, "ffi_symbol") == 0 ||
                            strcmp(name, "gui_window") == 0) {
                     ret_t = TYPE_PTR;
+                } else if (strcmp(name, "sinf_rad") == 0 || strcmp(name, "cosf_rad") == 0 ||
+                           strcmp(name, "sqrtf_val") == 0) {
+                    ret_t = TYPE_F32;
                 }
 
                 *out_vreg = ir_new_vreg(c->ir, ret_t);
@@ -740,6 +902,7 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
 
             UserFunc* uf = user_func_find(name);
             if (uf) {
+                uf->called = true;
                 if (uf->is_unsafe) {
                     vortex_require_unsafe(c, "Call to 'unsafe fn'", line, col);
                 }
@@ -780,6 +943,7 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
             vortex_error("");
         }
         vortex_check_symbol_alive(c, sym, line, col);
+        sym->used = true;
 
         VortexType primary_type = sym->type;
         int primary_struct_id = sym->struct_id;
@@ -919,6 +1083,9 @@ static VortexType parse_multiplicative(Compiler* c, VReg* out_vreg) {
             *out_vreg = dest;
             left_type = TYPE_F32;
         } else {
+            if ((op == TOK_SLASH || op == TOK_PERCENT) && g_ultrasafe_level >= 1 && c->unsafe_depth == 0) {
+                ir_emit_div_check(c->ir, r_vreg, g_current_filename, line);
+            }
             VReg dest = ir_new_vreg(c->ir, TYPE_I64);
             if (op == TOK_STAR) ir_emit_binop(c->ir, IR_MUL, dest, *out_vreg, r_vreg, TYPE_I64);
             else if (op == TOK_SLASH) ir_emit_binop(c->ir, IR_DIV, dest, *out_vreg, r_vreg, TYPE_I64);
@@ -969,15 +1136,30 @@ static VortexType parse_additive(Compiler* c, VReg* out_vreg) {
     return left_type;
 }
 
-VortexType vortex_parse_expr(Compiler* c, VReg* out_vreg) {
+static VortexType parse_shift(Compiler* c, VReg* out_vreg) {
     VortexType left_type = parse_additive(c, out_vreg);
+    while (c->lex->cur.type == TOK_SHL || c->lex->cur.type == TOK_SHR) {
+        VortexTokenType op = c->lex->cur.type;
+        next_token(c->lex);
+        VReg r_vreg;
+        parse_additive(c, &r_vreg);
+        VReg dest = ir_new_vreg(c->ir, TYPE_I64);
+        ir_emit_binop(c->ir, (op == TOK_SHL) ? IR_SHL : IR_SHR, dest, *out_vreg, r_vreg, TYPE_I64);
+        *out_vreg = dest;
+        left_type = TYPE_I64;
+    }
+    return left_type;
+}
+
+static VortexType parse_relational(Compiler* c, VReg* out_vreg) {
+    VortexType left_type = parse_shift(c, out_vreg);
     VortexTokenType t = c->lex->cur.type;
 
-    if (t == TOK_LT || t == TOK_LE || t == TOK_GT || t == TOK_GE || t == TOK_EQEQ || t == TOK_NEQ) {
+    while (t == TOK_LT || t == TOK_LE || t == TOK_GT || t == TOK_GE || t == TOK_EQEQ || t == TOK_NEQ) {
         VortexTokenType op = t;
         next_token(c->lex);
         VReg r_vreg;
-        VortexType right_type = parse_additive(c, &r_vreg);
+        VortexType right_type = parse_shift(c, &r_vreg);
         VReg dest = ir_new_vreg(c->ir, TYPE_I64);
 
         if (left_type == TYPE_F32 || right_type == TYPE_F32) {
@@ -1006,7 +1188,106 @@ VortexType vortex_parse_expr(Compiler* c, VReg* out_vreg) {
             ir_emit_binop(c->ir, ir_op, dest, *out_vreg, r_vreg, TYPE_I64);
         }
         *out_vreg = dest;
-        return TYPE_I64;
+        left_type = TYPE_I64;
+        t = c->lex->cur.type;
+    }
+    return left_type;
+}
+
+static VortexType parse_bitwise_and(Compiler* c, VReg* out_vreg) {
+    VortexType left_type = parse_relational(c, out_vreg);
+    while (c->lex->cur.type == TOK_AMP) {
+        next_token(c->lex);
+        VReg r_vreg;
+        parse_relational(c, &r_vreg);
+        VReg dest = ir_new_vreg(c->ir, TYPE_I64);
+        ir_emit_binop(c->ir, IR_BAND, dest, *out_vreg, r_vreg, TYPE_I64);
+        *out_vreg = dest;
+        left_type = TYPE_I64;
+    }
+    return left_type;
+}
+
+static VortexType parse_bitwise_xor(Compiler* c, VReg* out_vreg) {
+    VortexType left_type = parse_bitwise_and(c, out_vreg);
+    while (c->lex->cur.type == TOK_CARET) {
+        next_token(c->lex);
+        VReg r_vreg;
+        parse_bitwise_and(c, &r_vreg);
+        VReg dest = ir_new_vreg(c->ir, TYPE_I64);
+        ir_emit_binop(c->ir, IR_BXOR, dest, *out_vreg, r_vreg, TYPE_I64);
+        *out_vreg = dest;
+        left_type = TYPE_I64;
+    }
+    return left_type;
+}
+
+static VortexType parse_bitwise_or(Compiler* c, VReg* out_vreg) {
+    VortexType left_type = parse_bitwise_xor(c, out_vreg);
+    while (c->lex->cur.type == TOK_PIPE) {
+        next_token(c->lex);
+        VReg r_vreg;
+        parse_bitwise_xor(c, &r_vreg);
+        VReg dest = ir_new_vreg(c->ir, TYPE_I64);
+        ir_emit_binop(c->ir, IR_BOR, dest, *out_vreg, r_vreg, TYPE_I64);
+        *out_vreg = dest;
+        left_type = TYPE_I64;
+    }
+    return left_type;
+}
+
+static VortexType parse_logical_and(Compiler* c, VReg* out_vreg) {
+    VortexType left_type = parse_bitwise_or(c, out_vreg);
+    while (c->lex->cur.type == TOK_AND) {
+        next_token(c->lex);
+        int lbl_false = ir_new_label(c->ir);
+        int lbl_end = ir_new_label(c->ir);
+        VReg res = ir_new_vreg(c->ir, TYPE_I64);
+        VReg v_zero = ir_new_vreg(c->ir, TYPE_I64);
+        ir_emit_const_i64(c->ir, v_zero, 0);
+
+        ir_emit_jz(c->ir, *out_vreg, lbl_false);
+        VReg r_vreg;
+        parse_bitwise_or(c, &r_vreg);
+        ir_emit_binop(c->ir, IR_NE, res, r_vreg, v_zero, TYPE_I64);
+        ir_emit_jmp(c->ir, lbl_end);
+
+        ir_emit_label(c->ir, lbl_false);
+        ir_emit_const_i64(c->ir, res, 0);
+        ir_emit_label(c->ir, lbl_end);
+
+        *out_vreg = res;
+        left_type = TYPE_I64;
+    }
+    return left_type;
+}
+
+VortexType vortex_parse_expr(Compiler* c, VReg* out_vreg) {
+    VortexType left_type = parse_logical_and(c, out_vreg);
+    while (c->lex->cur.type == TOK_OR) {
+        next_token(c->lex);
+        int lbl_false = ir_new_label(c->ir);
+        int lbl_true = ir_new_label(c->ir);
+        int lbl_end = ir_new_label(c->ir);
+        VReg res = ir_new_vreg(c->ir, TYPE_I64);
+        VReg v_zero = ir_new_vreg(c->ir, TYPE_I64);
+        ir_emit_const_i64(c->ir, v_zero, 0);
+
+        ir_emit_jz(c->ir, *out_vreg, lbl_false);
+        ir_emit_jmp(c->ir, lbl_true);
+
+        ir_emit_label(c->ir, lbl_false);
+        VReg r_vreg;
+        parse_logical_and(c, &r_vreg);
+        ir_emit_binop(c->ir, IR_NE, res, r_vreg, v_zero, TYPE_I64);
+        ir_emit_jmp(c->ir, lbl_end);
+
+        ir_emit_label(c->ir, lbl_true);
+        ir_emit_const_i64(c->ir, res, 1);
+        ir_emit_label(c->ir, lbl_end);
+
+        *out_vreg = res;
+        left_type = TYPE_I64;
     }
     return left_type;
 }

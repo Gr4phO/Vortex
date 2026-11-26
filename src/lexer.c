@@ -5,25 +5,28 @@
 
 #include "parser_internal.h"
 
-static void unescape_string(char* dst, const char* src) {
-    while (*src) {
-        if (*src == '\\' && *(src + 1)) {
-            src++;
-            switch (*src) {
-                case 'n': *dst++ = '\n'; break;
-                case 't': *dst++ = '\t'; break;
-                case 'r': *dst++ = '\r'; break;
-                case '0': *dst++ = '\0'; break;
-                case '\\': *dst++ = '\\'; break;
-                case '\"': *dst++ = '\"'; break;
-                default: *dst++ = *src; break;
+static void unescape_string(char* dst, size_t dst_cap, const char* src, size_t src_len) {
+    size_t di = 0;
+    size_t si = 0;
+    if (!dst || dst_cap == 0) return;
+    while (si < src_len && di + 1 < dst_cap) {
+        if (src[si] == '\\' && si + 1 < src_len) {
+            si++;
+            switch (src[si]) {
+                case 'n':  dst[di++] = '\n'; break;
+                case 't':  dst[di++] = '\t'; break;
+                case 'r':  dst[di++] = '\r'; break;
+                case '0':  dst[di++] = '\0'; break;
+                case '\\': dst[di++] = '\\'; break;
+                case '\"': dst[di++] = '\"'; break;
+                default:   dst[di++] = src[si]; break;
             }
         } else {
-            *dst++ = *src;
+            dst[di++] = src[si];
         }
-        src++;
+        si++;
     }
-    *dst = '\0';
+    dst[di] = '\0';
 }
 
 void lexer_init(Lexer* lex, const char* source) {
@@ -59,6 +62,23 @@ void next_token(Lexer* lex) {
         if (c == '/' && lex->pos + 1 < lex->len && lex->src[lex->pos + 1] == '/') {
             lex->pos += 2;
             while (lex->pos < lex->len && lex->src[lex->pos] != '\n') lex->pos++;
+            continue;
+        }
+        if (c == '/' && lex->pos + 1 < lex->len && lex->src[lex->pos + 1] == '*') {
+            lex->pos += 2;
+            lex->col += 2;
+            while (lex->pos < lex->len) {
+                if (lex->src[lex->pos] == '*' && lex->pos + 1 < lex->len && lex->src[lex->pos + 1] == '/') {
+                    lex->pos += 2;
+                    lex->col += 2;
+                    break;
+                }
+                if (lex->src[lex->pos] == '\n') {
+                    lex->pos++; lex->line++; lex->col = 1;
+                } else {
+                    lex->pos++; lex->col++;
+                }
+            }
             continue;
         }
         break;
@@ -137,10 +157,15 @@ void next_token(Lexer* lex) {
         else if (strcmp(lex->cur.text, "fn") == 0) lex->cur.type = TOK_FN;
         else if (strcmp(lex->cur.text, "return") == 0) lex->cur.type = TOK_RETURN;
         else if (strcmp(lex->cur.text, "struct") == 0) lex->cur.type = TOK_STRUCT;
+        else if (strcmp(lex->cur.text, "enum") == 0) lex->cur.type = TOK_ENUM;
         else if (strcmp(lex->cur.text, "extern") == 0) lex->cur.type = TOK_EXTERN;
         else if (strcmp(lex->cur.text, "unsafe") == 0) lex->cur.type = TOK_UNSAFE;
         else if (strcmp(lex->cur.text, "as") == 0) lex->cur.type = TOK_AS;
         else if (strcmp(lex->cur.text, "import") == 0) lex->cur.type = TOK_IMPORT;
+        else if (strcmp(lex->cur.text, "break") == 0) lex->cur.type = TOK_BREAK;
+        else if (strcmp(lex->cur.text, "continue") == 0) lex->cur.type = TOK_CONTINUE;
+        else if (strcmp(lex->cur.text, "true") == 0) lex->cur.type = TOK_TRUE;
+        else if (strcmp(lex->cur.text, "false") == 0) lex->cur.type = TOK_FALSE;
         else if (strcmp(lex->cur.text, "i64") == 0) lex->cur.type = TOK_I64_KW;
         else if (strcmp(lex->cur.text, "f32") == 0) lex->cur.type = TOK_F32_KW;
         else lex->cur.type = TOK_IDENT;
@@ -154,15 +179,15 @@ void next_token(Lexer* lex) {
             if (lex->src[lex->pos] == '\\' && lex->pos + 1 < lex->len) {
                 lex->pos += 2; lex->col += 2;
             } else {
-                lex->pos++; lex->col++;
+                if (lex->src[lex->pos] == '\n') {
+                    lex->pos++; lex->line++; lex->col = 1;
+                } else {
+                    lex->pos++; lex->col++;
+                }
             }
         }
         size_t raw_len = lex->pos - start;
-        char temp[512];
-        if (raw_len >= sizeof(temp)) raw_len = sizeof(temp) - 1;
-        memcpy(temp, &lex->src[start], raw_len);
-        temp[raw_len] = '\0';
-        unescape_string(lex->cur.text, temp);
+        unescape_string(lex->cur.text, sizeof(lex->cur.text), &lex->src[start], raw_len);
 
         if (lex->pos < lex->len && lex->src[lex->pos] == '"') {
             lex->pos++; lex->col++;
@@ -171,32 +196,41 @@ void next_token(Lexer* lex) {
         return;
     }
 
+    /* 3-char shift-assign operators: <<= and >>= */
+    if (lex->pos + 2 < lex->len) {
+        char c2 = lex->src[lex->pos + 1];
+        char c3 = lex->src[lex->pos + 2];
+        if (c == '<' && c2 == '<' && c3 == '=') {
+            lex->pos += 3; lex->col += 3;
+            lex->cur.type = TOK_SHL_EQ; strcpy(lex->cur.text, "<<="); return;
+        }
+        if (c == '>' && c2 == '>' && c3 == '=') {
+            lex->pos += 3; lex->col += 3;
+            lex->cur.type = TOK_SHR_EQ; strcpy(lex->cur.text, ">>="); return;
+        }
+    }
+
     if (lex->pos + 1 < lex->len) {
         char c2 = lex->src[lex->pos + 1];
-        if (c == '-' && c2 == '>') {
-            lex->pos += 2; lex->col += 2;
-            lex->cur.type = TOK_ARROW; strcpy(lex->cur.text, "->"); return;
-        }
-        if (c == '.' && c2 == '.') {
-            lex->pos += 2; lex->col += 2;
-            lex->cur.type = TOK_DOTDOT; strcpy(lex->cur.text, ".."); return;
-        }
-        if (c == '=' && c2 == '=') {
-            lex->pos += 2; lex->col += 2;
-            lex->cur.type = TOK_EQEQ; strcpy(lex->cur.text, "=="); return;
-        }
-        if (c == '!' && c2 == '=') {
-            lex->pos += 2; lex->col += 2;
-            lex->cur.type = TOK_NEQ; strcpy(lex->cur.text, "!="); return;
-        }
-        if (c == '<' && c2 == '=') {
-            lex->pos += 2; lex->col += 2;
-            lex->cur.type = TOK_LE; strcpy(lex->cur.text, "<="); return;
-        }
-        if (c == '>' && c2 == '=') {
-            lex->pos += 2; lex->col += 2;
-            lex->cur.type = TOK_GE; strcpy(lex->cur.text, ">="); return;
-        }
+        if (c == '-' && c2 == '>') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_ARROW; strcpy(lex->cur.text, "->"); return; }
+        if (c == '.' && c2 == '.') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_DOTDOT; strcpy(lex->cur.text, ".."); return; }
+        if (c == '=' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_EQEQ; strcpy(lex->cur.text, "=="); return; }
+        if (c == '!' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_NEQ; strcpy(lex->cur.text, "!="); return; }
+        if (c == '<' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_LE; strcpy(lex->cur.text, "<="); return; }
+        if (c == '>' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_GE; strcpy(lex->cur.text, ">="); return; }
+        if (c == '&' && c2 == '&') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_AND; strcpy(lex->cur.text, "&&"); return; }
+        if (c == '|' && c2 == '|') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_OR; strcpy(lex->cur.text, "||"); return; }
+        if (c == '<' && c2 == '<') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_SHL; strcpy(lex->cur.text, "<<"); return; }
+        if (c == '>' && c2 == '>') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_SHR; strcpy(lex->cur.text, ">>"); return; }
+        if (c == ':' && c2 == ':') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_COLONCOLON; strcpy(lex->cur.text, "::"); return; }
+        if (c == '+' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_PLUS_EQ; strcpy(lex->cur.text, "+="); return; }
+        if (c == '-' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_MINUS_EQ; strcpy(lex->cur.text, "-="); return; }
+        if (c == '*' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_STAR_EQ; strcpy(lex->cur.text, "*="); return; }
+        if (c == '/' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_SLASH_EQ; strcpy(lex->cur.text, "/="); return; }
+        if (c == '%' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_PERCENT_EQ; strcpy(lex->cur.text, "%="); return; }
+        if (c == '&' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_AMP_EQ; strcpy(lex->cur.text, "&="); return; }
+        if (c == '|' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_PIPE_EQ; strcpy(lex->cur.text, "|="); return; }
+        if (c == '^' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_CARET_EQ; strcpy(lex->cur.text, "^="); return; }
     }
 
     lex->pos++; lex->col++;
@@ -211,6 +245,11 @@ void next_token(Lexer* lex) {
         case '=': lex->cur.type = TOK_EQ; break;
         case '<': lex->cur.type = TOK_LT; break;
         case '>': lex->cur.type = TOK_GT; break;
+        case '!': lex->cur.type = TOK_BANG; break;
+        case '&': lex->cur.type = TOK_AMP; break;
+        case '|': lex->cur.type = TOK_PIPE; break;
+        case '^': lex->cur.type = TOK_CARET; break;
+        case '~': lex->cur.type = TOK_TILDE; break;
         case '(': lex->cur.type = TOK_LPAREN; break;
         case ')': lex->cur.type = TOK_RPAREN; break;
         case '{': lex->cur.type = TOK_LBRACE; break;
@@ -227,5 +266,49 @@ void next_token(Lexer* lex) {
             fprintf(stderr, "[VORTEX ERROR] Unknown character '%c' at %s:%d:%d\n",
                     c, g_current_filename ? g_current_filename : "<input>", lex->line, lex->col);
             vortex_error("");
+    }
+}
+
+void vortex_lexer_sync(Lexer* l, bool in_function) {
+    if (!l || l->cur.type == TOK_EOF) return;
+    int brace_depth = 0;
+    if (l->cur.type == TOK_SEMI) {
+        next_token(l);
+        return;
+    }
+    if (l->cur.type == TOK_LBRACE) brace_depth = 1;
+    next_token(l);
+
+    while (l->cur.type != TOK_EOF) {
+        VortexTokenType t = l->cur.type;
+        if (t == TOK_LBRACE) {
+            brace_depth++;
+            next_token(l);
+            continue;
+        }
+        if (t == TOK_RBRACE) {
+            if (brace_depth > 0) {
+                brace_depth--;
+                next_token(l);
+                if (brace_depth == 0) return;
+                continue;
+            }
+            return;
+        }
+        if (brace_depth == 0) {
+            if (t == TOK_SEMI) {
+                next_token(l);
+                return;
+            }
+            if (!in_function && (t == TOK_FN || t == TOK_STRUCT || t == TOK_ENUM ||
+                                 t == TOK_EXTERN || t == TOK_IMPORT || t == TOK_UNSAFE || t == TOK_LET)) {
+                return;
+            }
+            if (in_function && (t == TOK_LET || t == TOK_IF || t == TOK_FOR ||
+                                t == TOK_WHILE || t == TOK_RETURN || t == TOK_BREAK || t == TOK_CONTINUE)) {
+                return;
+            }
+        }
+        next_token(l);
     }
 }

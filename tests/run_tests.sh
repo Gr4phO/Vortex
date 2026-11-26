@@ -25,7 +25,7 @@ elif [ "$OS_NAME" = "Darwin" ]; then
     FFI_TEST="test_ffi_darwin.vx"
 fi
 
-for t in test_struct.vx test_vec_struct.vx test_fib.vx "$FFI_TEST" test_memory_1m.vx test_safety_pass.vx test_import_main.vx test_opt_regression.vx; do
+for t in test_struct.vx test_vec_struct.vx test_fib.vx "$FFI_TEST" test_memory_1m.vx test_safety_pass.vx test_import_main.vx test_opt_regression.vx test_ergonomics.vx; do
     echo ""
     echo "--- [RUN] $t ---"
     if "$VORTEX_BIN" "$SCRIPT_DIR/$t"; then
@@ -61,6 +61,15 @@ if bash "$SCRIPT_DIR/run_jalon3_checks.sh"; then
     PASSED=$((PASSED + 1))
 else
     echo "[FAIL] run_jalon3_checks.sh"
+    FAILED=$((FAILED + 1))
+fi
+
+echo ""
+if bash "$SCRIPT_DIR/run_ultrasafe_checks.sh"; then
+    echo "[PASS] run_ultrasafe_checks.sh"
+    PASSED=$((PASSED + 1))
+else
+    echo "[FAIL] run_ultrasafe_checks.sh"
     FAILED=$((FAILED + 1))
 fi
 
