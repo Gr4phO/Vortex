@@ -8,16 +8,16 @@
 [![Standard](https://img.shields.io/badge/C99-zero%20external%20deps-334155?style=flat-square)](#compilation-depuis-les-sources--tests)
 [![CI](https://img.shields.io/github/actions/workflow/status/Gr4phO/Vortex/ci.yml?style=flat-square&label=CI)](.github/workflows/ci.yml)
 
-Vortex compile les scripts `.vx` et sessions REPL directement en code machine natif en mémoire (~16 450 lignes de C99 pur modulaire dans `src/`, sans LLVM ni dépendance externe). Il combine une gestion mémoire sans GC basée sur des arènes paginées (`2 Mo`) avec contrôle statique d'échappement, un allocateur de registres Linear-Scan sur IR 3-adresses, une vectorisation SIMD automatique (`AVX2/FMA3` / `NEON`), un serveur LSP intégré, un gestionnaire de paquets (`vortex pkg`) et une bibliothèque standard modulaire (`std/`).
+Vortex compile les scripts `.vx` et sessions REPL directement en code machine natif en mémoire (~20 500 lignes de C99 pur modulaire dans `src/`, sans LLVM ni dépendance externe). Il combine une gestion mémoire sans GC basée sur des arènes paginées (`2 Mio`) avec contrôle statique d'échappement, un allocateur de registres Linear-Scan sur IR 3-adresses, une vectorisation SIMD automatique (`AVX2/FMA3` / `NEON`), des modes de sûreté progressifs (`--safe`, `--ultrasafe 1/2/3`, `--release`), un exécuteur de tests natif (`vortex test`), une spec auto-générée (`vortex spec`), un serveur LSP intégré, un gestionnaire de paquets (`vortex pkg`), une bibliothèque partagée d'intégration native (`vortex.dll` / `libvortex.so` / `libvortex.dylib`) et une bibliothèque standard modulaire (`std/`).
 
 ---
 
 ## Points Clés
 
-- **JIT natif `x86-64` (Windows x64 & System V Linux/macOS) & `ARM64` NEON** : émission directe en mémoire (`VirtualAlloc` / `mmap` + `W^X`), `omit_fp` et génération de binaires autonomes (`vortex build` : `PE32+`, `ELF64`, `Mach-O 64`).
-- **Mémoire sans GC & sûreté (`--safe` par défaut, `--release` pour la prod)** : arènes de portée (`scope_push()` / `scope_pop()`), vérification de régions à la compilation, garde-fous `unsafe` sur l'arithmétique de pointeurs et le FFI, contrôle rapide par arène active et déduplication des bornes en bloc de base.
-- **Optimiseur IR 3-adresses** : inlining de fonctions, compression algébrique de récursion binaire (`fib`), RCE/LICM, pliage puissance de 2 (`div`/`mod` sans branchement), contrôles de bornes `--release` inline avec *cold traps* hors boucle, auto-vectorisation `AVX2` (`4 × YMM` + `vfmadd231ps`, `IR_VEC_MOD_FILL`, réductions/grilles `32-bit`), allocation Linear-Scan.
-- **Écosystème intégré** : serveur LSP JSON-RPC 2.0 (`vortex lsp`), gestionnaire de paquets (`vortex pkg` avec verrouillage `SHA-256`), compilation conditionnelle `#[cfg(...)]`, FFI C dynamique (`extern fn`), traces d'appels natives / `DWARF v4` et primitives rapides (`str_join`, `str_find_any2`, `std/json` linéaire).
+- **JIT natif `x86-64` (Windows x64 & System V Linux/macOS) & `ARM64` NEON** : émission directe en mémoire (`VirtualAlloc` / `mmap` + `W^X`), `omit_fp` et génération de binaires autonomes (`vortex build` : `PE32+`, `ELF64`, `Mach-O 64`), avec binaires précompilés multi-OS sur [GitHub Releases](https://github.com/Gr4phO/Vortex/releases/latest).
+- **Mémoire sans GC & sûreté progressive (`--safe` par défaut, `--ultrasafe 1|2|3`, `--release`)** : arènes de portée (`scope_push()` / `scope_pop()`), vérification de régions à la compilation (`ir_region_verify`), garde-fous `unsafe` sur l'arithmétique de pointeurs et le FFI, contrôle rapide par arène active et déduplication des bornes en bloc de base.
+- **Optimiseur IR 3-adresses** : inlining de fonctions (`--release`), compression algébrique de récursion binaire (`fib`), RCE/LICM, pliage puissance de 2 (`div`/`mod` sans branchement), contrôles de bornes `--release` inline avec *cold traps* hors boucle, auto-vectorisation `AVX2` (`4 × YMM` + `vfmadd231ps`, `IR_VEC_MOD_FILL`, réductions/grilles `32-bit`), allocation Linear-Scan.
+- **Écosystème & outillage AI-friendly** : serveur LSP JSON-RPC 2.0 (`vortex lsp`), gestionnaire de paquets (`vortex pkg` avec verrouillage `SHA-256`), diagnostics structurés `--json`, validation sans exécution (`--check`), exécuteur `vortex test`, spec compilateur (`vortex spec`), compilation conditionnelle `#[cfg(...)]`, FFI C dynamique (`extern fn`), traces d'appels natives / `DWARF v4` et primitives rapides (`str_join`, `str_find_any2`, `std/json` linéaire).
 
 ---
 
@@ -81,8 +81,18 @@ Banc d'essai [`benchmarks/suite_10_langs/`](benchmarks/suite_10_langs/) exécut�
 ```
 
 - **Mémoire sûre (`--safe` par défaut)** : contrôle d'époques sur les arènes (`VORTEX_SAFE_MAGIC`) avec fast-path sur l'arène active du thread, déduplication des bornes par bloc de base, vérification de bornes dynamique avec trace d'appels (`stacktrace`), garde-fous `unsafe` pour les pointeurs bruts/appels `extern fn` et rejet des pointeurs de fonction `NULL` dans `ffi_call0..6`.
-- **Mode performance (`--release`)** : élimination des contrôles prouvés sûrs (RCE/LICM), contrôle de bornes rapide inline avec *cold traps*, allocations compactes/zero-copy sans `memset` redondant, inlining, `omit_fp` et noyaux vectoriels AVX2/FMA3.
-- **Limites actuelles du compilateur ([`src/vortex.h`](src/vortex.h))** : types scalaires de base principalement `i64`/`f32` (avec `i32`/`ptr`/`str`), `MAX_FIELDS = 16` par struct, `MAX_CALL_ARGS = 16` par appel, `MAX_STRUCT_TYPES = 128`, `MAX_USER_FUNCS = 512`, `MAX_JIT_CODE_SIZE = 1 MiB`, `MAX_IR_INSTRS = 65 536` instructions par fonction, et réductions `f32` vectorisées réassociatives sur les boucles `IR_VEC_LOOP`.
+- **Mode performance (`--release`)** : élimination des contrôles prouvés sûrs (RCE/LICM), contrôle de bornes rapide inline avec *cold traps*, allocations compactes/zero-copy sans `memset` redondant, inlining (`<= 40` instructions IR), `omit_fp` et noyaux vectoriels AVX2/FMA3.
+- **Limites actuelles du compilateur ([`src/vortex.h`](src/vortex.h))** : types scalaires de base centrés sur `i64`, `i32`, `f32`, `str`, `ptr` et `enum` (`i64`) ; `MAX_FIELDS = 64` par `struct`, `MAX_CALL_ARGS = 16` par appel, `MAX_STRUCT_TYPES = 1024`, `MAX_ENUM_TYPES = 256` (`128` variantes max), `MAX_SYMBOLS = 1024` par portée/fonction, `MAX_USER_FUNCS = 8192`, `MAX_DYN_LIBS = 256`, `MAX_FFI_FUNCS = 2048`, littéraux chaînes jusqu'à `4095` octets, `MAX_JIT_CODE_SIZE = 16 MiB`, `MAX_IR_INSTRS = 262 144` instructions par fonction, et réductions `f32` vectorisées réassociatives sur les boucles `IR_VEC_LOOP`.
+
+### Modes `--ultrasafe 1 / 2 / 3` (cumulatifs, au-dessus de `--safe`)
+
+Syntaxes acceptées : `--ultrasafe 1`, `--ultrasafe 2`, `--ultrasafe 3`, `--ultrasafe=1|2|3` ou `--ultrasafe` seul (équivalent à `3`).
+
+| Niveau | Contrôles statiques (avant JIT) | Gardes runtime | Récupération |
+| :--- | :--- | :--- | :--- |
+| **`--ultrasafe 1`** | Warnings non bloquants : `W101` (code mort après `return`/`break`/`continue`), `W102` (`mut` non réassigné), `W103` (shadowing hors `_`), `W104` (variable locale inutilisée hors `_`) | Garde division/modulo entier par `0` (`IR_DIV_CHECK` hors `unsafe` -> `[VORTEX SAFETY PANIC]`) | Stop à la 1re erreur |
+| **`--ultrasafe 2`** | Niveau 1 + erreurs bloquantes : `E201` (div/mod par constante `0`), `E202` (taille slice `< 0` ou indice constant hors bornes), `E203` (déréf/champ sur pointeur nul constant), `E204` (`return` manquant sur fonction `-> T` non-void) + warning global `W105` (fonction inutilisée hors `main` / `test_*`) | Niveau 1 + garde profondeur de récursion/appels (max `2048` sur fonctions non-`unsafe` avec `IR_CALL_USER`, 0 surcoût sur fonctions feuilles) | Stop à la 1re erreur |
+| **`--ultrasafe 3`** | Niveau 2 + collecte complète : `E001` (erreurs parsing/types), `E101` (fonctions non résolues), `E301` (toutes violations d'arènes dans `ir_region_verify`), `E302` (appels `unsafe` hors bloc `unsafe`) | Identique au niveau 2 (exécuté uniquement si `0` erreur) | **Continue après chaque erreur** (`setjmp` + `vortex_lexer_sync`, max `256` diagnostics dédupliqués), idéal avec `--check --json` |
 
 ---
 
@@ -103,33 +113,33 @@ make release    # Binaire LTO strippé
 make shared     # Bibliothèque partagée libvortex.so / libvortex.dylib
 ```
 
-### Utilisation CLI & Outils AI-Friendly (`v1.1.0`)
+### Utilisation CLI & Outils AI-Friendly (`v1.1.5`)
 
 ```sh
 ./vortex                                                 # REPL interactif
 ./vortex run --release benchmarks/suite_10_langs/bench_vortex.vx
 ./vortex --headless run --safe tests/test_safety_pass.vx # Validation mémoire/bornes + frames exactes
 ./vortex --ultrasafe 1 script.vx                         # + div/0 runtime & warnings (W101..W104)
-./vortex --ultrasafe 2 --check script.vx                 # + audits statiques (E201..E204) & garde récursion
+./vortex --ultrasafe 2 --check script.vx                 # + audits statiques (E201..E204, W105) & garde récursion
 ./vortex --ultrasafe 3 --check --json script.vx          # Multi-erreurs en un passage + sortie JSON structurée
-./vortex test [chemin] [--json]                          # Exécuteur natif de tests (assert / assert_eq / test_*)
+./vortex test [chemin] [--ultrasafe 1|2|3] [--json]      # Exécuteur natif de tests (assert / assert_eq / test_*)
 ./vortex spec [--json]                                   # Spécification auto-générée depuis le compilateur
 ./vortex eval "let mut x = 21; x *= 2; print(x);"
 ./vortex build examples/app_3d.vx -o app_3d.exe          # Binaire autonome (Windows / Linux / macOS)
 ./vortex lsp                                             # Serveur LSP (JSON-RPC)
 ```
 
-### Nouveautés Ergonomie (`v1.1.0`)
+### Ergonomie & Syntaxe (`v1.1.5`)
 
-- **Opérateurs logiques & bit-à-bit** : court-circuit `&&` et `||`, `!`, `&`, `|`, `^`, `~`, `<<`, `>>`
-- **Affectations composées** : `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` sur variables, champs et slices
-- **Contrôle de flux & Types** : `break`, `continue`, `true`, `false`, `enum Nom { A, B = 10, C }` (`Nom::B` / `Nom.B`), commentaires `/* ... */`, chaînes littérales jusqu'à **4095 octets**
-- **Assertions natives** : `assert(cond)` et `assert_eq(a, b)` intégrés pour `vortex test`
+- **Opérateurs logiques & bit-à-bit** : court-circuit `&&` et `||`, `!`, `&`, `|`, `^`, `~`, `<<`, `>>` *(attention : `==`/`!=`/`<`/`>` sont plus prioritaires que `&`/`^`/`|`, parenthéser `(x & mask) == 0`)*
+- **Affectations composées** : `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` sur variables `mut`, champs de `struct` et slices
+- **Contrôle de flux & Types** : `break`, `continue`, `true`, `false` (`i64`), `enum Nom { A, B = 10, C }` (`Nom::B` / `Nom.B`), commentaires `/* ... */`, chaînes littérales jusqu'à **4095 octets**
+- **Assertions & trigonométrie flottante natives** : `assert(cond)`, `assert_eq(a, b)`, `sinf_rad(rad)`, `cosf_rad(rad)`, `sqrtf_val(x)` (72 builtins au total)
 
 ### Transparence Benchmarks & Limites Connues
 
-- `--safe` conserve intentionnellement les vérifications d'indices/pointeurs à l'exécution ainsi que les frames d'appel non-inlinées pour des stacktraces exactes (`--safe` profite tout de même du constant folding, propagation de copies, LICM constante et DCE). `--release` active l'élimination des bornes (`RCE`), l'inlining, le déroulage et la vectorisation AVX2/NEON (`~214 ms` vs `~1702 ms` en `--safe` sur `bench_vortex.vx`).
-- **Types scalaires & limites actuelles** : scalaires natifs centrés sur `i64`, `i32`, `f32`, `str`, `ptr` et `enum` ; jusqu'à **64 champs par struct** et **8192 fonctions utilisateur**.
+- `--safe` (et `--ultrasafe 1/2/3` qui reposent dessus) conserve intentionnellement les vérifications d'indices/pointeurs à l'exécution ainsi que les frames d'appel non-inlinées pour des stacktraces exactes (`--safe` profite tout de même du constant folding, propagation de copies, LICM constante et DCE). `--release` active l'élimination des bornes (`RCE`), l'inlining, le déroulage et la vectorisation AVX2/NEON (`~214 ms` vs `~1702 ms` en `--safe` sur `bench_vortex.vx`).
+- **Types & plafonds compilateur** : scalaires natifs centrés sur `i64`, `i32`, `f32`, `str`, `ptr` et `enum` (`i64`) ; jusqu'à `64` champs par `struct`, `1024` structs, `256` enums et `8192` fonctions utilisateur ([`src/vortex.h`](src/vortex.h)).
 
 ### Suite de tests automatisés
 
@@ -148,8 +158,8 @@ tests\run_tests.bat   :: Windows (unitaires, ergonomics, opt_regression, 16 séc
 ```text
 .
 ├── .github/workflows/   # CI (ci.yml), release multi-OS (release.yml) & SemVer auto (auto-version.yml)
-├── src/                 # Compilateur C99 modulaire : lexer, modules, parser_expr/stmt, ir_core/ir_opt/ir_vec_ra, jit_x64/jit_x64_simd/ffi/jit_arm64, lsp, pkg, arena, gui, packager, runtime
-├── std/                 # Bibliothèque standard modulaire (.vx : math, str, fs, json, crypto, net, http, db, gpu)
+├── src/                 # Compilateur C99 modulaire (~20 500 lignes) : lexer, modules, parser_expr/stmt, ir_core/ir_opt/ir_vec_ra, jit_x64/jit_x64_simd/ffi/jit_arm64, lsp, pkg, arena, gui, packager, runtime
+├── std/                 # Bibliothèque standard modulaire (.vx : net, http, json, crypto, db, gpu)
 ├── benchmarks/          # Banc d'essai suite_10_langs/ & rapport BENCHMARK_REPORT_v1.0.0.md
 ├── docs/                # Spécification (VORTEX_SPEC.md), roadmap & graphiques SVG (assets/)
 ├── examples/            # Démonstrations 3D et GUI natives (.vx)
