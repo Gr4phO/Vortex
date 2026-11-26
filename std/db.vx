@@ -37,11 +37,11 @@ fn db_cstr_alloc(s: str) -> i64 {
 #[cfg(windows)]
 fn db_load_sqlite_lib() -> i64 {
     unsafe {
-        let h1 = ffi_load("sqlite3.dll");
+        let h1 = ffi_load("winsqlite3.dll");
         if h1 != 0 {
             return h1;
         }
-        return ffi_load("winsqlite3.dll");
+        return ffi_load("sqlite3.dll");
     }
 }
 

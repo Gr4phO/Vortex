@@ -247,6 +247,48 @@ static bool json_extract_raw_id(const char* root, char* out, size_t cap) {
 /* 2. CONTENT-LENGTH FRAMED STDIO TRANSPORT                                  */
 /* ========================================================================= */
 
+static int lsp_fd_read(void* buf, size_t len) {
+#ifdef _WIN32
+    return _read(_fileno(stdin), buf, (unsigned int)len);
+#else
+    return (int)read(STDIN_FILENO, buf, len);
+#endif
+}
+
+static bool lsp_fd_write_all(const char* buf, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+#ifdef _WIN32
+        int w = _write(_fileno(stdout), buf + off, (unsigned int)(len - off));
+#else
+        ssize_t w = write(STDOUT_FILENO, buf + off, len - off);
+#endif
+        if (w <= 0) return false;
+        off += (size_t)w;
+    }
+    return true;
+}
+
+static bool lsp_read_line(char* line, size_t cap) {
+    size_t pos = 0;
+    while (pos + 1 < cap) {
+        char ch = 0;
+        int r = lsp_fd_read(&ch, 1);
+        if (r <= 0) {
+            line[pos] = '\0';
+            return pos > 0;
+        }
+        if (ch == '\n') {
+            break;
+        }
+        if (ch != '\r') {
+            line[pos++] = ch;
+        }
+    }
+    line[pos] = '\0';
+    return true;
+}
+
 static bool lsp_read_message(char** out_json, size_t* out_len) {
     *out_json = NULL;
     *out_len = 0;
@@ -255,16 +297,15 @@ static bool lsp_read_message(char** out_json, size_t* out_len) {
     size_t content_len = 0;
     bool got_header = false;
 
-    while (fgets(line, sizeof(line), stdin) != NULL) {
+    while (lsp_read_line(line, sizeof(line))) {
         size_t l = strlen(line);
-        while (l > 0 && (line[l - 1] == '\n' || line[l - 1] == '\r')) line[--l] = '\0';
         if (l == 0) {
             if (got_header) break;
             continue;
         }
         got_header = true;
         /* Case-insensitive Content-Length prefix */
-        if (strlen(line) > 15) {
+        if (l > 15) {
             char hdr_low[16];
             for (int i = 0; i < 15; i++) hdr_low[i] = (char)tolower((unsigned char)line[i]);
             hdr_low[15] = '\0';
@@ -283,12 +324,14 @@ static bool lsp_read_message(char** out_json, size_t* out_len) {
 
     size_t total = 0;
     while (total < content_len) {
-        size_t r = fread(buf + total, 1, content_len - total, stdin);
-        if (r == 0) {
+        size_t want = content_len - total;
+        if (want > 65536U) want = 65536U;
+        int r = lsp_fd_read(buf + total, want);
+        if (r <= 0) {
             free(buf);
             return false;
         }
-        total += r;
+        total += (size_t)r;
     }
     buf[content_len] = '\0';
     *out_json = buf;
@@ -299,9 +342,12 @@ static bool lsp_read_message(char** out_json, size_t* out_len) {
 static void lsp_send_json(const char* json) {
     if (!json) return;
     size_t len = strlen(json);
-    fprintf(stdout, "Content-Length: %zu\r\n\r\n", len);
-    fwrite(json, 1, len, stdout);
-    fflush(stdout);
+    char hdr[64];
+    int hlen = snprintf(hdr, sizeof(hdr), "Content-Length: %zu\r\n\r\n", len);
+    if (hlen > 0) {
+        lsp_fd_write_all(hdr, (size_t)hlen);
+    }
+    lsp_fd_write_all(json, len);
 }
 
 /* ========================================================================= */

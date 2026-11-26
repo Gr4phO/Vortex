@@ -99,10 +99,15 @@ print_str("[STD4:db]\n");
 let sq_avail = db_sqlite_available();
 let _pg_avail = db_postgres_available();
 if sq_avail == 1 {
+    print_str("[STD4:open]\n");
     let db = db_open_sqlite(":memory:");
+    print_str("[STD4:exec1]\n");
     let rc1 = db_exec(db, "CREATE TABLE items (id INT, name TEXT);");
+    print_str("[STD4:exec2]\n");
     let rc2 = db_exec(db, "INSERT INTO items VALUES (1, 'vortex_db');");
+    print_str("[STD4:query]\n");
     let qres = db_query_scalar_str(db, "SELECT name FROM items WHERE id = 1;");
+    print_str("[STD4:close]\n");
     let _rc3 = db_close(db);
     if db.open == 1 {
         if rc1 == 0 {
