@@ -21,5 +21,5 @@ Official VS Code extension for the **Vortex** systems programming language (`x86
    cd editors/vscode
    npm install
    npx @vscode/vsce package
-   code --install-extension vortex-systems-1.1.8.vsix
+   code --install-extension vortex-systems-1.1.9.vsix
    ```

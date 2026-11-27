@@ -2,7 +2,7 @@
   "name": "vortex-systems",
   "displayName": "Vortex Systems Language (.vx)",
   "description": "One-click Run in Terminal, syntax highlighting, --ultrasafe checks, REPL, and native LSP support for the Vortex systems language.",
-  "version": "1.1.8",
+  "version": "1.1.9",
   "publisher": "Gr4phO",
   "license": "Apache-2.0",
   "icon": "icon.png",
@@ -39,6 +39,9 @@
     "workspaceContains:**/*.vx",
     "onCommand:vortex.runFile",
     "onCommand:vortex.runFileRelease",
+    "onCommand:vortex.runFileUltrasafe1",
+    "onCommand:vortex.runFileUltrasafe2",
+    "onCommand:vortex.runFileUltrasafe3",
     "onCommand:vortex.checkFileUltrasafe",
     "onCommand:vortex.runTests",
     "onCommand:vortex.buildStandalone",
@@ -92,6 +95,24 @@
         "icon": "$(flame)"
       },
       {
+        "command": "vortex.runFileUltrasafe1",
+        "title": "Run Vortex File (--ultrasafe 1)",
+        "category": "Vortex",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "vortex.runFileUltrasafe2",
+        "title": "Run Vortex File (--ultrasafe 2)",
+        "category": "Vortex",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "vortex.runFileUltrasafe3",
+        "title": "Run Vortex File (--ultrasafe 3)",
+        "category": "Vortex",
+        "icon": "$(shield)"
+      },
+      {
         "command": "vortex.checkFileUltrasafe",
         "title": "Check File (--ultrasafe 3 --check)",
         "category": "Vortex",
@@ -135,24 +156,39 @@
           "group": "navigation@1"
         },
         {
-          "command": "vortex.checkFileUltrasafe",
+          "command": "vortex.runFileUltrasafe1",
           "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
           "group": "navigation@2"
         },
         {
-          "command": "vortex.runTests",
+          "command": "vortex.runFileUltrasafe2",
           "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
           "group": "navigation@3"
         },
         {
-          "command": "vortex.buildStandalone",
+          "command": "vortex.runFileUltrasafe3",
           "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
           "group": "navigation@4"
         },
         {
-          "command": "vortex.openRepl",
+          "command": "vortex.checkFileUltrasafe",
           "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
           "group": "navigation@5"
+        },
+        {
+          "command": "vortex.runTests",
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@6"
+        },
+        {
+          "command": "vortex.buildStandalone",
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@7"
+        },
+        {
+          "command": "vortex.openRepl",
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@8"
         }
       ],
       "editor/context": [
@@ -167,9 +203,24 @@
           "group": "navigation@2"
         },
         {
-          "command": "vortex.checkFileUltrasafe",
+          "command": "vortex.runFileUltrasafe1",
           "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
           "group": "navigation@3"
+        },
+        {
+          "command": "vortex.runFileUltrasafe2",
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@4"
+        },
+        {
+          "command": "vortex.runFileUltrasafe3",
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@5"
+        },
+        {
+          "command": "vortex.checkFileUltrasafe",
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@6"
         }
       ],
       "explorer/context": [
@@ -184,9 +235,24 @@
           "group": "navigation@2"
         },
         {
-          "command": "vortex.checkFileUltrasafe",
+          "command": "vortex.runFileUltrasafe1",
           "when": "resourceExtname == .vx || resourceLangId == vortex",
           "group": "navigation@3"
+        },
+        {
+          "command": "vortex.runFileUltrasafe2",
+          "when": "resourceExtname == .vx || resourceLangId == vortex",
+          "group": "navigation@4"
+        },
+        {
+          "command": "vortex.runFileUltrasafe3",
+          "when": "resourceExtname == .vx || resourceLangId == vortex",
+          "group": "navigation@5"
+        },
+        {
+          "command": "vortex.checkFileUltrasafe",
+          "when": "resourceExtname == .vx || resourceLangId == vortex",
+          "group": "navigation@6"
         }
       ]
     },

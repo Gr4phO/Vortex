@@ -14,6 +14,21 @@ function isExecutableFile(p) {
   }
 }
 
+function findInPath(exeName) {
+  const pathEnv = process.env.PATH || process.env.Path || "";
+  for (const rawDir of pathEnv.split(path.delimiter)) {
+    const dir = rawDir.trim().replace(/^"(.*)"$/, "$1");
+    if (!dir) continue;
+    const candidate = path.join(dir, exeName);
+    if (isExecutableFile(candidate)) return candidate;
+  }
+  return null;
+}
+
+function addCandidateDir(dirs, dir) {
+  if (dir && !dirs.includes(dir)) dirs.push(dir);
+}
+
 function resolveVortexBinary(targetUri) {
   const config = vscode.workspace.getConfiguration("vortex");
   const configured = (config.get("serverPath", "vortex") || "").trim();
@@ -23,21 +38,72 @@ function resolveVortexBinary(targetUri) {
     return configured;
   }
 
-  const folders = [];
-  if (targetUri) {
+  const candidateDirs = [];
+  if (targetUri && targetUri.fsPath) {
+    const fileDir = path.dirname(targetUri.fsPath);
+    addCandidateDir(candidateDirs, fileDir);
+    addCandidateDir(candidateDirs, path.join(path.dirname(fileDir), "vortex"));
     const ws = vscode.workspace.getWorkspaceFolder(targetUri);
-    if (ws) folders.push(ws.uri.fsPath);
+    if (ws) {
+      addCandidateDir(candidateDirs, ws.uri.fsPath);
+      addCandidateDir(candidateDirs, path.join(path.dirname(ws.uri.fsPath), "vortex"));
+    }
   }
   for (const ws of vscode.workspace.workspaceFolders || []) {
-    if (!folders.includes(ws.uri.fsPath)) folders.push(ws.uri.fsPath);
+    addCandidateDir(candidateDirs, ws.uri.fsPath);
+    addCandidateDir(candidateDirs, path.join(path.dirname(ws.uri.fsPath), "vortex"));
   }
 
-  for (const dir of folders) {
+  if (process.env.LOCALAPPDATA) {
+    addCandidateDir(candidateDirs, path.join(process.env.LOCALAPPDATA, "vortex"));
+  }
+  const homeDir = process.env.USERPROFILE || process.env.HOME;
+  if (homeDir) {
+    addCandidateDir(candidateDirs, path.join(homeDir, ".vortex", "bin"));
+  }
+  if (process.platform !== "win32") {
+    addCandidateDir(candidateDirs, "/usr/local/bin");
+  }
+
+  for (const dir of candidateDirs) {
     const candidate = path.join(dir, exeName);
     if (isExecutableFile(candidate)) return candidate;
   }
 
-  return configured || exeName;
+  return findInPath(exeName);
+}
+
+function resolveVortexBinaryForLsp(targetUri) {
+  const resolved = resolveVortexBinary(targetUri);
+  if (resolved) return resolved;
+  const configured = (vscode.workspace.getConfiguration("vortex").get("serverPath", "vortex") || "").trim();
+  return configured || (process.platform === "win32" ? "vortex.exe" : "vortex");
+}
+
+async function promptAndSaveVortexBinary() {
+  const exeLabel = process.platform === "win32" ? "vortex.exe" : "vortex";
+  const choice = await vscode.window.showErrorMessage(
+    `Vortex executable (${exeLabel}) not found in PATH, workspace, or sibling directories.`,
+    `Locate ${exeLabel}`
+  );
+  if (choice !== `Locate ${exeLabel}`) return null;
+
+  const picked = await vscode.window.showOpenDialog({
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    openLabel: `Select ${exeLabel}`,
+    filters: process.platform === "win32" ? { Executable: ["exe"] } : undefined
+  });
+  if (!picked || picked.length === 0) return null;
+
+  const selectedPath = picked[0].fsPath;
+  await vscode.workspace.getConfiguration("vortex").update(
+    "serverPath",
+    selectedPath,
+    vscode.ConfigurationTarget.Global
+  );
+  return selectedPath;
 }
 
 function isPowerShell(terminal) {
@@ -102,9 +168,10 @@ async function prepareTargetVortexUri(targetUri) {
   return editor.document.uri;
 }
 
-function runInVortexTerminal(args, uri) {
+async function runInVortexTerminal(args, uri) {
   const cwd = uri ? path.dirname(uri.fsPath) : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || undefined);
-  const bin = resolveVortexBinary(uri);
+  const bin = resolveVortexBinary(uri) || await promptAndSaveVortexBinary();
+  if (!bin) return;
   const terminal = getOrCreateTerminal(cwd);
   const ps = isPowerShell(terminal);
   const config = vscode.workspace.getConfiguration("vortex");
@@ -137,7 +204,7 @@ async function startLanguageServer(context) {
   const config = vscode.workspace.getConfiguration("vortex");
   if (!config.get("enableLsp", true)) return;
 
-  const serverCmd = resolveVortexBinary(vscode.window.activeTextEditor?.document?.uri);
+  const serverCmd = resolveVortexBinaryForLsp(vscode.window.activeTextEditor?.document?.uri);
   const serverOptions = {
     run: { command: serverCmd, args: ["lsp"], transport: TransportKind.stdio },
     debug: { command: serverCmd, args: ["lsp"], transport: TransportKind.stdio }
@@ -176,19 +243,27 @@ function activate(context) {
       const target = await prepareTargetVortexUri(uri);
       if (!target) return;
       const mode = vscode.workspace.getConfiguration("vortex").get("defaultRunMode", "safe");
-      runInVortexTerminal(["run", ...modeFlags(mode), target.fsPath], target);
+      await runInVortexTerminal(["run", ...modeFlags(mode), target.fsPath], target);
     }),
 
     vscode.commands.registerCommand("vortex.runFileRelease", async (uri) => {
       const target = await prepareTargetVortexUri(uri);
       if (!target) return;
-      runInVortexTerminal(["run", "--release", target.fsPath], target);
+      await runInVortexTerminal(["run", "--release", target.fsPath], target);
     }),
+
+    ...["1", "2", "3"].map((level) =>
+      vscode.commands.registerCommand(`vortex.runFileUltrasafe${level}`, async (uri) => {
+        const target = await prepareTargetVortexUri(uri);
+        if (!target) return;
+        await runInVortexTerminal(["run", "--ultrasafe", level, target.fsPath], target);
+      })
+    ),
 
     vscode.commands.registerCommand("vortex.checkFileUltrasafe", async (uri) => {
       const target = await prepareTargetVortexUri(uri);
       if (!target) return;
-      runInVortexTerminal(["--ultrasafe", "3", "--check", target.fsPath], target);
+      await runInVortexTerminal(["--ultrasafe", "3", "--check", target.fsPath], target);
     }),
 
     vscode.commands.registerCommand("vortex.runTests", async () => {
@@ -196,7 +271,7 @@ function activate(context) {
       const ws = (doc && vscode.workspace.getWorkspaceFolder(doc.uri)) || vscode.workspace.workspaceFolders?.[0];
       const targetPath = ws ? ws.uri.fsPath : (doc ? path.dirname(doc.uri.fsPath) : ".");
       if (doc && doc.languageId === "vortex" && doc.isDirty) await doc.save();
-      runInVortexTerminal(["test", targetPath, "--ultrasafe", "2"], doc?.uri || ws?.uri);
+      await runInVortexTerminal(["test", targetPath, "--ultrasafe", "2"], doc?.uri || ws?.uri);
     }),
 
     vscode.commands.registerCommand("vortex.buildStandalone", async (uri) => {
@@ -205,12 +280,12 @@ function activate(context) {
       const parsed = path.parse(target.fsPath);
       const outExt = process.platform === "win32" ? ".exe" : "";
       const outPath = path.join(parsed.dir, `${parsed.name}${outExt}`);
-      runInVortexTerminal(["build", "--release", target.fsPath, "-o", outPath], target);
+      await runInVortexTerminal(["build", "--release", target.fsPath, "-o", outPath], target);
     }),
 
-    vscode.commands.registerCommand("vortex.openRepl", () => {
+    vscode.commands.registerCommand("vortex.openRepl", async () => {
       const ws = vscode.workspace.workspaceFolders?.[0];
-      runInVortexTerminal(["repl"], vscode.window.activeTextEditor?.document?.uri || ws?.uri);
+      await runInVortexTerminal(["repl"], vscode.window.activeTextEditor?.document?.uri || ws?.uri);
     }),
 
     vscode.commands.registerCommand("vortex.restartLsp", async () => {
