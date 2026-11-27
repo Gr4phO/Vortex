@@ -95,6 +95,32 @@ fn run_silicon_bench() -> i64 {
         }
     }
 
+    // 3. Persistent VRAM HwBuf 1024x1024x1024 (zero PCIe transfer inside loop, 64x64 float4)
+    let fc_res: [f32] = slice_f32(d1024 * d1024);
+    let b_a = hw_buf_from_f32(fa, d1024 * d1024);
+    let b_b = hw_buf_from_f32(fb, d1024 * d1024);
+    let b_c = hw_buf_from_f32(fc_res, d1024 * d1024);
+    hw_matmul_f32_buf(b_a, b_b, b_c, d1024, d1024, d1024); // warmup upload A, B -> VRAM
+    let mut best_res_gpu: i64 = 999999999;
+    for r in 0..5 {
+        let _ru3: i64 = r;
+        let t0: i64 = time_us();
+        hw_matmul_f32_buf(b_a, b_b, b_c, d1024, d1024, d1024);
+        let dt_us: i64 = time_us() - t0;
+        if dt_us < best_res_gpu {
+            best_res_gpu = dt_us;
+        }
+    }
+    let tp0: i64 = time_us();
+    hw_matmul_f32_buf(b_a, b_b, b_c, d1024, d1024, d1024);
+    hw_axpy_f32_buf(0.5, b_a, b_c, d1024 * d1024);
+    hw_relu_f32_buf(b_c, d1024 * d1024);
+    hw_buf_sync_host(b_c);
+    let pipeline_us: i64 = time_us() - tp0;
+    hw_buf_free(b_a);
+    hw_buf_free(b_b);
+    hw_buf_free(b_c);
+
     hw_pin_workers(HW_PIN_AUTO);
 
     print_str("CPU_NAME "); print_str(hw_cpu_name()); print_str("\n");
@@ -107,6 +133,9 @@ fn run_silicon_bench() -> i64 {
     print_str("VX_HW_F32_GPU_1024_US "); print(best_f32_gpu);
     print_str("VX_HW_F32_GPU_ROUTE "); print(route_gpu);
     print_str("VX_HW_F32_ERR "); print(max_err_1024);
+    print_str("VX_HW_F32_GPU_RESIDENT_US "); print(best_res_gpu);
+    print_str("VX_HW_F32_PIPELINE_US "); print(pipeline_us);
+    print_str("VX_HW_GPU_CACHE_HITS "); print(hw_gpu_cache_hits());
     return 0;
 }
 

@@ -12,16 +12,16 @@
 [![Standard](https://img.shields.io/badge/C99-zero%20external%20deps-334155?style=flat-square)](#compilation-depuis-les-sources--tests)
 [![CI](https://img.shields.io/github/actions/workflow/status/Gr4phO/Vortex/ci.yml?style=flat-square&label=CI)](.github/workflows/ci.yml)
 
-Vortex compile les scripts `.vx` et sessions REPL directement en code machine natif en mémoire (~22 500 lignes de C99 pur modulaire dans `src/`, sans LLVM ni dépendance externe). Il combine une gestion mémoire sans GC basée sur des arènes paginées (`2 Mio`) avec contrôle statique d'échappement, un allocateur de registres Linear-Scan sur IR 3-adresses, le support natif double précision **`f64`**, une vectorisation SIMD (`AVX2/FMA3` / `NEON`), un module matériel silicium CPU/Cache/GPU optionnel (`std/hw`), des modes de sûreté progressifs (`--safe`, `--ultrasafe 1/2/3`, `--release`), un exécuteur de tests natif (`vortex test`), une spec auto-générée (`vortex spec`), un serveur LSP intégré, un gestionnaire de paquets (`vortex pkg`), une bibliothèque partagée d'intégration native (`vortex.dll` / `libvortex.so` / `libvortex.dylib`) et une bibliothèque standard modulaire (`11` modules dans `std/`).
+Vortex compile les scripts `.vx` et sessions REPL directement en code machine natif en mémoire (~23 700 lignes de C99 pur modulaire dans `src/`, sans LLVM ni dépendance externe). Il combine une gestion mémoire sans GC basée sur des arènes paginées (`2 Mio`) avec contrôle statique d'échappement, un allocateur de registres Linear-Scan sur IR 3-adresses, le support natif double précision **`f64`**, une vectorisation SIMD (`AVX2/FMA3` / `NEON`), un moteur silicium CPU/Cache/GPU optionnel (`std/hw` avec buffers VRAM résidents `HwBuf` + routeur adaptatif), des modes de sûreté progressifs (`--safe`, `--ultrasafe 1/2/3`, `--release`), un exécuteur de tests natif (`vortex test`), une spec auto-générée (`vortex spec`), un serveur LSP intégré, un gestionnaire de paquets (`vortex pkg`), une bibliothèque partagée d'intégration native (`vortex.dll` / `libvortex.so` / `libvortex.dylib`) et une bibliothèque standard modulaire (`11` modules dans `std/`).
 
 ---
 
 ## Points Clés
 
 - **JIT natif `x86-64` (Windows x64 & System V Linux/macOS) & `ARM64` NEON** : émission directe en mémoire (`VirtualAlloc` / `mmap` + `W^X`), `omit_fp`, support natif `f32` et **`f64`** (SSE2 `sd` / AArch64 `D`-registers) et génération de binaires autonomes (`vortex build` : `PE32+`, `ELF64`, `Mach-O 64`), avec binaires précompilés multi-OS sur [GitHub Releases](https://github.com/Gr4phO/Vortex/releases/latest).
-- **Mémoire sans GC & sûreté progressive (`--safe` par défaut, `--ultrasafe 1|2|3`, `--release`)** : arènes de portée (`scope_push()` / `scope_pop()`), vérification de régions à la compilation (`ir_region_verify`), garde-fous `unsafe` sur l'arithmétique de pointeurs et le FFI, contrôle rapide par arène active et déduplication des bornes en bloc de base.
-- **Optimiseur IR 3-adresses & Thread Pool Spin-Barrier** : inlining (`<= 64` IR instrs / 256 expansions en `--release`), constant folding `i64`/`f32`/`f64`, identités algébriques, fusion `IR_ADD_SUB_MOD_IMM`, RCE/LICM, déduplication et contrôles de bornes inline avec *cold traps*, vectorisation `AVX2` (incluant `vpminud` et streaming stores non-temporels `vmovntdq`), et pool de threads hybride spin-barrier `YieldProcessor` + affinité par cœur physique.
-- **Module Silicium `import "std/hw";` (CPU Cache/SIMD & GPU OpenCL)** : cartographie automatique au runtime (`hw_print_map()` : topologie cœurs, L1D/L1I/L2/L3, AVX2/FMA3, RAM et GPU OpenCL), planificateur de routes (`L1` / `L2` / `L3` / `RAM_STREAM` / `GPU_OPENCL`), noyaux BLIS `AVX2+FMA3` multi-cœur (`hw_matmul_f64`, `hw_dot_f64`, `hw_axpy_f64`) et GPU OpenCL tuilé (`hw_matmul_f32`).
+- **Mémoire sans GC & sûreté progressive (`--safe` par défaut, `--ultrasafe 1|2|3`, `--release`)** : arènes de portée (`scope_push()` / `scope_pop()`), vérification de régions à la compilation (`ir_region_verify`, incluant la durée de vie VRAM des `HwBuf`), garde-fous `unsafe` sur l'arithmétique de pointeurs et le FFI, contrôle rapide par arène active et déduplication des bornes en bloc de base.
+- **Optimiseur IR 3-adresses & Thread Pool Spin-Barrier** : inlining (`<= 64` IR instrs / `256` expansions en `--release`), constant folding `i64`/`f32`/`f64`, identités algébriques, fusion `IR_ADD_SUB_MOD_IMM`, intrinsèques mathématiques matériels inline (`sqrtsd`/`sqrtss`/`fabs` sur x86-64 et `fsqrt`/`fabs` sur ARM64), *range hoisting* affine (`arr[off + i]`) + contrôles de bornes inline avec *cold traps* en `--safe`, vectorisation `AVX2` (dont `IR_VEC_F64_AXPY` `vmulpd + vaddpd` IEEE-754 strict sans FMA, `vpminud` et streaming stores `vmovntdq`), et pool de threads hybride spin-barrier `YieldProcessor` piloté par la topologie CPU physique (sans charger OpenCL) avec découpages alignés sur lignes de cache (`64 octets`).
+- **Moteur Silicium `import "std/hw";` (CPU BLIS & GPU VRAM `HwBuf`)** : détection `CPUID` + `GetLogicalProcessorInformationEx` + OpenCL (`hw_print_map()`), **buffers résidents RAM/VRAM `HwBuf`** (`hw_buf_from_f32`/`f64`, `hw_matmul_f32_buf`, `hw_axpy_f32_buf`, `hw_relu_f32_buf`, libérés automatiquement sur `scope_pop()`), **routeur adaptatif « Waze » EMA** (latences lissées, coût PCIe uniquement si `host_dirty`, bascule auto vers CPU en cas de congestion GPU), **cache binaire disque OpenCL**, microkernels BLIS `AVX2+FMA3` (`hw_matmul_f64`) et noyau GPU **`64×64` *register-blocked* `4×4` `float4`**.
 - **Écosystème & outillage AI-friendly** : serveur LSP JSON-RPC 2.0 (`vortex lsp` avec `--ultrasafe 3`), formateur `vortex fmt`, gestionnaire de paquets (`vortex pkg` avec verrouillage `SHA-256`), diagnostics `--json`, validation `--check`, exécuteur `vortex test`, `vortex spec`, FFI C dynamique (`extern fn`) et traces d'appels natives / `DWARF v4`.
 
 ---
@@ -36,29 +36,30 @@ Banc d'essai [`benchmarks/realistic_suite/`](benchmarks/realistic_suite/) exécu
 
 | Langage / Profil | Total (ms) | Ratio | T1 N-Body `f64` | T2 QSort `500k` | T3 MatMul `320³` | T4 Sieve `10M` | T5 Mandel `12T` | AOT (ms) | Startup/JIT (ms) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **C++ (`Clang++ -O3`)** | **183.94** | 1.00× | 34.98 | 30.32 | 3.45 | **77.39** | 31.64 | 1 819.1 | **29.65** |
-| C (`Clang -O3`) | 184.18 | 1.00× | **34.35** | **30.14** | **3.29** | 81.63 | 30.73 | 1 064.9 | 34.82 |
-| Rust (`rustc 1.99 -O3`, *safe zip*) | 199.51 | 1.08× | 35.34 | 30.28 | 4.12 | 93.73 | 31.99 | 1 307.0 | 34.06 |
-| **Vortex (`--release`, sans bornes)** | **204.60** | **1.11×** | 40.24 | 32.12 | 7.70 | 90.11 | 32.94 | **0.0** | 35.88 |
-| Go (`1.27`) | 216.27 | 1.18× | 36.92 | 33.08 | 20.38 | 92.01 | 32.23 | 955.0 | 37.38 |
-| C# (`.NET Framework 4.8`) | 223.50 | 1.22× | 36.79 | 32.27 | 28.13 | 97.00 | **25.79** | 1 382.6 | 71.11 |
-| Java (`OpenJDK 21`, à froid) | 250.44 | 1.36× | 58.30 | 48.77 | 9.62 | 80.74 | 44.08 | 746.0 | 315.38 |
-| **Vortex (`--safe`, bornes + arènes)** | **348.85** | **1.90×** | 37.56 | 178.13 | 7.83 | 89.33 | 34.77 | **0.0** | 33.53 |
-| Node.js (`v26.13 V8`, à froid) | 379.16 | 2.06× | 62.55 | 49.70 | 42.09 | 129.47 | 83.06 | **0.0** | 130.64 |
-| Python `3.12` (`CPython`) | 14 445.64 | 78.53× | 2 512.13 | 882.93 | 2 493.88 | 1 110.12 | 7 359.26 | **0.0** | 237.25 |
+| **C++ (`Clang++ -O3`)** | **189.63** | 1.00× | 34.93 | 30.03 | 3.95 | **80.93** | 32.27 | 1 725.2 | 34.64 |
+| C (`Clang -O3`) | 189.72 | 1.00× | 34.66 | 30.20 | 3.95 | 86.29 | 31.18 | 1 059.2 | 32.65 |
+| Rust (`rustc 1.99 -O3`, *safe zip*) | 191.99 | 1.01× | 35.05 | **29.60** | **3.94** | 90.01 | 31.24 | 1 207.0 | **30.70** |
+| **Vortex (`--release`, sans bornes)** | **202.72** | **1.07×** | 37.38 | 32.08 | 7.95 | 86.86 | 34.33 | **0.0** | 35.24 |
+| C# (`.NET Framework 4.8`) | 205.69 | 1.08× | **34.35** | 31.51 | 25.46 | 86.60 | **22.91** | 1 344.1 | 57.02 |
+| Go (`1.27`) | 221.27 | 1.17× | 36.98 | 32.74 | 19.58 | 94.88 | 31.53 | 945.5 | 33.01 |
+| Java (`OpenJDK 21`, à froid) | 255.78 | 1.35× | 59.88 | 51.23 | 10.31 | 84.14 | 43.51 | 780.5 | 342.33 |
+| **Vortex (`--safe`, bornes + arènes)** | **350.57** | **1.85×** | 37.24 | 173.06 | 7.79 | 94.00 | 36.30 | **0.0** | 34.91 |
+| Node.js (`v26.13 V8`, à froid) | 364.51 | 1.92× | 52.02 | 50.79 | 41.29 | 128.06 | 84.29 | **0.0** | 142.50 |
+| Python `3.12` (`CPython`) | 15 169.25 | 80.00× | 2 826.74 | 1 085.48 | 2 562.22 | 1 160.28 | 7 439.52 | **0.0** | 284.87 |
 
 - **Lecture transparente** :
-  - **Vortex `--release` (`204.60 ms`)** termine **4e au classement général** à **`1.11×` de Clang++ `-O3` (`183.94 ms`)**, quasiment au coude-à-coude avec **Rust `-O3` (`199.51 ms`, écart de ~2.5 %)**, devant Go (`216.27 ms`), C# (`223.50 ms`), Java 21 (`250.44 ms`) et Node.js v26 (`379.16 ms`), avec **0 ms de compilation AOT**.
-  - **Précisions d'équité** : `--release` désactive les contrôles de bornes comme `C`/`C++`, alors que Rust/Go/Java/C# conservent les leurs. À **sécurité mémoire équivalente**, **`Vortex --safe` (`348.85 ms`, 3.9× plus rapide qu'avant)** bat Node.js v26 (`379.16 ms`) et égale déjà `--release` sur T1 (`37.56 ms`), T3 (`7.83 ms`), T4 (`89.33 ms`) et T5 (`34.77 ms`), seul T2 Quicksort récursif restant ralenti (`178.13 ms`). C# est compilé avec `csc` **.NET Framework 4.8** (pas .NET 8/9), et Java/Node sont mesurés sur processus court à froid (~250–380 ms).
+  - **Vortex `--release` (`202.72 ms`)** termine **4e au classement général** à **`1.07×` de Clang++ `-O3` (`189.63 ms`)**, quasiment au coude-à-coude avec **Rust `-O3` (`191.99 ms`)** et C# 4.8 (`205.69 ms`), devant Go (`221.27 ms`), Java 21 (`255.78 ms`) et Node.js v26 (`364.51 ms`), avec **0 ms de compilation AOT**.
+  - **Précisions d'équité** : `--release` désactive les contrôles de bornes comme `C`/`C++`, alors que Rust/Go/Java/C# conservent les leurs. À **sécurité mémoire équivalente**, **`Vortex --safe` (`350.57 ms`, 3.9× plus rapide qu'avant)** bat Node.js v26 (`364.51 ms`) et égale déjà `--release` sur T1 (`37.24 ms`), T3 (`7.79 ms`), T4 (`94.00 ms`) et T5 (`36.30 ms`), seul T2 Quicksort récursif restant ralenti (`173.06 ms`). C# est compilé avec `csc` **.NET Framework 4.8** (pas .NET 8/9), et Java/Node sont mesurés sur processus court à froid (~255–365 ms).
 
 ### Accélération Silicium Optionnelle (`import "std/hw";`)
 
-Séparée du benchmark pur ci-dessus, l'API matérielle opt-in [`std/hw`](std/hw.vx) fournit des noyaux BLIS `AVX2+FMA3` multi-cœur et OpenCL GPU :
+Séparée du benchmark pur ci-dessus, l'API matérielle opt-in [`std/hw`](std/hw.vx) fournit des noyaux BLIS `AVX2+FMA3` multi-cœur, des buffers résidents RAM/VRAM `HwBuf`, un routeur adaptatif Waze EMA, un cache binaire OpenCL disque et un noyau GPU `64×64` `float4` :
 
 ![Accélération Silicium std/hw CPU AVX2 BLIS & GPU OpenCL](docs/assets/bench_silicon_hw.png)
 
-- **`hw_matmul_f64` (`512×512×512`)** : **1.21 ms** (**222.21 GFLOP/s** `f64`, route `L3_CACHE`, erreur `0.000000`) — **21.1×** plus rapide que la boucle Vortex auto-vectorisée 1T (`25.54 ms`) et **14.0×** plus rapide que C `Clang -O3` mono-cœur (`16.99 ms`).
-- **`hw_matmul_f32` (`1024×1024×1024`)** : **3.24 ms** (**662.19 GFLOP/s** `f32`, route `GPU_OPENCL` sur `gfx1031` transferts PCIe inclus) vs **5.17 ms** (`415.05 GFLOP/s`) CPU AVX2 6 cœurs (`hw_matmul_f32_cpu`) et **65.19 ms** (`32.94 GFLOP/s`) en C `-O3` 1T.
+- **`hw_matmul_f64` (`512×512×512`)** : **1.22 ms** (**219.49 GFLOP/s** `f64`, route `L3_CACHE`, erreur `0.000000`) — **21.5×** plus rapide que la boucle Vortex auto-vectorisée 1T (`26.18 ms`) et **13.2×** plus rapide que C `Clang -O3` mono-cœur (`16.16 ms`).
+- **`hw_matmul_f32` (`1024×1024×1024`, PCIe H2D+D2H inclus)** : **2.69 ms** (**799.81 GFLOP/s** `f32`) vs **5.23 ms** (`410.77 GFLOP/s`) CPU AVX2 6 cœurs (`hw_matmul_f32_cpu`) et **64.56 ms** (`33.27 GFLOP/s`) en C `-O3` 1T.
+- **`hw_matmul_f32_buf` résident VRAM (`HwBuf`, `1024³`, zéro transfert PCIe)** : **0.701 ms** (**`3 063.46 GFLOP/s` = `3.06 TFLOP/s`**, erreur `0.000000`) sur `gfx1031` (**92×** plus rapide que C `-O3`), et **1.93 ms** pour le pipeline complet `MatMul 1024³ -> AXPY -> ReLU -> hw_buf_sync_host` avec **cache binaire disque (`2` hits / `0` recompilation)**.
 - **Rapports** : [Rapport réaliste v1.3.0](benchmarks/BENCHMARK_REPORT_v1.3.0.md) · [Ancien rapport v1.0.0](benchmarks/BENCHMARK_REPORT_v1.0.0.md) · [Feuille de route](docs/OPTIMIZATION_ROADMAP.md).
 
 ---
@@ -87,8 +88,8 @@ Séparée du benchmark pur ci-dessus, l'API matérielle opt-in [`std/hw`](std/hw
   └──────────────────────────────────────────────────────────────────┘
 ```
 
-- **Mémoire sûre (`--safe` par défaut)** : contrôle d'époques sur les arènes (`VORTEX_SAFE_MAGIC`) avec fast-path sur l'arène active du thread, déduplication des bornes par bloc de base, vérification de bornes dynamique avec trace d'appels (`stacktrace`), garde-fous `unsafe` pour les pointeurs bruts/appels `extern fn` et rejet des pointeurs de fonction `NULL` dans `ffi_call0..6`.
-- **Mode performance (`--release`)** : élimination des contrôles prouvés sûrs (RCE/LICM), contrôle de bornes rapide inline avec *cold traps*, allocations compactes/zero-copy sans `memset` redondant, inlining (`<= 40` instructions IR), `omit_fp` et noyaux vectoriels AVX2/FMA3.
+- **Mémoire sûre (`--safe` par défaut)** : contrôle d'époques sur les arènes (`VORTEX_SAFE_MAGIC`) avec fast-path sur l'arène active du thread, déduplication des bornes par bloc de base, *range hoisting* affine (`arr[off + i]`) et contrôles inline avec *cold traps* dans les boucles sûres sans appel (**3.9× plus rapide** en `v1.3.0`), traces d'appels exactes (`stacktrace`), garde-fous `unsafe` pour les pointeurs bruts/`extern fn` et rejet des pointeurs `NULL` dans `ffi_call0..6`.
+- **Mode performance (`--release`)** : élimination des contrôles prouvés sûrs (RCE/LICM), intrinsèques mathématiques inline (`sqrtsd`/`fabs`), allocations compactes/zero-copy sans `memset` redondant, inlining (`<= 64` instructions IR / `256` expansions), `omit_fp` et noyaux vectoriels `AVX2` (incluant `IR_VEC_F64_AXPY` IEEE-754 strict).
 - **Limites actuelles du compilateur ([`src/vortex.h`](src/vortex.h))** : types scalaires natifs (`i64`, `i32`, `i16`, `i8`, `u64`, `u32`, `u16`, `u8`, `usize`, `isize`, `bool`, `char`, `f32`, `f64`, `ptr`, `str`, `enum`), `MAX_FIELDS = 64` par `struct`, `MAX_CALL_ARGS = 16` par appel, `MAX_STRUCT_TYPES = 1024`, `MAX_ENUM_TYPES = 256` (`128` variantes max), `MAX_SYMBOLS = 1024` par portée/fonction, `MAX_USER_FUNCS = 8192`, `MAX_DYN_LIBS = 256`, `MAX_FFI_FUNCS = 2048`, littéraux chaînes jusqu'à `4095` octets, `MAX_JIT_CODE_SIZE = 16 MiB`, `MAX_IR_INSTRS = 262 144` instructions par fonction, et réductions `f32` vectorisées réassociatives sur les boucles `IR_VEC_LOOP`.
 
 ### Modes `--ultrasafe 1 / 2 / 3` (cumulatifs, au-dessus de `--safe`)
@@ -120,11 +121,11 @@ make release    # Binaire LTO strippé
 make shared     # Bibliothèque partagée libvortex.so / libvortex.dylib
 ```
 
-### Utilisation CLI & Outils AI-Friendly (`v1.2.0`)
+### Utilisation CLI & Outils AI-Friendly (`v1.3.0`)
 
 ```sh
 ./vortex                                                 # REPL interactif
-./vortex run --release benchmarks/suite_10_langs/bench_vortex.vx
+./vortex run --release benchmarks/realistic_suite/bench_vortex.vx
 ./vortex --headless run --safe tests/test_safety_pass.vx # Validation mémoire/bornes + frames exactes
 ./vortex --ultrasafe 1 script.vx                         # + div/0 runtime & warnings (W101..W104)
 ./vortex --ultrasafe 2 --check script.vx                 # + audits statiques (E201..E204, W105) & garde récursion
@@ -137,18 +138,18 @@ make shared     # Bibliothèque partagée libvortex.so / libvortex.dylib
 ./vortex lsp                                             # Serveur LSP (JSON-RPC)
 ```
 
-### Ergonomie & Syntaxe (`v1.2.0`)
+### Ergonomie & Syntaxe (`v1.3.0`)
 
-- **Types & littéraux** : annotations `bool`, `i8`/`u8`, `i16`/`u16`, `i32`/`u32`, `i64`/`u64`, `usize`/`isize`, `char`, `<Enum>` ; séparateurs `1_000_000`, binaire `0b1010`, octal `0o755`, scientifique `1.5e-3`, littéraux caractère `'A'`/`'\n'`, chaînes littérales jusqu'à **4095 octets**
-- **Constantes globales & indexation chaînée** : `const MAX = 16;` (expressions constantes évaluées à la compilation, visibles dans toutes les fonctions et `match`), accès et écriture chaînés `obj.arr[i]`, `a.b.arr[i] += v`, `mat[i][j]` et `arr[i].champ`
+- **Types & littéraux** : annotations `bool`, `i8`/`u8`, `i16`/`u16`, `i32`/`u32`, `i64`/`u64`, `usize`/`isize`, `char`, `f32`, **`f64`**, `[f64]` (`slice_f64`), `<Enum>` ; séparateurs `1_000_000`, binaire `0b1010`, octal `0o755`, scientifique `1.5e-3`, littéraux caractère `'A'`/`'\n'`, chaînes littérales jusqu'à **4095 octets**
+- **Constantes globales & indexation chaînée** : `const MAX = 16;` (expressions constantes `i64`/`f32`/`f64`/`str`/`enum` évaluées à la compilation), accès et écriture chaînés `obj.arr[i]`, `a.b.arr[i] += v`, `mat[i][j]` et `arr[i].champ`
 - **Opérateurs & expressions** : court-circuit `&&`/`||`/`!`, bit-à-bit `& | ^ ~ << >>`, ternaire `cond ? a : b`, littéraux de tableau `[10, 20, 30]`, écriture chaînée sur sous-structs `world.player.pos.x += 1.0;` *(attention : `==`/`!=`/`<`/`>` sont plus prioritaires que `&`/`^`/`|`, parenthéser `(x & mask) == 0`)*
 - **Contrôle de flux & affectations composées** : `match x { 1 | 2 => ..., _ => ... }`, `break`, `continue`, `enum Nom { A, B = 10, C }` (`Nom::B` / `Nom.B`), `+=`..`>>=`, `/* ... */`
-- **Builtins & formatage natif** : `assert(cond)`, `assert_eq(a, b)`, `sinf_rad`, `cosf_rad`, `tanf_rad`..`atan2f_rad`, `fs_*`, `args_*`, `env_*`, `unix_now_ms`, `sleep_ms` (`91` builtins au total) et formateur `vortex fmt`
+- **Builtins & formatage natif** : `assert(cond)`, `assert_eq(a, b)`, `sinf_rad`..`atan2f_rad`, **`sin_f64`..`atan2_f64`**, `str_from_f64`, **`33` builtins silicium `hw_*`** (`hw_init`, `hw_buf_from_f32`/`f64`, `hw_matmul_f32_buf`/`f64_buf`, `hw_axpy_f32_buf`, `hw_relu_f32_buf`, `hw_buf_sync_host`, `hw_router_stats`...), `fs_*`, `args_*`, `env_*`, `unix_now_ms`, `sleep_ms` (**`137` builtins au total**) et formateur `vortex fmt`
 
 ### Transparence Benchmarks & Reproductibilité
 
-- Banc d'essai reproductible multi-OS : exécuter [`benchmarks/realistic_suite/run_realistic_benchmarks.py`](benchmarks/realistic_suite/run_realistic_benchmarks.py) (Windows / Linux / macOS, Python 3 stdlib) pour reproduire les benchmarks 9 langages sur votre propre CPU/OS.
-- `--safe` (et `--ultrasafe 1/2/3` qui reposent dessus) conserve intentionnellement les vérifications d'indices/pointeurs à l'exécution ainsi que les frames d'appel non-inlinées pour des stacktraces exactes (`1360.65 ms` en `--safe` vs `212.12 ms` en `--release` sur la suite réaliste).
+- Banc d'essai reproductible multi-OS : exécuter [`benchmarks/realistic_suite/run_realistic_benchmarks.py`](benchmarks/realistic_suite/run_realistic_benchmarks.py) (`--runs 5`, Windows / Linux / macOS, Python 3 stdlib) pour reproduire les benchmarks 9 langages sur votre propre CPU/OS.
+- `--safe` (et `--ultrasafe 1/2/3` qui reposent dessus) conserve les contrôles dynamiques d'indices, de pointeurs et d'arènes, tout en bénéficiant du *range hoisting* affine et des *cold traps* inline (`350.57 ms` en `--safe` vs `202.72 ms` en `--release` sur 5 passes : égalité sur T1/T3/T4/T5, contrôles conservés sur T2 Quicksort récursif à `173.06 ms`).
 - **Types & plafonds compilateur** : `bool`, entiers (`i8`..`i64`, `u8`..`u64`, `usize`/`isize`, `char`), `f32`, **`f64`**, `str`, `ptr` et `enum` ; jusqu'à `64` champs par `struct`, `1024` structs, `256` enums et `8192` fonctions utilisateur ([`src/vortex.h`](src/vortex.h)).
 
 ### Suite de tests automatisés
@@ -164,7 +165,7 @@ tests\run_tests.bat   :: Windows (18 suites : unitaires, ergonomics, opt_regress
 ### Extension VS Code (`Gr4phO.vortex-systems` `1.2.0`)
 
 - **Exécution en 1 clic** : bouton **▶ Run Vortex File in Terminal** dans la barre d'onglet + sous-menu (`--release`, `--ultrasafe 1`, `--ultrasafe 2`, `--ultrasafe 3`, `--ultrasafe 3 --check`, `vortex test`, `vortex build`, `REPL`).
-- **LSP & coloration syntaxique** : serveur `vortex lsp` branché sur `--ultrasafe 3` (multi-erreurs + warnings en direct), formatage natif (`vortex fmt` / `textDocument/formatting`), définition, survol, complétion et coloration complète (`const`, `match`, `enum`, `bool`, `u8..usize`, `/* */`, `'a'`, `0b`/`0o`/`1e-5`).
+- **LSP & coloration syntaxique** : serveur `vortex lsp` branché sur `--ultrasafe 3` (multi-erreurs + warnings en direct), formatage natif (`vortex fmt` / `textDocument/formatting`), définition, survol, complétion et coloration complète (`const`, `match`, `enum`, `bool`, `f64`, `u8..usize`, `/* */`, `'a'`, `0b`/`0o`/`1e-5`).
 - **Installation** : via le [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=Gr4phO.vortex-systems), les paquets `.vsix` joints aux [GitHub Releases](https://github.com/Gr4phO/Vortex/releases/latest), ou depuis [`editors/vscode/`](editors/vscode/README.md).
 
 ---
@@ -174,7 +175,7 @@ tests\run_tests.bat   :: Windows (18 suites : unitaires, ergonomics, opt_regress
 ```text
 .
 ├── .github/             # CI (ci.yml), release multi-OS + .vsix (release.yml), SemVer auto & ISSUE_TEMPLATE/
-├── src/                 # Compilateur C99 modulaire (~22 500 lignes) : lexer, modules, parser_expr/stmt, ir_core/ir_opt/ir_vec_ra, jit_x64/jit_x64_simd/ffi/jit_arm64, hw, lsp, pkg, arena, gui, packager, runtime
+├── src/                 # Compilateur C99 modulaire (~23 700 lignes) : lexer, modules, parser_expr/stmt, ir_core/ir_opt/ir_vec_ra, jit_x64/jit_x64_simd/ffi/jit_arm64, hw, lsp, pkg, arena, gui, packager, runtime
 ├── std/                 # Bibliothèque standard modulaire (.vx : net, http, json, crypto, db, gpu, fs, math, str, env, hw)
 ├── editors/vscode/      # Extension VS Code officielle (bouton ▶ Run, LSP client & grammaire .vx)
 ├── benchmarks/          # Suite réaliste 9 langages (realistic_suite/), historique & rapport BENCHMARK_REPORT_v1.3.0.md

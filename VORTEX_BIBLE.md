@@ -1,7 +1,7 @@
 # VORTEX_BIBLE.md — Référence Technique Exhaustive du Langage Vortex
 
-> **Public cible** : Document de référence unique destiné aux agents IA chargés d'écrire un moteur de jeu 3D voxel et un serveur multijoueur haute performance en Vortex (`v1.2.0`).  
-> **Périmètre vérifié** : Toutes les règles, limites, syntaxes, fonctions intégrées et comportements ci-dessous ont été vérifiés directement dans le code source C99 du compilateur/runtime (`src/*.c`, `src/vortex.h`, ~20 500 lignes), de la bibliothèque standard (`std/*.vx`) et du binaire compilateur (`vortex.exe`, `vortex spec`). Toute fonctionnalité absente de ces sources est explicitement marquée **NON SUPPORTÉ**.
+> **Public cible** : Document de référence unique destiné aux agents IA chargés d'écrire un moteur de jeu 3D voxel, du calcul numérique haute performance ou un serveur multijoueur en Vortex (`v1.3.0`).  
+> **Périmètre vérifié** : Toutes les règles, limites, syntaxes, fonctions intégrées et comportements ci-dessous ont été vérifiés directement dans le code source C99 du compilateur/runtime (`src/*.c`, `src/*.h`, ~23 700 lignes), de la bibliothèque standard (`11` modules `std/*.vx`) et du binaire compilateur (`vortex.exe`, `vortex spec --json`). Toute fonctionnalité absente de ces sources est explicitement marquée **NON SUPPORTÉ**.
 
 ---
 
@@ -17,9 +17,9 @@
     2. **Analyseur lexical** (`src/lexer.c`) : produit le flux de jetons (*tokens*).
     3. **Analyseur syntaxique à descente récursive directe vers IR** (`src/parser_stmt.c`, `src/parser_expr.c`) : émet directement une **représentation intermédiaire linéaire à 3 adresses (IR)** sans conserver d'arbre syntaxique abstrait (AST) en mémoire.
     4. **Vérificateur statique de régions mémoire** (`ir_region_verify` dans `src/ir_core.c`) : interdit statiquement les fuites de références d'arène éphémères, le retour de pointeurs locaux après `scope_pop()`, et le *use-after-pop* (actif dans tous les modes : `--safe`, `--ultrasafe 1/2/3` et `--release` ; en `--ultrasafe 3`, collecte toutes les violations `E301` sans s'arrêter à la première).
-    5. **Passes d'audit et d'optimisation IR** (`src/ir_opt.c`, `src/ir_vec_ra.c`, `src/runtime.c`) : en `--safe` / `--ultrasafe`, constant folding, propagation de copies, LICM constante, DCE et déduplication des vérifications ; en `--ultrasafe 2/3`, audits statiques (`E201`–`E204`, `W101`–`W105`) et garde de récursion ; en `--release`, inlining des petites fonctions utilisateur (`<= 40` instructions IR), déroulement de récursion binaire, élimination des vérifications de bornes (RCE), hissage d'invariants de boucle (LICM), auto-vectorisation SIMD AVX2 (`8 x f32`), pliage des puissances de 2 (divisions/modulos sur `x86_64`), et élimination de code mort (DCE).
-    6. **Analyse de vivacité et allocation de registres** (`ir_liveness_analysis`, `Linear Scan` dans `src/ir_vec_ra.c`) : `10 GPR / 14 FPR` sur `x86_64`.
-    7. **Émission machine native** (`jit_x64.c`, `jit_arm64.c`) dans des pages mémoire W^X (taille maximale du tampon JIT par unité compilée : `MAX_JIT_CODE_SIZE = 16 MiB`, soit `16 777 216` octets ; capacité maximale de `262 144` instructions IR et `65 536` registres virtuels par fonction).
+    5. **Passes d'audit et d'optimisation IR** (`src/ir_opt.c`, `src/ir_vec_ra.c`, `src/runtime.c`) : en `--safe` / `--ultrasafe`, constant folding `i64`/`f32`/`f64`, identités algébriques, propagation de copies, LICM constante, DCE, déduplication des vérifications, *range hoisting* affine (`arr[off + i]`) et contrôles inline avec *cold traps* en boucles sûres ; en `--ultrasafe 2/3`, audits statiques (`E201`–`E204`, `W101`–`W105`) et garde de récursion ; en `--release`, inlining des petites fonctions utilisateur (`<= 64` instructions IR, `256` expansions max), déroulement de récursion binaire, élimination des vérifications de bornes (RCE), hissage d'invariants de boucle (LICM), fusion `IR_ADD_SUB_MOD_IMM`, intrinsèques matériels inline (`sqrtsd`/`sqrtss`/`fabs`), auto-vectorisation SIMD AVX2 (`8 × f32`, `vpminud`, `vmovntdq` streaming stores et AXPY strict IEEE-754 `f64` `IR_VEC_F64_AXPY`), pliage des puissances de 2 (divisions/modulos sur `x86_64`), et élimination de code mort (DCE).
+    6. **Analyse de vivacité et allocation de registres** (`ir_liveness_analysis`, `Linear Scan` dans `src/ir_vec_ra.c`) : `10 GPR / 14 FPR` sur `x86_64` (avec pool de threads hybride spin-barrier `YieldProcessor` + affinité physique dans `src/hw.c` et `src/runtime.c`).
+    7. **Émission machine native & Silicium** (`jit_x64.c`, `jit_x64_simd.c`, `jit_arm64.c`, `hw.c`) dans des pages mémoire W^X (taille maximale du tampon JIT par unité compilée : `MAX_JIT_CODE_SIZE = 16 MiB`, soit `16 777 216` octets ; capacité maximale de `262 144` instructions IR et `65 536` registres virtuels par fonction).
   - **Cibles supportées** (`--target`) : `x86_64-windows` (hôte Windows par défaut), `x86_64-linux`, `x86_64-darwin`, `arm64-linux` (cross-compilation ELF64 possible via `vortex build`), `arm64-darwin` (cross-compilation Mach-O 64 possible via `vortex build`).
 - **Typage** :
   - **Statique strict sans conversion implicite** : les variables `let` infèrent leur type depuis l'expression d'initialisation (ou utilisent une annotation explicite `: Type`) ; les paramètres et types de retour des fonctions (`fn`) ainsi que les champs de `struct` doivent être annotés explicitement.
@@ -131,8 +131,9 @@ fn os_tag() -> str {
   - Décimaux (`0`, `42`, `1_000_000`), hexadécimaux (`0xFF_00`), binaires (`0b1010_0101`), octaux (`0o755`). Les séparateurs `_` sont supportés dans tous les littéraux numériques.
   - Littéraux caractère `'A'`, `'\n'`, `'\t'`, `'\r'`, `'\0'`, `'\\'`, `'\''` (évalués en code ASCII `i64`).
   - Suffixes de type collés (`42u64`, `42i32`, `42L`) : **NON SUPPORTÉ** (utiliser `42 as u32`).
-- **Littéraux flottants (`f32`)** :
+- **Littéraux flottants (`f32` et promotion `f64`)** :
   - Décimaux avec point (`0.0`, `3.141_59`) et notation scientifique (`1e-5`, `2.5E+3`, `1.5e2`). Le lexer s'arrête avant `..` afin de ne pas casser les intervalles `0..10`.
+  - Typés `f32` par défaut, et **promus automatiquement en double précision IEEE-754 `f64`** dans les contextes `f64` (`let x: f64 = 0.01;`, `const PI: f64 = ...;`, champs/paramètres `f64`, ternaire `f64` et expressions arithmétiques `f64`).
   - Forme sans zéro initial (`.5`), sans décimale (`1.`), suffixe (`1.0f`) : **NON SUPPORTÉ**.
 - **Littéraux chaînes (`str`)** :
   - Délimités par guillemets doubles `"..."`.
@@ -162,7 +163,7 @@ dt = 0.016;
 
 #### Constantes et visibilité globale
 
-- **`const` globales (`MAX_CONSTS = 1024`) : SUPPORTÉ** (`const NOM [: Type] = <expr_constante>;`). Les constantes sont évaluées à la compilation (littéraux `i64`, `f32`, `str`, `enum` ainsi qu'expressions arithmétiques et unaires constantes) et sont visibles dans toutes les fonctions `fn` ainsi que dans les motifs `match`.
+- **`const` globales (`MAX_CONSTS = 1024`) : SUPPORTÉ** (`const NOM [: Type] = <expr_constante>;`). Les constantes sont évaluées à la compilation (littéraux `i64`, `f32`, **`f64`**, `str`, `enum` ainsi qu'expressions arithmétiques et unaires constantes) et sont visibles dans toutes les fonctions `fn` ainsi que dans les motifs `match`.
 - Mots-clés `static`, `constexpr`, `#define` : **NON SUPPORTÉ**.
 - **PORTÉE ISOLÉE DES VARIABLES `let`** : `parse_function_def` crée une table des symboles vierge (`SymbolTable`) ne contenant que les paramètres de la fonction et l'accès aux constantes `const` / `enum`. **Une fonction `fn` ne peut PAS lire les variables `let` déclarées au niveau racine.**
 
@@ -189,39 +190,40 @@ fn voxel_offset(x: i64, y: i64, z: i64) -> i64 {
 | :--- | :--- | :--- | :--- | :--- |
 | `i64` *(et alias `u64`, `usize`, `isize`, `bool`, `char`, `i8`, `u8`, `i16`, `u16`)* | Entier / booléen / caractère 64 bits | 8 octets | 8 octets | Type entier principal (arithmétique 64 bits signée, booléens `false`/`true`, valeurs d'`enum`, tailles) |
 | `i32` *(et alias `u32`)* | Entier 32 bits (`TYPE_I32`) | 4 octets | 4 octets | Champs compacts, voxels `[i32]`, FFI `int` / `int32_t` |
-| `f32` | Flottant IEEE 754 32 bits | 4 octets | 4 octets | Type flottant principal (physique, vecteurs 3D, SIMD AVX2 8 lanes) |
-| `f64` | Flottant 64 bits (`TYPE_F64`) | 8 octets | — | Reconnu dans les types FFI ; les expressions arithmétiques utilisent `f32` |
+| `f32` | Flottant IEEE 754 32 bits | 4 octets | 4 octets | Flottant simple précision (jeux, vecteurs 3D, SIMD AVX2 8 lanes) |
+| **`f64`** | Flottant IEEE 754 64 bits (`TYPE_F64`) | 8 octets | 8 octets | **Flottant double précision natif** (SSE2 `sd` sur x86-64, registres `D` sur ARM64, `[f64]`, `const f64`, AVX2 AXPY, `print(f64)`, `str_from_f64`, 11 builtins `*_f64`) |
 | `str` | Pointeur chaîne C (`\0`) | 8 octets | 8 octets | Chaîne de caractères ; comparer avec `str_eq(a, b) == 1` |
 | `ptr` | Pointeur brut non typé | 8 octets | 8 octets | Adresse mémoire (`0` = NULL) |
 | `str?` / `ptr?` | Pointeur / chaîne nullable | 8 octets | 8 octets | Spécification FFI acceptant `0` sans déclencher `IR_FFI_CHECK` |
 | `void` | Absence de valeur | — | — | Type de retour `extern ... -> void` ou `fn ... -> void` |
-| `*T` | Pointeur typé (`*i64`, `*i32`, `*f32`, `*Struct`) | 8 octets | — | Déréférencement / arithmétique FFI ; non reconnu directement en champ `struct` |
-| `[T]` | Slice d'arène (`[i64]`, `[i32]`, `[f32]`, `[Struct]`) | 8 octets | 8 octets | Tableau contigu alloué en arène avec longueur tracée par en-tête |
+| `*T` | Pointeur typé (`*i64`, `*i32`, `*f32`, `*f64`, `*Struct`) | 8 octets | — | Déréférencement / arithmétique FFI ; non reconnu directement en champ `struct` |
+| `[T]` | Slice d'arène (`[i64]`, `[i32]`, `[f32]`, `[f64]`, `[Struct]`) | 8 octets | 8 octets | Tableau contigu alloué en arène avec longueur tracée par en-tête |
 | `NomStruct` | Référence vers `struct` en arène | 8 octets | 8 octets | Pointeur 64 bits vers la structure allouée en arène |
 | `NomEnum` | Constantes nommées `i64` | 8 octets | 8 octets | Utilisable directement comme type (`role: NomEnum`) ; variantes via `NomEnum::Var` / `NomEnum.Var` |
 
 Types **NON SUPPORTÉS** : `string` (utiliser `str`), tuples `(A, B)`, génériques `<T>`, pointeurs de fonction `fn(...) -> ...` en tant que variable. *(Note : les alias `i8`/`u8`/`i16`/`u16`/`u64`/`bool`/`char` sont stockés en registres 64 bits et `u32` en 32 bits sans troncature automatique sur débordement non signé).*
 
-#### Règles de conversion (`as`) — CRITIQUES
+#### Règles de conversion (`as`) et promotion `f64` — CRITIQUES
 
-**IL N'Y A AUCUNE CONVERSION IMPLICITE EN VORTEX** (ni `i64 -> f32`, ni `i32 -> i64`, ni dans les expressions mixtes, ni dans les initialisations).
+**IL N'Y A AUCUNE CONVERSION IMPLICITE ENTRE ENTIERS ET FLOTTANTS EN VORTEX** (ni `i64 -> f32`, ni `i64 -> f64`, ni `i32 -> i64`). En revanche, les littéraux flottants sont promus automatiquement en `f64` lorsqu'une cible est typée `f64`.
 
-1. **Piège arithmétique mixte (`i64` + `f32`)** : si l'un des deux opérandes est `f32`, le parser émet directement une instruction flottante (`IR_FADD`, `IR_FMUL`, ...) sans convertir l'opérande entier.  
+1. **Piège arithmétique mixte (`i64` + `f32`/`f64`)** : si l'un des deux opérandes est `f32` ou `f64`, le parser émet directement une instruction flottante (`IR_FADD`, `IR_FMUL`, ...) sans convertir l'opérande entier.  
    - **FAUX** : `let r = i + 0.5;` ou `let r = dt_us / 1000000.0;` (corrompt les bits de l'entier !)  
-   - **CORRECT** : `let r = (i as f32) + 0.5;` et `let r = (dt_us as f32) / 1000000.0;`
-2. **Piège d'initialisation `f32` depuis un entier** : dans `let x: f32 = 0;` ou `Vec3 { x: 0, y: 1, z: 0 }`, le compilateur copie les bits bruts de l'entier sans conversion flottante.  
-   - **CORRECT** : toujours écrire `0.0`, `1.0`, ou `(n as f32)`.
+   - **CORRECT** : `let r = (i as f32) + 0.5;` ou `let r: f64 = (dt_us as f64) / 1000000.0;`
+2. **Piège d'initialisation flottante depuis un entier** : dans `let x: f32 = 0;` ou `Vec3 { x: 0, y: 1, z: 0 }`, le compilateur copie les bits bruts de l'entier sans conversion flottante.  
+   - **CORRECT** : toujours écrire `0.0`, `1.0`, `(n as f32)` ou `(n as f64)`.
 3. **Sûreté des conversions `as`** :
-   - Conversions numériques entre `i64`, `i32`, `f32` : **autorisées en code sûr** (hors `unsafe`).
+   - Conversions numériques entre `i64`, `i32`, `f32` et **`f64`** (`n as f64`, `f as f32`, `d as i64`) : **autorisées en code sûr** (hors `unsafe`).
    - Conversions impliquant `ptr`, `str`, `*T`, `[T]` ou `Struct` (par exemple `p as i64`, `addr as ptr`, `buf as *i32`) : **requièrent un bloc `unsafe { ... }` ou `unsafe fn`**.
    - **Avertissement sur les slices** : effectuer `s as *i32` efface les métadonnées de longueur/slice (`is_slice_ptr = false`, `known_len = -1`). Ne jamais caster un slice si vous souhaitez conserver l'indexation sûre.
 
 ```vortex
 let idx: i64 = 12;
 let fy: f32 = (idx as f32) * 0.25;     // OK : conversion explicite i64 -> f32
+let dy: f64 = (idx as f64) * 0.25;     // OK : conversion explicite i64 -> f64 (0.25 promu f64)
 let block_id: i32 = 7 as i32;          // OK : i64 -> i32 pour stockage [i32]
 let back: i64 = block_id as i64;       // OK : i32 -> i64
-let trunc: i64 = 3.9 as i64;           // OK : conversion f32 -> i64
+let trunc: i64 = 3.9 as i64;           // OK : conversion flottant -> i64
 ```
 
 ### 2.4 Structures (`struct`), énumérations, unions, tableaux et maps
@@ -229,7 +231,7 @@ let trunc: i64 = 3.9 as i64;           // OK : conversion f32 -> i64
 #### Structures (`struct`)
 
 - **Limites du compilateur** (`src/vortex.h`) : maximum **`64` champs** par structure (`MAX_FIELDS = 64`), et **`1024` structures** au total par programme (`MAX_STRUCT_TYPES = 1024`).
-- **Types de champs reconnus dans `struct`** (`parse_struct_stmt`) : `i64`, `i32`, `f32`, `ptr`, `str`, `<NomStruct>`, `[i64]`, `[i32]`, `[f32]`, `[NomStruct]`. *(Ne pas écrire `*i32` dans un champ de `struct`, utiliser `ptr` ou `[i32]`.)*
+- **Types de champs reconnus dans `struct`** (`parse_struct_stmt`) : `i64`, `i32`, `f32`, **`f64`**, `ptr`, `str`, `<NomStruct>`, `[i64]`, `[i32]`, `[f32]`, **`[f64]`**, `[NomStruct]`. *(Ne pas écrire `*i32` dans un champ de `struct`, utiliser `ptr` ou `[i32]`.)*
 - **Pas de point-virgule** après `}`. Virgules entre champs (dernière virgule optionnelle).
 
 ```vortex
@@ -282,11 +284,12 @@ if st == NetState.Connected {
 
 - **Tableaux fixes `[T; N]` et littéraux vides `[]`** : **NON SUPPORTÉ** *(utiliser `slice_i64(0)` / `slice_f32(0)`)*.
 - **Littéraux de tableau `[e0, e1, ...]` (jusqu'à 256 éléments)** : **SUPPORTÉ** ! Allouent automatiquement un slice d'arène typé selon le premier élément (`[10, 20, 30]` -> `[i64]`, `[1.5, 2.5]` -> `[f32]`, `[p1, p2]` -> `[Struct]`) avec `slice_len(...)` connu à la compilation pour `IR_BOUNDS_CHECK` et `E202`.
-- **Slices contigus d'arène (`[i64]`, `[i32]`, `[f32]`, `[Struct]`)** :
+- **Slices contigus d'arène (`[i64]`, `[i32]`, `[f32]`, `[f64]`, `[Struct]`)** :
   - Allocation initialisée à zéro en arène :
     - `let a = slice_i64(n);` (éléments 8 octets)
     - `let b = slice_i32(n);` (éléments 4 octets)
     - `let c = slice_f32(n);` (éléments 4 octets)
+    - `let d = slice_f64(n);` (éléments 8 octets double précision IEEE-754)
   - Longueur maximale : `1000000000`.
   - Nombre d'éléments : `slice_len(s)` (retourne `i64`).
   - Lecture / écriture : `let v = s[i];` et `s[i] = v;`.
@@ -328,7 +331,7 @@ unsafe fn poke32(addr: ptr, val: i64) -> i64 {
   - L'instruction `return expr;` exige **toujours** une expression. Écrire `return;` nu déclenche `[VORTEX SYNTAX ERROR]`, même dans une fonction `-> void`.
   - Si vous déclarez `fn foo() -> void { ... }`, omettez simplement `return;` à la fin du corps ou retournez `return 0;`. Si vous déclarez explicitement un type de retour non-void (`fn foo() -> i64`), `--ultrasafe 2`/`3` vérifie statiquement (`E204`) qu'un `return` est bien présent. Par cohérence, privilégiez `-> i64 { ... return 0; }` dès qu'un retour anticipé est nécessaire.
 - **Mode de passage des arguments** :
-  - **Scalaires (`i64`, `i32`, `f32`, `ptr`, `str`)** : passés **par valeur**. Modifier un paramètre scalaire dans la fonction ne modifie pas la variable de l'appelant.
+  - **Scalaires (`i64`, `i32`, `f32`, `f64`, `ptr`, `str`)** : passés **par valeur**. Modifier un paramètre scalaire dans la fonction ne modifie pas la variable de l'appelant.
   - **Structures (`NomStruct`), slices (`[T]`), `VortexVec`, `VortexMap`** : passés **par référence implicite (copie du pointeur 64 bits vers l'arène, zéro copie de données)**. Les modifications sur les champs (`s.x = ...;`) ou éléments (`buf[i] = ...;`) sont visibles par l'appelant.
 - **Closures, lambdas (`|x| ...`), fonctions imbriquées, pointeurs de fonction Vortex** : **NON SUPPORTÉ**.
 
@@ -362,7 +365,7 @@ for i in 0..4096 {
 
 #### Boucle parallèle `parallel_for`
 
-Répartit l'intervalle `[debut, fin)` sur le pool de threads natifs (`num_workers()`, maximum `VORTEX_MAX_THREADS = 64`, le thread principal exécute la dernière tranche) :
+Répartit l'intervalle `[debut, fin)` sur le pool de threads hybride spin-barrier (`num_workers()`, `4000 × YieldProcessor()` avant attente noyau, priorité automatique aux cœurs physiques dès l'initialisation sans charger OpenCL et alignement des tranches sur des multiples de **64 octets** contre le *false sharing*, maximum `VORTEX_MAX_THREADS = 64`, le thread principal exécute la dernière tranche) :
 
 ```vortex
 parallel_for idx in 0..4096 {
@@ -418,8 +421,8 @@ Table de précédence de la priorité la plus haute (`1`) à la plus basse (`12`
 
 | Niveau | Catégorie | Opérateurs exacts | Associativité / Remarques |
 | :--- | :--- | :--- | :--- |
-| `1` | Primaire / Postfixe | `()`, `fn(...)`, `Struct { ... }`, `Enum::Var`/`Enum.Var`, `arr[i]` (1 niveau), `s.champ` (chaîné), `true`/`false` | Gauche à droite |
-| `2` | Unaire | `-x`, `!x`, `~x`, `*ptr` | Négation (`i64`/`f32`), NON logique (`!x` -> `i64` `0`/`1`), NON bit-à-bit (`~x`), déréf `*ptr` en `unsafe` |
+| `1` | Primaire / Postfixe | `()`, `fn(...)`, `Struct { ... }`, `Enum::Var`/`Enum.Var`, `arr[i]` / `mat[i][j]`, `obj.arr[i]`, `arr[i].champ`, `s.champ` (chaîné), `true`/`false` | Gauche à droite |
+| `2` | Unaire | `-x`, `!x`, `~x`, `*ptr` | Négation (`i64`/`f32`/`f64`), NON logique (`!x` -> `i64` `0`/`1`), NON bit-à-bit (`~x`), déréf `*ptr` en `unsafe` |
 | `3` | Conversion de type | `as` | `expr as Type` (prioritaire sur `*` : écrire `(a * b) as f32`) |
 | `4` | Multiplicatif | `*`, `/`, `%` | Gauche à droite ; `/` entier tronque vers zéro ; `%` sur `i64` (piégé si div par 0 en `--ultrasafe`) |
 | `5` | Additif | `+`, `-` | Gauche à droite |
@@ -454,7 +457,7 @@ Table de précédence de la priorité la plus haute (`1`) à la plus basse (`12`
 ### 3.2 Discipline `scope_push()` / `scope_pop(mark)` — Anti-fuites et anti-dangling
 
 - `let mark = scope_push();` sauvegarde l'état courant de l'arène dans un jeton `i64` compacté (`depth` sur 12 bits | `page_idx` sur 20 bits | `cursor` sur 32 bits). Profondeur d'imbrication maximale : `VORTEX_MAX_SCOPE_DEPTH = 256`.
-- `scope_pop(mark);` ramène instantanément le curseur d'arène au marqueur `mark` et incrémente le compteur d'époque (`g_arena.epoch++`).
+- `scope_pop(mark);` ramène instantanément le curseur d'arène au marqueur `mark`, libère automatiquement la VRAM des buffers `HwBuf` créés dans des portées plus profondes (`vortex_hw_release_scope`), et incrémente le compteur d'époque (`g_arena.epoch++`).
 - Les nouveaux slices réutilisant une région précédemment libérée sont remis à zéro jusqu'au `high_water` de la page.
 
 #### Vérificateur statique de régions (`ir_region_verify` dans `src/ir_core.c`)
@@ -487,12 +490,12 @@ Tous les niveaux `--ultrasafe` sont **cumulatifs** (`1 ⊂ 2 ⊂ 3`) et s'exécu
 | Vérificateur statique `ir_region_verify` | Actif | Actif | Actif | Actif (**collecte toutes les erreurs `E301`**) | Actif |
 | En-tête de garde `64` octets (`VortexSafeHeader`, magie, `len`, `epoch`) | Sur `struct`, `slice_*`, `alloc` | Comme `--safe` | Comme `--safe` | Comme `--safe` | Omis sur `struct` (`8` o) ; **conservé sur `slice_*`** |
 | `IR_PTR_CHECK` et `IR_FFI_CHECK` | Vérifiés à chaque accès | Comme `--safe` | Comme `--safe` | Comme `--safe` | Supprimés (`IR_NOP`) après dédup |
-| `IR_BOUNDS_CHECK` sur `arr[i]` | Vérifié à chaque indexation (`0 <= i < len`) | Comme `--safe` | Comme `--safe` | Comme `--safe` | Éliminé en boucle `for i in 0..N` (RCE), sinon `IR_RANGE_CHECK` |
+| `IR_BOUNDS_CHECK` sur `arr[i]` | Vérifié à chaque indexation (`0 <= i < len`) + *range hoisting* affine & *cold traps* inline en boucle | Comme `--safe` | Comme `--safe` | Comme `--safe` | Éliminé en boucle `for i in 0..N` (RCE), sinon `IR_RANGE_CHECK` |
 | `IR_DIV_CHECK` (`/` `%` `/=` `%=` entiers hors `unsafe`) | Non | **Actif** (`[VORTEX SAFETY PANIC]`) | **Actif** | **Actif** | Non |
 | Garde profondeur de récursion/appels (max `2048`, fonctions non-`unsafe` avec `IR_CALL_USER`) | Non | Non | **Actif** (0 surcoût sur feuilles) | **Actif** | Non |
 | Audits statiques (avant JIT) | — | Warnings `W101`–`W104` | Niveau 1 + erreurs `E201`–`E204` + `W105` | Niveau 2 + `E001`, `E101`, `E301`, `E302` | — |
 | Récupération multi-erreurs (`setjmp` + `vortex_lexer_sync`) | Stop 1re erreur | Stop 1re erreur | Stop 1re erreur | **Continue** (max `256` diags) | Stop 1re erreur |
-| Optimisations IR | Constant folding, copy prop, LICM const, DCE | Comme `--safe` | Comme `--safe` | Comme `--safe` | + Inlining (`<= 40`), déroulage, RCE, AVX2/NEON |
+| Optimisations IR | Constant folding, copy prop, LICM const, DCE, *range hoisting* & *cold traps* | Comme `--safe` | Comme `--safe` | Comme `--safe` | + Inlining (`<= 64` / `256` exp.), déroulage, RCE, `sqrtsd`/`fabs` inline, `AVX2` `f32`/`f64` AXPY |
 
 Détail exact des codes diagnostiques `--ultrasafe` ([src/runtime.c](src/runtime.c), [src/parser_stmt.c](src/parser_stmt.c), [src/ir_core.c](src/ir_core.c)) :
 - **Warnings (non bloquants)** : `W101` code inaccessible après `return`/`break`/`continue`, `W102` `mut` jamais réassigné, `W103` shadowing de variable (ignoré si nom commence par `_`), `W104` variable locale inutilisée (ignoré si `_`), `W105` fonction définie mais jamais appelée (hors `main` et `test_*`).
@@ -508,17 +511,16 @@ Détail exact des codes diagnostiques `--ultrasafe` ([src/runtime.c](src/runtime
 4. **RCE et vectorisation en `--release`** : écrire les boucles de scan sous la forme canonique `for i in 0..4096` avec une variable de limite constante ou `let n = slice_len(blocks); for i in 0..n` sans modifier la variable `blocks` dans la boucle, afin que la passe RCE élimine 100 % des vérifications de bornes.
 5. **Ne pas copier un champ `[T]` d'une `struct` dans un `let` local avant d'indexer en code sûr** :
    - Éviter : `let tmp: [i32] = chunk.blocks; tmp[i] = ...;` (perd le marqueur interne `is_slice_ptr` -> erreur `[VORTEX SAFETY ERROR]`).
-   - Préférer : `fn blocks_set(b: [i32], i: i64, v: i32) -> i64 { b[i] = v; return 0; }` appelée via `blocks_set(chunk.blocks, i, v);` (le paramètre `b: [i32]` réactive `is_slice_ptr = true`, est sûr en `--safe`, et est inliné en `--release` s'il fait 40 instructions IR ou moins).
+   - Préférer : `fn blocks_set(b: [i32], i: i64, v: i32) -> i64 { b[i] = v; return 0; }` appelée via `blocks_set(chunk.blocks, i, v);` (le paramètre `b: [i32]` réactive `is_slice_ptr = true`, est sûr en `--safe`, et est inliné en `--release` s'il fait 64 instructions IR ou moins).
 
 ### 3.5 Alignement mémoire et disposition des champs (`struct layout`)
 
 Dans `parse_struct_stmt` (`src/parser_stmt.c`), le compilateur applique une disposition C séquentielle **sans réordonnancement automatique des champs** :
 
-- L'alignement de départ d'une `struct` est initialisé à **4 octets** (`max_align = 4`), et passe à **8 octets** dès qu'un champ de 8 octets (`i64`, `ptr`, `str`, `SubStruct`, `[T]`) est déclaré.
+- L'alignement de départ d'une `struct` est initialisé à **4 octets** (`max_align = 4`), et passe à **8 octets** dès qu'un champ de 8 octets (`i64`, `f64`, `ptr`, `str`, `SubStruct`, `[T]`) est déclaré.
 - Tailles et alignements exacts :
-  - `i32` : taille `4` octets, alignement `4` octets.
-  - `f32` : taille `4` octets, alignement `4` octets.
-  - `i64`, `ptr`, `str`, `SubStruct`, `[T]` : taille `8` octets, alignement `8` octets.
+  - `i32`, `f32` : taille `4` octets, alignement `4` octets.
+  - `i64`, `f64`, `ptr`, `str`, `SubStruct`, `[T]` : taille `8` octets, alignement `8` octets.
 - La taille totale de la `struct` est arrondie au multiple supérieur de `max_align`.
 - **Règle d'or anti-padding** : regrouper tous les champs 8 octets en tête (ou tous les `i32`/`f32` par paires) pour éviter des trous d'alignement inutiles :
 
@@ -572,7 +574,7 @@ fn test_math_basics() -> i64 {
 ```
 
 - **Affichage console** :
-  - `print(x)` : accepte un `i64` (`%lld\n`) ou un `f32` (`%.6f\n`) et ajoute automatiquement un saut de ligne. **NE JAMAIS passer une `str` à `print()`** (utiliser `print_str`).
+  - `print(x)` : accepte un `i64` (`%lld\n`), un `f32` (`%.6f\n`) ou un **`f64` (`%.6f\n`)** et ajoute automatiquement un saut de ligne. **NE JAMAIS passer une `str` à `print()`** (utiliser `print_str`).
   - `print_str(s)` : affiche la chaîne brute **sans saut de ligne** (toujours inclure `"\n"` ou appeler `print_str("\n")` séparément).
 - **Traps d'exécution et stacktraces** :
   - En cas de violation mémoire en `--safe`/`--ultrasafe` (ou `IR_RANGE_CHECK` / exception matérielle `SIGSEGV`), le runtime affiche un préfixe explicite (`[VORTEX BOUNDS ERROR]`, `[VORTEX MEMORY ERROR]`, `[VORTEX SAFETY PANIC]`, `[VORTEX CRASH]` + `[VORTEX STACKTRACE]`) puis quitte.
@@ -629,84 +631,47 @@ Pour charger dynamiquement OpenGL (`opengl32.dll` / `libGL.so`), Vulkan (`vulkan
   - `ptr_read64(p)` / `ptr_write64(p, i64_val)`
   - `ptr_to_str(p) -> str` *(interprète une adresse mémoire C terminée par `\0` comme `str`)*
 
-### 5.3 Catalogue complet des 72 fonctions intégrées (builtins, `src/runtime.c`)
+### 5.3 Catalogue complet des 137 fonctions intégrées (builtins, `src/runtime.c`)
 
 Toutes ces fonctions sont disponibles sans `import` :
 
 1. **Vecteurs dynamiques (`5`)** :
-   - `vec_new() -> ptr`
-   - `vec_push(v, val)`
-   - `vec_get(v, idx) -> i64`
-   - `vec_set(v, idx, val)`
-   - `vec_len(v) -> i64`
-2. **Tables de hachage (`5` — total collections `10`)** :
-   - `map_new() -> ptr`
-   - `map_set(m, key: str, val)`
-   - `map_get(m, key: str) -> i64`
-   - `map_has(m, key: str) -> i64`
-   - `map_len(m) -> i64`
-3. **Chaînes de caractères (`13`)** :
-   - `str_concat(s1: str, s2: str) -> str`
-   - `str_join(vec_of_str: ptr, sep: str) -> str`
-   - `str_len(s: str) -> i64`
-   - `str_sub(s: str, start: i64, len: i64) -> str`
-   - `str_from_i64(n: i64) -> str`
-   - `str_from_f32(f: f32) -> str` *(formate avec 4 décimales)*
-   - `str_byte(s: str, idx: i64) -> i64` *(retourne l'octet ASCII `0..255` à l'indice `idx`)*
-   - `str_from_byte(ch: i64) -> str`
-   - `str_eq(s1: str, s2: str) -> i64` *(`1` si égales, `0` sinon)*
-   - `str_find(haystack: str, needle: str, start: i64) -> i64` *(`-1` si non trouvé)*
-   - `str_find_any2(s: str, ch1: i64, ch2: i64, start: i64) -> i64` *(cherche l'un des 2 octets ASCII dès `start`)*
-   - `str_to_i64(s: str) -> i64`
-   - `ptr_to_str(p: ptr) -> str`
-4. **Arènes et slices (`7`)** :
-   - `scope_push() -> i64`
-   - `scope_pop(mark: i64)`
-   - `slice_i64(len: i64) -> [i64]`
-   - `slice_f32(len: i64) -> [f32]`
-   - `slice_i32(len: i64) -> [i32]`
-   - `slice_len(s) -> i64`
+   - `vec_new() -> ptr`, `vec_push(v, val)`, `vec_get(v, idx) -> i64`, `vec_set(v, idx, val)`, `vec_len(v) -> i64`
+2. **Tables de hachage (`5`)** :
+   - `map_new() -> ptr`, `map_set(m, key: str, val)`, `map_get(m, key: str) -> i64`, `map_has(m, key: str) -> i64`, `map_len(m) -> i64`
+3. **Chaînes de caractères (`14`)** :
+   - `str_concat(s1: str, s2: str) -> str`, `str_join(vec_of_str: ptr, sep: str) -> str`, `str_len(s: str) -> i64`, `str_sub(s: str, start: i64, len: i64) -> str`
+   - `str_from_i64(n: i64) -> str`, `str_from_f32(f: f32) -> str` *(4 décimales)*, **`str_from_f64(d: f64) -> str`**
+   - `str_byte(s: str, idx: i64) -> i64`, `str_from_byte(ch: i64) -> str`, `str_eq(s1: str, s2: str) -> i64`, `str_find(haystack: str, needle: str, start: i64) -> i64`, `str_find_any2(s: str, ch1: i64, ch2: i64, start: i64) -> i64`, `str_to_i64(s: str) -> i64`, `ptr_to_str(p: ptr) -> str`
+4. **Arènes et slices (`8`)** :
+   - `scope_push() -> i64`, `scope_pop(mark: i64)`
+   - `slice_i64(len: i64) -> [i64]`, `slice_f32(len: i64) -> [f32]`, **`slice_f64(len: i64) -> [f64]`**, `slice_i32(len: i64) -> [i32]`, `slice_len(s) -> i64`
    - `alloc(bytes: i64) -> ptr` *(requiert `unsafe`)*
 5. **Pointeurs bas niveau (`6`, requièrent `unsafe`)** :
-   - `ptr_read8(p)`, `ptr_write8(p, val)`
-   - `ptr_read32(p)`, `ptr_write32(p, val)`
-   - `ptr_read64(p)`, `ptr_write64(p, val)`
+   - `ptr_read8(p)`, `ptr_write8(p, val)`, `ptr_read32(p)`, `ptr_write32(p, val)`, `ptr_read64(p)`, `ptr_write64(p, val)`
 6. **FFI dynamique (`9`, requièrent `unsafe`)** :
-   - `ffi_load(lib: str)`, `ffi_symbol(handle, sym: str)`
-   - `ffi_call0(fn_ptr)` à `ffi_call6(fn_ptr, a1, a2, a3, a4, a5, a6)`
+   - `ffi_load(lib: str)`, `ffi_symbol(handle, sym: str)`, `ffi_call0(fn_ptr)` à `ffi_call6(fn_ptr, a1, a2, a3, a4, a5, a6)`
 7. **Interface graphique 2D intégrée Win32 GDI / X11 (`12`)** :
-   - `gui_window(title: str, w: i64, h: i64) -> ptr` *(désactivé si `--headless` ou `VORTEX_HEADLESS=1`)*
-   - `gui_is_open(win) -> i64`
-   - `gui_rgb(r: i64, g: i64, b: i64) -> i64`
-   - `gui_clear(win, rgb: i64)`
-   - `gui_draw_rect(win, x, y, w, h, rgb)`
-   - `gui_draw_text(win, txt: str, x, y, rgb)`
-   - `gui_draw_number(win, num: i64, x, y, rgb)`
-   - `gui_button(win, id, lbl: str, x, y, wb, hb) -> i64`
-   - `gui_present(win)`
-   - `gui_set_pos(win, x, y)`
-   - `gui_draw_line(win, x0, y0, x1, y1, rgb)`
-   - `gui_draw_pixel(win, x, y, rgb)`
-8. **Maths, réflexion de struct, assertions, horloge, threads et système (`15`)** :
-   - `math_sin(deg_x10: i64) -> i64` : **ATTENTION**, l'angle est en **dixièmes de degré** (`900` = `90.0°`) et la valeur retournée est en **virgule fixe Q12** (`sin * 4096`, soit `4096` pour `1.0`).
-   - `math_cos(deg_x10: i64) -> i64` : même convention (`cos(0°) -> math_cos(0) == 4096`).
-   - `math_sqrt(x: i64) -> i64` : racine carrée entière sur `i64` (`math_sqrt(16) == 4`).
-   - `sinf_rad(rad: f32) -> f32` : sinus flottant 32 bits en **radians**.
-   - `cosf_rad(rad: f32) -> f32` : cosinus flottant 32 bits en **radians**.
-   - `sqrtf_val(x: f32) -> f32` : racine carrée flottante 32 bits.
-   - `struct_size(name: str) -> i64`
-   - `struct_align(name: str) -> i64`
-   - `assert(cond: i64) -> i64` : échoue si `cond == 0` (utilisé par `vortex test`).
-   - `assert_eq(a: i64, b: i64) -> i64` : échoue si `a != b`.
-   - `time_us() -> i64` : horloge monotone haute résolution en **microsecondes**.
-   - `num_workers() -> i64` : nombre de threads du pool `parallel_for`.
-   - `print(val)` : affiche `i64` ou `f32` avec saut de ligne.
-   - `print_str(s: str)` : affiche `str` sans saut de ligne.
-   - `exit(code: i64)` : quitte immédiatement le processus.
+   - `gui_window(title: str, w: i64, h: i64) -> ptr` *(désactivé si `--headless` ou `VORTEX_HEADLESS=1`)*, `gui_is_open(win) -> i64`, `gui_rgb(r, g, b) -> i64`, `gui_clear(win, rgb)`, `gui_draw_rect(win, x, y, w, h, rgb)`, `gui_draw_text(win, txt, x, y, rgb)`, `gui_draw_number(win, num, x, y, rgb)`, `gui_button(win, id, lbl, x, y, wb, hb) -> i64`, `gui_present(win)`, `gui_set_pos(win, x, y)`, `gui_draw_line(win, x0, y0, x1, y1, rgb)`, `gui_draw_pixel(win, x, y, rgb)`
+8. **Mathématiques `i64` / `f32` / `f64` (`25`)** :
+   - **Entiers / Q12 (`3`)** : `math_sin(deg_x10: i64) -> i64` & `math_cos(deg_x10: i64) -> i64` *(dixièmes de degré -> fixe Q12 `4096 == 1.0`)*, `math_sqrt(x: i64) -> i64`
+   - **Simple précision `f32` en radians (`11`)** : `sinf_rad`, `cosf_rad`, `sqrtf_val` *(inline hardware `sqrtss`/`fsqrt`)*, `tanf_rad`, `floorf_val`, `ceilf_val`, `fabsf_val` *(inline `andps`/`fabs`)*, `expf_val`, `logf_val`, `powf_val`, `atan2f_rad`
+   - **Double précision `f64` IEEE-754 en radians (`11`)** : `sin_f64`, `cos_f64`, `sqrt_f64` *(inline `sqrtsd`/`fsqrt`)*, `tan_f64`, `floor_f64`, `ceil_f64`, `fabs_f64`, `exp_f64`, `log_f64`, `pow_f64`, `atan2_f64`
+9. **Fichiers, CLI, environnement et horloge système (`11`)** :
+   - `args_count() -> i64`, `args_get(idx: i64) -> str`, `env_get(name: str) -> str`, `env_has(name: str) -> i64`
+   - `fs_read(path: str) -> str`, `fs_write(path: str, content: str) -> i64`, `fs_append(path: str, content: str) -> i64`, `fs_exists(path: str) -> i64`, `fs_remove(path: str) -> i64`
+   - `sleep_ms(ms: i64) -> i64`, `unix_now_ms() -> i64`
+10. **Réflexion, tests, horloge microseconde, threads et E/S (`9`)** :
+   - `struct_size(name: str) -> i64`, `struct_align(name: str) -> i64`, `assert(cond: i64) -> i64`, `assert_eq(a: i64, b: i64) -> i64`, `time_us() -> i64`, `num_workers() -> i64`, `print(val)` *(`i64`/`f32`/`f64`)*, `print_str(s: str)`, `exit(code: i64)`
+11. **Module Silicium `hw_*` (`33`, exposés aussi via `std/hw`)** :
+   - Topologie & diagnostic (`11`) : `hw_init() -> i64`, `hw_print_map() -> i64`, `hw_cpu_name() -> str`, `hw_gpu_name() -> str`, `hw_l1_kb() -> i64`, `hw_l2_kb() -> i64`, `hw_l3_kb() -> i64`, `hw_phys_cores() -> i64`, `hw_logical_cores() -> i64`, `hw_simd_width() -> i64`, `hw_has_gpu() -> i64`
+   - Planification, affinité & télémétrie Waze (`6`) : `hw_plan_route(working_bytes: i64, flops: i64) -> i64`, `hw_plan_tile_f64() -> i64`, `hw_pin_workers(mode: i64) -> i64`, `hw_prefetch(slice_or_ptr, byte_offset: i64) -> i64`, **`hw_router_stats() -> i64`**, **`hw_gpu_cache_hits() -> i64`**
+   - Noyaux directs sur slices (`6`) : `hw_matmul_f64(a, b, c, m, n, k) -> i64`, `hw_matmul_f32(a, b, c, m, n, k) -> i64`, `hw_matmul_f32_cpu(a, b, c, m, n, k) -> i64`, `hw_dot_f64(a, b, n) -> f64`, `hw_axpy_f64(alpha, x, y, n) -> i64`, `hw_axpy_f32(alpha, x, y, n) -> i64`
+   - **Buffers résidents RAM/VRAM `HwBuf` & pipeline chaîné sans copie (`10`)** : **`hw_buf_from_f32(slice, n) -> ptr`**, **`hw_buf_from_f64(slice, n) -> ptr`**, **`hw_buf_sync_host(buf) -> i64`**, **`hw_buf_mark_host_dirty(buf) -> i64`**, **`hw_buf_state(buf) -> i64`**, **`hw_buf_free(buf) -> i64`**, **`hw_matmul_f32_buf(ba, bb, bc, m, n, k) -> i64`**, **`hw_matmul_f64_buf(ba, bb, bc, m, n, k) -> i64`**, **`hw_axpy_f32_buf(alpha, bx, by, n) -> i64`**, **`hw_relu_f32_buf(bx, n) -> i64`**
 
-### 5.4 Bibliothèque standard (`std/` — 10 modules disponibles)
+### 5.4 Bibliothèque standard (`std/` — 11 modules disponibles)
 
-Il existe **10 modules** dans `std/` : `net`, `http`, `json`, `crypto`, `db`, `gpu`, `fs`, `math`, `str` et `env` *(appuyés par **91 builtins** runtime)*.  
+Il existe **11 modules** dans `std/` : `net`, `http`, `json`, `crypto`, `db`, `gpu`, `fs`, `math`, `str`, `env` et **`hw`** *(appuyés par **137 builtins** runtime)*.  
 Modules absents (**NON SUPPORTÉS** dans `std/`) : il n'existe pas de `std/collections`, `std/sync`, `std/thread`, ni `std/time` *(note : `unix_now_ms()` et `sleep_ms()` sont disponibles via `std/env`)*. Pour les threads/mutex OS, passer par `extern` C.
 
 #### 1. `std/net` (`import "std/net";`) — Sockets TCP non bloquants multi-OS (`ws2_32.dll` / `libc`)
@@ -753,10 +718,11 @@ Modules absents (**NON SUPPORTÉS** dans `std/`) : il n'existe pas de `std/colle
 #### 7. `std/fs` (`import "std/fs";`) — Systèmes de fichiers portables
 - Fonctions : `fs_read_text(path: str) -> str`, `fs_write_text(path: str, content: str) -> i64`, `fs_append_text(path: str, content: str) -> i64`, `fs_exists_path(path: str) -> i64`, `fs_remove_path(path: str) -> i64` *(wrappers portables autour des builtins `fs_read`, `fs_write`, `fs_append`, `fs_exists`, `fs_remove`)*.
 
-#### 8. `std/math` (`import "std/math";`) — Trigonométrie, fonctions mathématiques `f32` et utilitaires entiers
-- Constantes : `MATH_PI`, `MATH_TAU`, `MATH_E`.
-- Fonctions `f32` : `math_sin`, `math_cos`, `math_tan`, `math_sqrt`, `math_floor`, `math_ceil`, `math_abs`, `math_exp`, `math_log`, `math_pow`, `math_atan2`, `math_clamp_f32`, `math_lerp_f32` *(appuyées sur les builtins JIT `x86-64`/`ARM64` `sinf_rad`..`atan2f_rad`)*.
-- Fonctions `i64` : `math_min_i64`, `math_max_i64`, `math_abs_i64`, `math_clamp_i64`.
+#### 8. `std/math` (`import "std/math";`) — Trigonométrie, fonctions mathématiques `i64` / `f32` / `f64`
+- Constantes / getters : `MATH_PI() -> f32`, `MATH_TAU() -> f32`, `MATH_E() -> f32`, `MATH_PI_F64: f64`, `MATH_TAU_F64: f64`, `MATH_E_F64: f64`.
+- Fonctions `i64` : `abs_i64`, `min_i64`, `max_i64`, `clamp_i64`.
+- Fonctions `f32` : `abs_f32`, `min_f32`, `max_f32`, `clamp_f32`, `lerp_f32`, `floor_f32`, `ceil_f32`, `round_f32`, `pow_f32`, `tan_f32`, `atan2_f32`, `exp_f32`, `log_f32`, `deg_to_rad`, `rad_to_deg` *(appuyées sur `sinf_rad`..`atan2f_rad`)*.
+- Fonctions `f64` : `abs_f64`, `min_f64`, `max_f64`, `clamp_f64`, `lerp_f64`, `round_f64`, `deg_to_rad_f64`, `rad_to_deg_f64` *(en complément des 11 builtins `sin_f64`..`atan2_f64`)*.
 
 #### 9. `std/str` (`import "std/str";`) — Utilitaires chaînes haut niveau
 - Fonctions : `str_is_empty(s: str) -> i64`, `str_starts_with(s: str, prefix: str) -> i64`, `str_ends_with(s: str, suffix: str) -> i64`, `str_trim(s: str) -> str`, `str_repeat(s: str, count: i64) -> str`, `str_pad_left(s: str, width: i64, fill: str) -> str`.
@@ -764,11 +730,17 @@ Modules absents (**NON SUPPORTÉS** dans `std/`) : il n'existe pas de `std/colle
 #### 10. `std/env` (`import "std/env";`) — Arguments CLI, variables d'environnement et horloge
 - Fonctions : `env_argc() -> i64`, `env_argv(idx: i64) -> str`, `env_var(name: str) -> str`, `env_has_var(name: str) -> i64`, `env_var_or(name: str, fallback: str) -> str`, `env_now_ms() -> i64`, `env_sleep(ms: i64) -> i64` *(appuyées sur `args_count`, `args_get`, `env_get`, `env_has`, `unix_now_ms`, `sleep_ms`)*.
 
+#### 11. `std/hw` (`import "std/hw";`) — Cartographie Silicium, Résidence VRAM `HwBuf`, Routeur Waze & Noyaux `AVX2`/`float4`
+- Constantes de route : `HW_ROUTE_L1` (`1`), `HW_ROUTE_L2` (`2`), `HW_ROUTE_L3` (`3`), `HW_ROUTE_RAM_STREAM` (`4`), `HW_ROUTE_GPU` (`5`), et d'affinité thread `HW_PIN_AUTO` (`0`), `HW_PIN_LOGICAL` (`1`), `HW_PIN_PHYSICAL` (`2`).
+- Constantes de cohérence `HwBuf` : `HW_BUF_HOST_DIRTY` (`1`), `HW_BUF_DEV_DIRTY` (`2`), `HW_BUF_IN_VRAM` (`4`), plus `hw_buf_is_vram(buf: ptr) -> i64`.
+- Helpers `.vx` : `hw_route_name(route: i64) -> str`, `hw_plan_matrix_route(m, n, k, elem_bytes) -> i64`, `hw_summary_line() -> str`.
+- Builtins natifs `src/hw.c` : détection `CPUID` + `GetLogicalProcessorInformationEx` + `OpenCL.dll`, **buffers résidents RAM/VRAM `HwBuf`** (`hw_buf_from_f32`/`f64`, `hw_matmul_f32_buf`/`f64_buf`, `hw_axpy_f32_buf`, `hw_relu_f32_buf`, `hw_buf_sync_host`, libérés automatiquement par `scope_pop()`), **routeur adaptatif « Waze » EMA** (coût PCIe uniquement si `host_dirty`, déviation auto vers CPU si congestion GPU, `hw_router_stats`), **cache binaire disque OpenCL** (`%LOCALAPPDATA%\Vortex\ocl_cache` / `~/.cache/vortex/ocl_cache`, `hw_gpu_cache_hits`), BLIS `AVX2+FMA3` et noyau GPU **`64×64` *register-blocked* `4×4` `float4`**.
+
 ---
 
 ## 6. OUTILS & COMPILATION
 
-### 6.1 Commandes CLI exactes (`vortex --help`, `Vortex v1.2.0`)
+### 6.1 Commandes CLI exactes (`vortex --help`, `Vortex v1.3.0`)
 
 | Commande | Rôle |
 | :--- | :--- |
@@ -809,7 +781,7 @@ Modules absents (**NON SUPPORTÉS** dans `std/`) : il n'existe pas de `std/colle
   - `vortex pkg list` : liste les dépendances.
   - `vortex pkg cache-dir` : affiche le répertoire cache.
   - `vortex pkg run` / `vortex pkg build` : exécute ou compile le point d'entrée du projet défini dans `vortex.toml`.
-- **Méta-commandes du REPL (`src/main.c`)** : `:help`, `:vars`, `:structs`, `:time <code|expr>`, `:run <fichier.vx>`, `:cls` / `:clear`, `:reset`, `:exit` / `:quit`.
+- **Méta-commandes du REPL (`src/main.c`)** : `:help`, `:vars`, `:structs`, `:enums`, `:mode [safe|release|ultrasafe 1|2|3]`, `:time <code|expr>`, `:run <fichier.vx>`, `:cls` / `:clear`, `:reset`, `:exit` / `:quit`.
 
 ### 6.2 Guide de lecture des erreurs et codes diagnostics Vortex
 
@@ -842,19 +814,18 @@ Chaque erreur affiche la catégorie suivie du message, du fichier et de la posit
 | Retour sans valeur | `return;` dans une `fn` | `fn f() -> i64 { return 0; }` *(toute instruction `return` exige une expression)* |
 | Précédence `&` / `^` / `\|` vs `==` | `if flags & 4 != 0 { ... }` *(évalué `flags & (4 != 0)`)* | `if (flags & 4) != 0 { ... }` *(toujours parenthéser autour des comparaisons)* |
 | Incrément/décrément `++`/`--` | `i++; count--;` | `i += 1; count -= 1;` *(affectations composées `+=`..`>>=` supportées, pas `++`/`--`)* |
-| Arithmétique mixte `i64` / `f32` | `let t = us / 1000000.0; let x: f32 = 0;` | `let t = (us as f32) / 1000000.0; let x: f32 = 0.0;` *(zéro cast implicite)* |
-| Annotation `string` / `tuple` | `let s: string = "a"; let t = (1, 2);` | `let s: str = "a";` (`bool`, `i8`..`u64`, `usize`, `isize`, `char`, `enum` sont supportés) |
-| Littéraux de tableau vide `[]` ou taille fixe `[T; N]` | `let a: [i32; 4] = [];` | `let a = [1, 2, 3, 4];` ou `slice_i32(4)` |
+| Arithmétique mixte `i64` / `f32` / `f64` | `let t = us / 1000000.0; let x: f32 = 0;` | `let t: f64 = (us as f64) / 1000000.0; let x: f32 = 0.0;` *(zéro cast implicite entier -> flottant)* |
+| Annotation `string` / `tuple` | `let s: string = "a"; let t = (1, 2);` | `let s: str = "a";` (`bool`, `i8`..`u64`, `usize`, `isize`, `char`, `f64`, `enum` sont supportés) |
+| Littéraux de tableau vide `[]` ou taille fixe `[T; N]` | `let a: [i32; 4] = [];` | `let a = [1, 2, 3, 4];` ou `slice_i32(4)` / `slice_f64(4)` |
 | `enum` à payload / `union` | `enum Msg { Move(i64, i64) }` | `enum MsgKind { Move = 1 }` (`i64`) + `struct Msg { kind: MsgKind, ... }` |
 | Méthodes `impl` / OOP | `impl Chunk { fn get(&self) ... }` / `chunk.get()` | Fonctions libres : `fn chunk_get(c: Chunk, ...) -> i32` |
-| Écriture dans sous-slice de struct | `chunk.blocks[i] = 1 as i32;` | Passer `chunk.blocks` à une `fn set_b(b: [i32], i: i64)` ou utiliser `let b = chunk.blocks;` en `unsafe` |
-| Indexer directement un slice extrait d'une `struct` | `let b: [i32] = chunk.blocks; b[i] = 1 as i32;` | Passer `chunk.blocks` à une `fn set_b(b: [i32], i: i64)` (ou bloc `unsafe`) |
+| Extraction locale d'un slice de `struct` | `let b: [i32] = chunk.blocks; b[i] = 1 as i32;` | Écrire directement `chunk.blocks[i] = 1 as i32;` ou passer `chunk.blocks` à `fn set_b(b: [i32], i: i64)` |
 | Comparaison / affichage de `str` | `if a == "ping" { print(a); }` | `if str_eq(a, "ping") == 1 { print_str(a); print_str("\n"); }` |
 | Littéral chaîne > 4095 octets | Chaîne littérale géante > 4095 octets | Découper et assembler avec `str_concat` / `str_join` |
-| Closures et capture mutable en `parallel_for` | `parallel_for i in 0..n { total += 1; }` | Écrire dans des indices disjoints d'un `[i64]` / `[f32]` puis réduire séquentiellement |
+| Closures et capture mutable en `parallel_for` | `parallel_for i in 0..n { total += 1; }` | Écrire dans des indices disjoints d'un `[i64]` / `[f32]` / `[f64]` puis réduire séquentiellement |
 | FFI ou pointeurs hors `unsafe` | Appeler `Sleep(10);` ou `alloc(64)` directement | Encapsuler dans `unsafe { Sleep(10); }` ou `unsafe fn ...` |
 | Retourner une allocation d'un bloc `scope_push()` | `let m = scope_push(); let s = slice_i32(8); scope_pop(m); return s;` | Ne placer `scope_push`/`scope_pop` qu'autour des temporaires, jamais autour d'une valeur retournée |
-| Trigo `math_sin` vs `sinf_rad` | Passer des radians `f32` à `math_sin` | `math_sin(deg_x10)` / `math_cos(deg_x10)` sont en dixièmes de degré `i64` (Q12) ; utiliser `sinf_rad(rad)` / `cosf_rad(rad)` / `sqrtf_val(x)` pour `f32` |
+| Trigo `math_sin` vs `sinf_rad` / `sin_f64` | Passer des radians `f32`/`f64` à `math_sin` | `math_sin(deg_x10)` / `math_cos(deg_x10)` sont en dixièmes de degré `i64` (Q12) ; utiliser `sinf_rad`/`cosf_rad`/`sqrtf_val` pour `f32` et `sin_f64`/`cos_f64`/`sqrt_f64` pour `f64` |
 | Visibilité et suffixes | `pub fn foo()`, `42u64`, `1.0f` | `fn foo()`, `42 as u64`, `1.0` *(mais `1_000_000`, `0b1010`, `0o755`, `1e-5` et `'a'` sont supportés)* |
 
 ---
@@ -1069,7 +1040,7 @@ fn run_example2() -> i64 {
         exit(1);
     }
 
-    // Extraction obligatoire du pointeur sous-struct (pas d'écriture res.chunk.dirty =)
+    // Extraction de la struct depuis le wrapper résultat
     let chk: VoxelChunk = res.chunk;
     let e1 = chunk_set_block(chk, 4, 5, 6, 3);
     let e2 = chunk_set_block(chk, 4, 5, 7, 2);

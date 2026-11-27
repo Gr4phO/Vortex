@@ -1055,6 +1055,12 @@ void vortex_parallel_for_dispatch(void* fn_ptr, void* ctx, int64_t start, int64_
 int64_t vortex_num_workers(void);
 int64_t vortex_hw_set_worker_pinning(int64_t mode);
 void vortex_thread_pool_set_worker_mask(int worker_id, uint64_t mask);
+void arena_get_scope_info(void** out_arena, uint32_t* out_depth, uint64_t* out_epoch);
+void vortex_hw_init_cpu_only(void);
+int64_t vortex_hw_get_phys_cores(void);
+uint64_t vortex_hw_get_core_mask(int core_idx);
+void vortex_hw_release_scope(void* arena_ptr, uint32_t target_depth);
+void vortex_hw_release_all_bufs(void);
 int64_t vortex_hw_init(void);
 int64_t vortex_hw_print_map(void);
 int64_t vortex_hw_cpu_name(void);
@@ -1076,6 +1082,18 @@ int64_t vortex_hw_matmul_f32_cpu(int64_t a_ptr, int64_t b_ptr, int64_t c_ptr, in
 double vortex_hw_dot_f64(int64_t a_ptr, int64_t b_ptr, int64_t n);
 int64_t vortex_hw_axpy_f64(int64_t alpha_bits, int64_t x_ptr, int64_t y_ptr, int64_t n);
 int64_t vortex_hw_axpy_f32(int64_t alpha_bits, int64_t x_ptr, int64_t y_ptr, int64_t n);
+int64_t vortex_hw_buf_from_f32(int64_t slice_ptr, int64_t n);
+int64_t vortex_hw_buf_from_f64(int64_t slice_ptr, int64_t n);
+int64_t vortex_hw_buf_sync_host(int64_t buf_handle);
+int64_t vortex_hw_buf_mark_host_dirty(int64_t buf_handle);
+int64_t vortex_hw_buf_state(int64_t buf_handle);
+int64_t vortex_hw_buf_free(int64_t buf_handle);
+int64_t vortex_hw_matmul_f32_buf(int64_t a_buf, int64_t b_buf, int64_t c_buf, int64_t m, int64_t n, int64_t k);
+int64_t vortex_hw_matmul_f64_buf(int64_t a_buf, int64_t b_buf, int64_t c_buf, int64_t m, int64_t n, int64_t k);
+int64_t vortex_hw_axpy_f32_buf(int64_t alpha_bits, int64_t x_buf, int64_t y_buf, int64_t n);
+int64_t vortex_hw_relu_f32_buf(int64_t x_buf, int64_t n);
+int64_t vortex_hw_router_stats(void);
+int64_t vortex_hw_gpu_cache_hits(void);
 BuiltinFunc* builtin_find(const char* name);
 
 extern bool g_is_packaged_app;

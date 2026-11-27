@@ -456,20 +456,25 @@ def build_breakdown_chart(data):
 
 
 def build_silicon_chart(data):
-    W, H = 1240, 560
+    W, H = 1240, 640
     sil = data["silicon"]
     cpu = sil.get("cpu_name", "AMD Ryzen 5 5500")
     gpu = sil.get("gpu_name", "gfx1031")
     img = create_card_canvas(
         W, H,
-        "Acceleration Silicium Optionnelle — import \"std/hw\" (CPU AVX2 BLIS & GPU OpenCL)",
-        f"{cpu} (AVX2+FMA3, L1=32K · L2=512K · L3=16M) + {gpu} (20 CU OpenCL) · Separe du benchmark pur",
-        badge_text="std/hw · SILICON",
+        "Acceleration Silicium Optionnelle — import \"std/hw\" (CPU AVX2 BLIS & GPU HwBuf)",
+        f"{cpu} (AVX2+FMA3, L1=32K · L2=512K · L3=16M) + {gpu} (20 CU OpenCL, HwBuf VRAM + Cache) · Separe du benchmark pur",
+        badge_text="std/hw · SILICON v2",
     )
 
     f64_naive_gf = round(0.268435456 / (sil["vx_scalar_f64_512_ms"] / 1000.0), 2)
     f64_vx_sp = round(sil["vx_scalar_f64_512_ms"] / sil["vx_hw_f64_512_ms"], 1)
     f64_c_sp = round(sil["c_f64_512_ms"] / sil["vx_hw_f64_512_ms"], 1)
+    res_ms = sil.get("vx_hw_f32_gpu_resident_ms", sil["vx_hw_f32_gpu_1024_ms"])
+    res_gf = sil.get("vx_hw_f32_gpu_resident_gflops", sil["vx_hw_f32_gpu_gflops"])
+    pipe_ms = sil.get("vx_hw_f32_pipeline_ms", 0.0)
+    cache_hits = sil.get("vx_hw_gpu_cache_hits", 0)
+
     left_rows = [
         ("Vortex Auto-Vec AVX2 (1T)", f"{sil['vx_scalar_f64_512_ms']:.2f} ms · boucle i-k-j sans FMA", f64_naive_gf, (82, 98, 122, 235), False),
         ("C (Clang -O3 Auto-Vec 1T)", f"{sil['c_f64_512_ms']:.2f} ms · boucle i-k-j stricte", sil["c_f64_512_gflops"], (59, 130, 246, 235), False),
@@ -478,17 +483,18 @@ def build_silicon_chart(data):
     right_rows = [
         ("C (Clang -O3 Auto-Vec 1T)", f"{sil['c_f32_1024_ms']:.2f} ms · boucle i-k-j stricte", sil["c_f32_1024_gflops"], (59, 130, 246, 235), False),
         ("Vortex std/hw CPU (AVX2 6C)", f"{sil['vx_hw_f32_cpu_1024_ms']:.2f} ms · BLIS 4x16 + FMA3", sil["vx_hw_f32_cpu_gflops"], (99, 102, 241, 240), False),
-        (f"Vortex std/hw GPU ({gpu})", f"{sil['vx_hw_f32_gpu_1024_ms']:.2f} ms · OpenCL + PCIe H2D/D2H", sil["vx_hw_f32_gpu_gflops"], None, True),
+        (f"Vortex std/hw GPU (PCIe H2D+D2H)", f"{sil['vx_hw_f32_gpu_1024_ms']:.2f} ms · 64x64 float4 + transferts PCIe", sil["vx_hw_f32_gpu_gflops"], (56, 189, 248, 240), False),
+        (f"Vortex std/hw VRAM (HwBuf 4x4)", f"{res_ms:.3f} ms · resident VRAM 64x64 float4 (err 0.0)", res_gf, None, True),
     ]
 
     panels = [
-        ("GEMM Double Precision f64 — 512 x 512 x 512 (Plus haut = meilleur)", left_rows, 30),
-        ("GEMM Simple Precision f32 — 1024 x 1024 x 1024 (Plus haut = meilleur)", right_rows, 634),
+        ("GEMM Double Precision f64 — 512 x 512 x 512 (Plus haut = meilleur)", left_rows, 30, 108, 68),
+        ("GEMM Simple Precision f32 — 1024 x 1024 x 1024 (Plus haut = meilleur)", right_rows, 634, 90, 58),
     ]
 
-    pw, ph = 576, 360
-    py0 = 112
-    for title, rows, px0 in panels:
+    pw, ph = 576, 438
+    py0 = 108
+    for title, rows, px0, step_y, start_off in panels:
         img = rounded_rect(
             img,
             [px(px0), px(py0), px(px0 + pw), px(py0 + ph)],
@@ -498,52 +504,52 @@ def build_silicon_chart(data):
             width=px(1),
         )
         img = blend_layer(img, lambda d, t=title, x=px0: (
-            d.text((px(x + 20), px(py0 + 16)), t, font=FONTS["h2"], fill=(248, 250, 252, 255)),
-            d.line([px(x + 20), px(py0 + 46), px(x + pw - 20), px(py0 + 46)], fill=(148, 163, 184, 42), width=px(1)),
+            d.text((px(x + 20), px(py0 + 14)), t, font=FONTS["h2"], fill=(248, 250, 252, 255)),
+            d.line([px(x + 20), px(py0 + 44), px(x + pw - 20), px(py0 + 44)], fill=(148, 163, 184, 42), width=px(1)),
         ))
 
-        gmax = max(r[2] for r in rows) * 1.15
-        ry = py0 + 68
+        gmax = max(r[2] for r in rows) * 1.12
+        ry = py0 + start_off
         for label, sub, gf, col, hi in rows:
             if hi:
                 img = rounded_rect(
                     img,
-                    [px(px0 + 14), px(ry - 8), px(px0 + pw - 14), px(ry + 78)],
+                    [px(px0 + 14), px(ry - 6), px(px0 + pw - 14), px(ry + 73)],
                     radius=px(10),
                     fill=(16, 185, 129, 34),
                     outline=(52, 211, 153, 145),
                     width=px(1.3),
                 )
             bx0 = px(px0 + 24)
-            bw_max = px(390)
-            img = rounded_rect(img, [bx0, px(ry + 44), bx0 + bw_max, px(ry + 64)], radius=px(6), fill=(26, 36, 56, 200))
+            bw_max = px(380)
+            img = rounded_rect(img, [bx0, px(ry + 42), bx0 + bw_max, px(ry + 61)], radius=px(6), fill=(26, 36, 56, 200))
             fw = max(px(8), int(bw_max * (gf / gmax)))
             if hi:
-                img = gradient_bar(img, bx0, px(ry + 44), fw, px(20), (79, 70, 229, 255), (16, 185, 129, 255), radius=6)
+                img = gradient_bar(img, bx0, px(ry + 42), fw, px(19), (79, 70, 229, 255), (16, 185, 129, 255), radius=6)
             else:
-                img = rounded_rect(img, [bx0, px(ry + 44), bx0 + fw, px(ry + 64)], radius=px(6), fill=col)
+                img = rounded_rect(img, [bx0, px(ry + 42), bx0 + fw, px(ry + 61)], radius=px(6), fill=col)
 
-            gf_txt = f"{gf:6.2f} GFLOP/s"
+            gf_txt = f"{gf:7.2f} GFLOP/s"
             img = blend_layer(img, lambda d, l=label, s=sub, gt=gf_txt, h=hi, r=ry, x=px0: (
                 d.text((px(x + 24), px(r)), l, font=FONTS["label"], fill=(255, 255, 255, 255) if h else (226, 232, 240, 245)),
                 d.text((px(x + 24), px(r + 20)), s, font=FONTS["label_sm"], fill=(167, 243, 208, 215) if h else (148, 163, 184, 225)),
-                d.text((bx0 + bw_max + px(14), px(r + 46)), gt, font=FONTS["mono_b"], fill=(110, 231, 183, 255) if h else (226, 232, 240, 245)),
+                d.text((bx0 + bw_max + px(12), px(r + 43)), gt, font=FONTS["mono_b"], fill=(110, 231, 183, 255) if h else (226, 232, 240, 245)),
             ))
-            ry += 96
+            ry += step_y
 
     img = rounded_rect(
         img,
-        [px(30), px(492), px(W - 30), px(528)],
+        [px(30), px(564), px(W - 30), px(606)],
         radius=px(8),
         fill=(15, 23, 42, 215),
         outline=(148, 163, 184, 48),
         width=px(1),
     )
     fnote = (
-        f"Noyaux natifs opt-in via import \"std/hw\": hw_matmul_f64 = {f64_vx_sp}x vs Vortex 1T ({f64_c_sp}x vs C -O3 1T) | "
-        f"GPU OpenCL {gpu} = {sil['vx_hw_f32_gpu_gflops']} GFLOP/s f32 (erreur 0.0)"
+        f"std/hw opt-in: f64 BLIS = {f64_vx_sp}x vs Vortex 1T ({f64_c_sp}x vs C -O3) | "
+        f"GPU VRAM HwBuf = {res_gf / 1000.0:.2f} TFLOP/s | MatMul+AXPY+ReLU+sync = {pipe_ms:.2f} ms | OCL Cache hits={cache_hits}"
     )
-    img = blend_layer(img, lambda d: d.text((px(44), px(503)), fnote, font=FONTS["mono_sm"], fill=(148, 163, 184, 235)))
+    img = blend_layer(img, lambda d: d.text((px(44), px(577)), fnote, font=FONTS["mono_sm"], fill=(148, 163, 184, 235)))
 
     out = ASSETS_DIR / "bench_silicon_hw.png"
     img.resize((W, H), Image.Resampling.LANCZOS).save(out, "PNG")

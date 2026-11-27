@@ -123,6 +123,14 @@ def run_silicon_suite(vortex_bin, cc):
         hw_out["vx_hw_f32_gpu_gflops"] = round(2.147483648 / (float(m["VX_HW_F32_GPU_1024_US"]) / 1e6), 2)
         hw_out["vx_hw_f32_gpu_route"] = int(m["VX_HW_F32_GPU_ROUTE"])
         hw_out["vx_hw_f32_err"] = float(m["VX_HW_F32_ERR"])
+        if "VX_HW_F32_GPU_RESIDENT_US" in m:
+            res_us = float(m["VX_HW_F32_GPU_RESIDENT_US"])
+            hw_out["vx_hw_f32_gpu_resident_ms"] = round(res_us / 1000.0, 3)
+            hw_out["vx_hw_f32_gpu_resident_gflops"] = round(2.147483648 / (res_us / 1e6), 2)
+        if "VX_HW_F32_PIPELINE_US" in m:
+            hw_out["vx_hw_f32_pipeline_ms"] = round(float(m["VX_HW_F32_PIPELINE_US"]) / 1000.0, 2)
+        if "VX_HW_GPU_CACHE_HITS" in m:
+            hw_out["vx_hw_gpu_cache_hits"] = int(m["VX_HW_GPU_CACHE_HITS"])
 
     if cc:
         ext = ".exe" if os.name == "nt" else ""
