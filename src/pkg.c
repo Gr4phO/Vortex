@@ -1089,13 +1089,13 @@ static void pkg_print_usage(void) {
     printf("Vortex Package Manager (vortex pkg)\n\n");
     printf("SUBCOMMANDS:\n");
     printf("  vortex pkg init [name]                     Create vortex.toml & src/main.vx\n");
-    printf("  vortex pkg add <name> <path|git> [--rev r] Add dependency and lock SHA-256\n");
+    printf("  vortex pkg add <name> [--path] <src> [--rev r] Add dependency and lock SHA-256\n");
     printf("  vortex pkg install                         Install & verify deps from lock/manifest\n");
     printf("  vortex pkg update                          Re-resolve deps and update vortex.lock\n");
     printf("  vortex pkg verify                          Verify vortex.lock SHA-256 hashes\n");
     printf("  vortex pkg list                            List dependencies in manifest/lock\n");
     printf("  vortex pkg cache-dir                       Print global package cache path\n");
-    printf("  vortex pkg run [--safe|--release]          Verify lock and run manifest entry\n");
+    printf("  vortex pkg run [--safe|--ultrasafe N|--release] Verify lock and run manifest entry\n");
     printf("  vortex pkg build [build flags]             Verify lock and build standalone entry\n");
 }
 

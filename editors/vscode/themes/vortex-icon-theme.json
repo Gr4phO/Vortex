@@ -1,0 +1,13 @@
+{
+  "iconDefinitions": {
+    "vortex_file": {
+      "iconPath": "../icon.png"
+    }
+  },
+  "fileExtensions": {
+    "vx": "vortex_file"
+  },
+  "languageIds": {
+    "vortex": "vortex_file"
+  }
+}

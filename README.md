@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/vortex_logo.png" alt="Vortex Logo" width="140" />
+</p>
+
 # Vortex Programming Language
 
 **Langage système et de calcul haute performance compilé à la volée (JIT `x86-64` AVX2 & `ARM64` NEON)** — *zéro garbage collector, arènes paginées à régions statiques, FFI C dynamique et compilation en binaire autonome.*
@@ -82,7 +86,7 @@ Banc d'essai [`benchmarks/suite_10_langs/`](benchmarks/suite_10_langs/) exécut�
 
 - **Mémoire sûre (`--safe` par défaut)** : contrôle d'époques sur les arènes (`VORTEX_SAFE_MAGIC`) avec fast-path sur l'arène active du thread, déduplication des bornes par bloc de base, vérification de bornes dynamique avec trace d'appels (`stacktrace`), garde-fous `unsafe` pour les pointeurs bruts/appels `extern fn` et rejet des pointeurs de fonction `NULL` dans `ffi_call0..6`.
 - **Mode performance (`--release`)** : élimination des contrôles prouvés sûrs (RCE/LICM), contrôle de bornes rapide inline avec *cold traps*, allocations compactes/zero-copy sans `memset` redondant, inlining (`<= 40` instructions IR), `omit_fp` et noyaux vectoriels AVX2/FMA3.
-- **Limites actuelles du compilateur ([`src/vortex.h`](src/vortex.h))** : types scalaires de base centrés sur `i64`, `i32`, `f32`, `str`, `ptr` et `enum` (`i64`) ; `MAX_FIELDS = 64` par `struct`, `MAX_CALL_ARGS = 16` par appel, `MAX_STRUCT_TYPES = 1024`, `MAX_ENUM_TYPES = 256` (`128` variantes max), `MAX_SYMBOLS = 1024` par portée/fonction, `MAX_USER_FUNCS = 8192`, `MAX_DYN_LIBS = 256`, `MAX_FFI_FUNCS = 2048`, littéraux chaînes jusqu'à `4095` octets, `MAX_JIT_CODE_SIZE = 16 MiB`, `MAX_IR_INSTRS = 262 144` instructions par fonction, et réductions `f32` vectorisées réassociatives sur les boucles `IR_VEC_LOOP`.
+- **Limites actuelles du compilateur ([`src/vortex.h`](src/vortex.h))** : types scalaires natifs (`i64`, `i32`, `i16`, `i8`, `u64`, `u32`, `u16`, `u8`, `usize`, `isize`, `bool`, `char`, `f32`, `ptr`, `str`, `enum`), `MAX_FIELDS = 64` par `struct`, `MAX_CALL_ARGS = 16` par appel, `MAX_STRUCT_TYPES = 1024`, `MAX_ENUM_TYPES = 256` (`128` variantes max), `MAX_SYMBOLS = 1024` par portée/fonction, `MAX_USER_FUNCS = 8192`, `MAX_DYN_LIBS = 256`, `MAX_FFI_FUNCS = 2048`, littéraux chaînes jusqu'à `4095` octets, `MAX_JIT_CODE_SIZE = 16 MiB`, `MAX_IR_INSTRS = 262 144` instructions par fonction, et réductions `f32` vectorisées réassociatives sur les boucles `IR_VEC_LOOP`.
 
 ### Modes `--ultrasafe 1 / 2 / 3` (cumulatifs, au-dessus de `--safe`)
 
@@ -113,7 +117,7 @@ make release    # Binaire LTO strippé
 make shared     # Bibliothèque partagée libvortex.so / libvortex.dylib
 ```
 
-### Utilisation CLI & Outils AI-Friendly (`v1.1.5`)
+### Utilisation CLI & Outils AI-Friendly (`v1.2.0`)
 
 ```sh
 ./vortex                                                 # REPL interactif
@@ -126,30 +130,39 @@ make shared     # Bibliothèque partagée libvortex.so / libvortex.dylib
 ./vortex spec [--json]                                   # Spécification auto-générée depuis le compilateur
 ./vortex eval "let mut x = 21; x *= 2; print(x);"
 ./vortex build examples/app_3d.vx -o app_3d.exe          # Binaire autonome (Windows / Linux / macOS)
+./vortex fmt [--check|--stdout] script.vx                # Formateur de code natif
 ./vortex lsp                                             # Serveur LSP (JSON-RPC)
 ```
 
-### Ergonomie & Syntaxe (`v1.1.5`)
+### Ergonomie & Syntaxe (`v1.2.0`)
 
-- **Opérateurs logiques & bit-à-bit** : court-circuit `&&` et `||`, `!`, `&`, `|`, `^`, `~`, `<<`, `>>` *(attention : `==`/`!=`/`<`/`>` sont plus prioritaires que `&`/`^`/`|`, parenthéser `(x & mask) == 0`)*
-- **Affectations composées** : `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` sur variables `mut`, champs de `struct` et slices
-- **Contrôle de flux & Types** : `break`, `continue`, `true`, `false` (`i64`), `enum Nom { A, B = 10, C }` (`Nom::B` / `Nom.B`), commentaires `/* ... */`, chaînes littérales jusqu'à **4095 octets**
-- **Assertions & trigonométrie flottante natives** : `assert(cond)`, `assert_eq(a, b)`, `sinf_rad(rad)`, `cosf_rad(rad)`, `sqrtf_val(x)` (72 builtins au total)
+- **Types & littéraux** : annotations `bool`, `i8`/`u8`, `i16`/`u16`, `i32`/`u32`, `i64`/`u64`, `usize`/`isize`, `char`, `<Enum>` ; séparateurs `1_000_000`, binaire `0b1010`, octal `0o755`, scientifique `1.5e-3`, littéraux caractère `'A'`/`'\n'`, chaînes littérales jusqu'à **4095 octets**
+- **Constantes globales & indexation chaînée** : `const MAX = 16;` (expressions constantes évaluées à la compilation, visibles dans toutes les fonctions et `match`), accès et écriture chaînés `obj.arr[i]`, `a.b.arr[i] += v`, `mat[i][j]` et `arr[i].champ`
+- **Opérateurs & expressions** : court-circuit `&&`/`||`/`!`, bit-à-bit `& | ^ ~ << >>`, ternaire `cond ? a : b`, littéraux de tableau `[10, 20, 30]`, écriture chaînée sur sous-structs `world.player.pos.x += 1.0;` *(attention : `==`/`!=`/`<`/`>` sont plus prioritaires que `&`/`^`/`|`, parenthéser `(x & mask) == 0`)*
+- **Contrôle de flux & affectations composées** : `match x { 1 | 2 => ..., _ => ... }`, `break`, `continue`, `enum Nom { A, B = 10, C }` (`Nom::B` / `Nom.B`), `+=`..`>>=`, `/* ... */`
+- **Builtins & formatage natif** : `assert(cond)`, `assert_eq(a, b)`, `sinf_rad`, `cosf_rad`, `tanf_rad`..`atan2f_rad`, `fs_*`, `args_*`, `env_*`, `unix_now_ms`, `sleep_ms` (`91` builtins au total) et formateur `vortex fmt`
 
-### Transparence Benchmarks & Limites Connues
+### Transparence Benchmarks & Reproductibilité
 
+- Banc d'essai reproductible multi-OS : exécuter [`benchmarks/suite_10_langs/run_benchmarks.py`](benchmarks/suite_10_langs/run_benchmarks.py) (Windows / Linux / macOS, Python 3 stdlib) pour reproduire et comparer localement sur votre propre CPU/OS.
 - `--safe` (et `--ultrasafe 1/2/3` qui reposent dessus) conserve intentionnellement les vérifications d'indices/pointeurs à l'exécution ainsi que les frames d'appel non-inlinées pour des stacktraces exactes (`--safe` profite tout de même du constant folding, propagation de copies, LICM constante et DCE). `--release` active l'élimination des bornes (`RCE`), l'inlining, le déroulage et la vectorisation AVX2/NEON (`~214 ms` vs `~1702 ms` en `--safe` sur `bench_vortex.vx`).
-- **Types & plafonds compilateur** : scalaires natifs centrés sur `i64`, `i32`, `f32`, `str`, `ptr` et `enum` (`i64`) ; jusqu'à `64` champs par `struct`, `1024` structs, `256` enums et `8192` fonctions utilisateur ([`src/vortex.h`](src/vortex.h)).
+- **Types & plafonds compilateur** : `bool`, entiers (`i8`..`i64`, `u8`..`u64`, `usize`/`isize`, `char`), `f32`, `str`, `ptr` et `enum` ; jusqu'à `64` champs par `struct`, `1024` structs, `256` enums et `8192` fonctions utilisateur ([`src/vortex.h`](src/vortex.h)).
 
 ### Suite de tests automatisés
 
 ```bat
-tests\run_tests.bat   :: Windows (unitaires, ergonomics, opt_regression, 16 sécurité, 7 ARM64, 9 outillage & stdlib, ultrasafe 1/2/3)
+tests\run_tests.bat   :: Windows (16 suites : unitaires, ergonomics, opt_regression, stdlib v1.2, lang/fmt v1.2, 16 sécurité, 7 ARM64, 9 outillage & stdlib, 10 ultrasafe 1/2/3 + fmt)
 ```
 
 ```sh
 ./tests/run_tests.sh  # Linux / macOS (dispatch FFI POSIX/Darwin automatique)
 ```
+
+### Extension VS Code (`Gr4phO.vortex-systems` `1.2.0`)
+
+- **Exécution en 1 clic** : bouton **▶ Run Vortex File in Terminal** dans la barre d'onglet + sous-menu (`--release`, `--ultrasafe 1`, `--ultrasafe 2`, `--ultrasafe 3`, `--ultrasafe 3 --check`, `vortex test`, `vortex build`, `REPL`).
+- **LSP & coloration syntaxique** : serveur `vortex lsp` branché sur `--ultrasafe 3` (multi-erreurs + warnings en direct), formatage natif (`vortex fmt` / `textDocument/formatting`), définition, survol, complétion et coloration complète (`const`, `match`, `enum`, `bool`, `u8..usize`, `/* */`, `'a'`, `0b`/`0o`/`1e-5`).
+- **Installation** : via le [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=Gr4phO.vortex-systems), les paquets `.vsix` joints aux [GitHub Releases](https://github.com/Gr4phO/Vortex/releases/latest), ou depuis [`editors/vscode/`](editors/vscode/README.md).
 
 ---
 
@@ -157,9 +170,10 @@ tests\run_tests.bat   :: Windows (unitaires, ergonomics, opt_regression, 16 séc
 
 ```text
 .
-├── .github/workflows/   # CI (ci.yml), release multi-OS (release.yml) & SemVer auto (auto-version.yml)
+├── .github/             # CI (ci.yml), release multi-OS + .vsix (release.yml), SemVer auto & ISSUE_TEMPLATE/
 ├── src/                 # Compilateur C99 modulaire (~20 500 lignes) : lexer, modules, parser_expr/stmt, ir_core/ir_opt/ir_vec_ra, jit_x64/jit_x64_simd/ffi/jit_arm64, lsp, pkg, arena, gui, packager, runtime
-├── std/                 # Bibliothèque standard modulaire (.vx : net, http, json, crypto, db, gpu)
+├── std/                 # Bibliothèque standard modulaire (.vx : net, http, json, crypto, db, gpu, fs, math, str, env)
+├── editors/vscode/      # Extension VS Code officielle (bouton ▶ Run, LSP client & grammaire .vx)
 ├── benchmarks/          # Banc d'essai suite_10_langs/ & rapport BENCHMARK_REPORT_v1.0.0.md
 ├── docs/                # Spécification (VORTEX_SPEC.md), roadmap & graphiques SVG (assets/)
 ├── examples/            # Démonstrations 3D et GUI natives (.vx)

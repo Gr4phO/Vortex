@@ -388,7 +388,12 @@ static bool ir_is_allocator_fn(void* fn_ptr) {
            fn_ptr == (void*)vortex_str_concat ||
            fn_ptr == (void*)vortex_str_sub ||
            fn_ptr == (void*)vortex_str_from_i64 ||
-           fn_ptr == (void*)vortex_str_from_f32;
+           fn_ptr == (void*)vortex_str_from_f32 ||
+           fn_ptr == (void*)vortex_str_from_byte ||
+           fn_ptr == (void*)vortex_str_join ||
+           fn_ptr == (void*)vortex_fs_read ||
+           fn_ptr == (void*)vortex_env_get ||
+           fn_ptr == (void*)vortex_args_get;
 }
 
 void ir_region_verify(IRBuffer* ir) {

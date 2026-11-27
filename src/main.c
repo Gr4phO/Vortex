@@ -69,40 +69,57 @@ static void print_version(void) {
     printf("Targets : x86_64-windows, x86_64-linux, x86_64-darwin, arm64-linux, arm64-darwin\n");
 }
 
+static const char* current_safety_mode_label(void) {
+    static char mode_buf[32];
+    if (g_compile_mode == VORTEX_MODE_RELEASE) return "--release";
+    if (g_ultrasafe_level >= 1) {
+        snprintf(mode_buf, sizeof(mode_buf), "--ultrasafe %d", g_ultrasafe_level);
+        return mode_buf;
+    }
+    return "--safe";
+}
+
 static void print_usage(const char* exe_name) {
     printf("========================================================================\n");
     print_version();
     printf("========================================================================\n\n");
     printf("USAGE:\n");
-    printf("  %s                          Open interactive Vortex REPL terminal\n", exe_name);
-    printf("  %s repl | -i                Open interactive Vortex REPL terminal\n", exe_name);
-    printf("  %s [flags] <script.vx>      JIT-compile and run a Vortex file\n", exe_name);
-    printf("  %s run [flags] <script.vx>  JIT-compile and run a Vortex file\n", exe_name);
-    printf("  %s eval [flags] \"<code>\"    JIT-compile and evaluate inline code\n", exe_name);
-    printf("  %s build [flags] <in.vx> [-o out] Package standalone executable\n", exe_name);
-    printf("  %s --version | -v           Display version and architecture info\n", exe_name);
-    printf("  %s --help | -h              Display this help message\n", exe_name);
-    printf("  %s pkg <subcmd>             Package manager (init, add, install, verify, run, build)\n", exe_name);
-    printf("  %s lsp                      Start Language Server Protocol (JSON-RPC over stdio)\n", exe_name);
-    printf("  %s test [path] [--json]     Run native Vortex unit tests (assert / assert_eq / test_*)\n", exe_name);
-    printf("  %s spec [--json]            Emit live compiler specification (Markdown or JSON)\n\n", exe_name);
-    printf("FLAGS / MODES:\n");
-    printf("  --safe             (Default) Bounds, arena epoch & FFI boundary validation\n");
-    printf("  --ultrasafe <1|2|3> Strict safety & static checks (1: runtime div0 + warnings,\n");
-    printf("                     2: static audits + recursion guard, 3: multi-error recovery)\n");
-    printf("  --check            Type/region/safety-check script without running JIT code\n");
-    printf("  --json             Emit structured JSON diagnostics / test / spec output\n");
-    printf("  --error-format=json Alias for --json\n");
-    printf("  --release          Range check elimination / LICM + max SIMD throughput\n");
-    printf("  --headless         Disable GUI/X11 window creation (or set VORTEX_HEADLESS=1)\n");
-    printf("  --target <triple>  Target ABI/arch (x86_64-windows, x86_64-linux, arm64-linux, arm64-darwin)\n");
-    printf("  --dump-jit <file>  Write raw JIT machine code bytes to <file>\n");
-    printf("  --dump-debug <f>   Write DWARF v4 ELF debug symbols to <f>\n\n");
+    printf("  %s [flags]                  Open interactive Vortex REPL terminal\n", exe_name);
+    printf("  %s <script.vx>              JIT-compile and run a Vortex file\n", exe_name);
+    printf("  %s <command> [options]      Run a Vortex CLI subcommand\n\n", exe_name);
+    printf("COMMANDS:\n");
+    printf("  repl | -i                   Open interactive Vortex REPL terminal\n");
+    printf("  run [flags] <script.vx>     JIT-compile and run a Vortex file\n");
+    printf("  eval [flags] \"<code>\"       JIT-compile and evaluate inline Vortex code\n");
+    printf("  build [flags] <in.vx> [-o out]  Package standalone executable\n");
+    printf("  test [path] [flags]         Run native unit tests (assert / assert_eq / test_*)\n");
+    printf("  fmt [--check|--stdout] <f>  Format Vortex (.vx) source files natively\n");
+    printf("  spec [--json]               Emit live compiler specification (Markdown or JSON)\n");
+    printf("  pkg <subcmd>                Package manager (init, add, install, update, verify, run, build)\n");
+    printf("  lsp                         Start Language Server Protocol (JSON-RPC over stdio)\n");
+    printf("  help | --help | -h          Display this help reference\n");
+    printf("  version | --version | -v    Display version, SIMD, and target architecture info\n\n");
+    printf("SAFETY & DIAGNOSTIC FLAGS:\n");
+    printf("  --safe                      (Default) Bounds, null-ptr, arena epoch & FFI checks\n");
+    printf("  --ultrasafe <1|2|3>         Cumulative strict safety & static audits (--ultrasafe = 3):\n");
+    printf("                              1: runtime div/0 panic + hygiene warnings (W101..W104)\n");
+    printf("                              2: static checks (E201..E204, W105) + recursion guard (2048)\n");
+    printf("                              3: multi-error recovery (E001, E101, E301, E302) in 1 pass\n");
+    printf("  --check                     Validate syntax/regions/safety without running JIT code\n");
+    printf("  --json | --error-format=json  Emit structured JSON diagnostics / test / spec output\n");
+    printf("  --release                   Max optimization (inlining, RCE, LICM, AVX2/NEON SIMD)\n\n");
+    printf("BUILD & RUNTIME FLAGS:\n");
+    printf("  --headless                  Disable GUI/X11 window creation (or VORTEX_HEADLESS=1)\n");
+    printf("  --target <triple>           Cross-target ABI (x86_64-windows, x86_64-linux,\n");
+    printf("                              x86_64-darwin, arm64-linux, arm64-darwin)\n");
+    printf("  --dump-jit <file>           Write raw JIT machine code bytes to <file>\n");
+    printf("  --dump-debug <file>         Write DWARF v4 ELF debug symbols to <file>\n\n");
     printf("EXAMPLES:\n");
-    printf("  %s run examples/app_3d.vx\n", exe_name);
-    printf("  %s eval \"let x = 21; print(x * 2);\"\n", exe_name);
-    printf("  %s build examples/app_3d.vx -o app_3d.exe\n", exe_name);
-    printf("  %s build benchmarks/benchmark.vx --release --target arm64-darwin -o bench_arm64\n\n", exe_name);
+    printf("  %s run --release benchmarks/suite_10_langs/bench_vortex.vx\n", exe_name);
+    printf("  %s --ultrasafe 3 --check --json script.vx\n", exe_name);
+    printf("  %s test tests/ --ultrasafe 2\n", exe_name);
+    printf("  %s eval \"let xs = [10, 20, 22]; print(xs[0] + xs[2]);\"\n", exe_name);
+    printf("  %s build examples/app_3d.vx -o app_3d.exe\n\n", exe_name);
 }
 
 static bool has_top_level_assign(const char* s) {
@@ -166,6 +183,24 @@ static void repl_print_structs(void) {
     printf("---------------------------\n\n");
 }
 
+static void repl_print_enums(void) {
+    if (g_enum_type_count == 0) {
+        printf("[VORTEX] No enums defined in current session.\n");
+        return;
+    }
+    printf("\n--- DEFINED ENUMS (%d) ---\n", g_enum_type_count);
+    for (int i = 0; i < g_enum_type_count; i++) {
+        VortexEnumType* en = &g_enum_types[i];
+        printf("  enum %s { ", en->name);
+        for (int v = 0; v < en->variant_count; v++) {
+            printf("%s=%lld%s", en->variants[v].name, (long long)en->variants[v].value,
+                   (v + 1 < en->variant_count) ? ", " : "");
+        }
+        printf(" }\n");
+    }
+    printf("--------------------------\n\n");
+}
+
 static bool repl_eval_snippet(const char* snippet, char* session_code, size_t session_cap, bool* out_persisted) {
     size_t len = strlen(snippet);
     char to_eval[65536];
@@ -173,6 +208,7 @@ static bool repl_eval_snippet(const char* snippet, char* session_code, size_t se
                     strncmp(snippet, "fn ", 3) == 0 ||
                     strncmp(snippet, "unsafe fn ", 10) == 0 ||
                     strncmp(snippet, "struct ", 7) == 0 ||
+                    strncmp(snippet, "enum ", 5) == 0 ||
                     strncmp(snippet, "extern ", 7) == 0);
     bool is_stmt = (is_decl ||
                     strncmp(snippet, "unsafe", 6) == 0 ||
@@ -180,6 +216,7 @@ static bool repl_eval_snippet(const char* snippet, char* session_code, size_t se
                     strncmp(snippet, "for ", 4) == 0 ||
                     strncmp(snippet, "parallel_for ", 13) == 0 ||
                     strncmp(snippet, "while ", 6) == 0 ||
+                    strncmp(snippet, "match ", 6) == 0 ||
                     strncmp(snippet, "if ", 3) == 0 ||
                     has_top_level_assign(snippet));
 
@@ -222,15 +259,21 @@ static bool repl_eval_snippet(const char* snippet, char* session_code, size_t se
 static void vortex_repl(void) {
     char session_code[65536] = {0};
     char line_buf[2048];
+    const VortexTargetDesc* td = vortex_get_target_desc();
+    const VortexJITBackend* bk = vortex_get_backend();
+    const char* simd_str = (td->simd_caps & VORTEX_SIMD_AVX2) ? "AVX2"
+                         : ((td->simd_caps & VORTEX_SIMD_NEON) ? "NEON" : "Scalar");
 
     printf("\n========================================================================\n");
-    printf("   __     ______  ___ _____ ___  __  __\n");
-    printf("  / /    / __/ / / _ \\_   _/ _ \\ \\ \\/ /\n");
-    printf(" / /__  / _// /_/ // // / / // /  \\  /\n");
-    printf("/____/ /___/____/____//_/ /____/  /_/    v%s\n\n", VORTEX_VERSION);
-    printf(" Vortex Programming Language - Interactive x86-64 AVX2 JIT Terminal\n");
-    printf(" 2MB Paged Arena | Linear-Scan IR | AVX2 Vectorizer | Dynamic C FFI\n");
-    printf(" Commands: ':help', ':vars', ':structs', ':time <code|expr>', ':exit'\n");
+    printf("  __     __  ___   ____  _____ _____ __  __\n");
+    printf("  \\ \\   / / / _ \\ |  _ \\|_   _| ____|\\ \\/ /\n");
+    printf("   \\ \\ / / | | | || |_) | | | |  _|   \\  /\n");
+    printf("    \\ V /  | |_| ||  _ <  | | | |___  /  \\\n");
+    printf("     \\_/    \\___/ |_| \\_\\ |_| |_____|/_/\\_\\   v%s\n\n", VORTEX_VERSION);
+    printf("  Vortex JIT (%s %s) | Target: %s | Mode: %s\n",
+           bk->backend_name, simd_str, td->name, current_safety_mode_label());
+    printf("  2MB Paged Arena | Zero-GC | Linear-Scan IR | Dynamic C FFI\n");
+    printf("  Commands: ':help', ':mode', ':vars', ':structs', ':enums', ':exit'\n");
     printf("========================================================================\n\n");
 
     g_in_repl = true;
@@ -277,34 +320,74 @@ static void vortex_repl(void) {
             continue;
         }
 
+        if (strcmp(trimmed, ":enums") == 0) {
+            repl_print_enums();
+            continue;
+        }
+
+        if (strncmp(trimmed, ":mode", 5) == 0 && (trimmed[5] == '\0' || trimmed[5] == ' ')) {
+            const char* m = trimmed + 5;
+            while (*m == ' ') m++;
+            if (*m == '\0') {
+                printf("[VORTEX] Active mode: %s\n", current_safety_mode_label());
+            } else if (strcmp(m, "safe") == 0) {
+                g_compile_mode = VORTEX_MODE_SAFE;
+                g_ultrasafe_level = 0;
+                printf("[VORTEX] Switched to --safe\n");
+            } else if (strcmp(m, "release") == 0) {
+                g_compile_mode = VORTEX_MODE_RELEASE;
+                g_ultrasafe_level = 0;
+                printf("[VORTEX] Switched to --release\n");
+            } else if (strcmp(m, "ultrasafe") == 0 || strcmp(m, "ultrasafe3") == 0 || strcmp(m, "ultrasafe 3") == 0) {
+                g_compile_mode = VORTEX_MODE_SAFE;
+                g_ultrasafe_level = 3;
+                printf("[VORTEX] Switched to --ultrasafe 3\n");
+            } else if (strcmp(m, "ultrasafe2") == 0 || strcmp(m, "ultrasafe 2") == 0) {
+                g_compile_mode = VORTEX_MODE_SAFE;
+                g_ultrasafe_level = 2;
+                printf("[VORTEX] Switched to --ultrasafe 2\n");
+            } else if (strcmp(m, "ultrasafe1") == 0 || strcmp(m, "ultrasafe 1") == 0) {
+                g_compile_mode = VORTEX_MODE_SAFE;
+                g_ultrasafe_level = 1;
+                printf("[VORTEX] Switched to --ultrasafe 1\n");
+            } else {
+                printf("[VORTEX] Usage: :mode [safe|release|ultrasafe1|ultrasafe2|ultrasafe3]\n");
+            }
+            continue;
+        }
+
         if (strcmp(trimmed, ":reset") == 0) {
             session_code[0] = '\0';
             g_struct_type_count = 0;
+            g_enum_type_count = 0;
             g_ffi_func_count = 0;
             g_has_last_symtab = false;
             g_last_symtab.count = 0;
             arena_init();
-            printf("[VORTEX] Session state, structs, FFI bindings, and arena reset.\n");
+            printf("[VORTEX] Session state, structs, enums, FFI bindings, and arena reset.\n");
             continue;
         }
 
-        if (strcmp(trimmed, ":help") == 0) {
-            printf("\n--- VORTEX REPL COMMANDS ---\n");
-            printf("  :help               Show this command reference\n");
+        if (strcmp(trimmed, ":help") == 0 || strcmp(trimmed, "help") == 0) {
+            printf("\n--- VORTEX REPL COMMANDS (mode: %s) ---\n", current_safety_mode_label());
+            printf("  :help | help        Show this command reference\n");
+            printf("  :mode [name]        Show/switch mode (safe, release, ultrasafe1..3)\n");
             printf("  :vars               List active variables and inferred types\n");
             printf("  :structs            Inspect registered structs, sizes, and field offsets\n");
+            printf("  :enums              Inspect registered enums and variant values\n");
             printf("  :time <code/expr>   Measure JIT compile + execution time in us/ms\n");
             printf("  :run <file.vx>      Execute a Vortex script from disk\n");
             printf("  :cls / :clear       Clear terminal screen\n");
-            printf("  :reset              Clear session variables, structs, FFI, and arena\n");
+            printf("  :reset              Clear session variables, structs, enums, FFI, and arena\n");
             printf("  :exit / :quit       Exit the Vortex terminal\n\n");
             printf("Quick examples:\n");
-            printf("  vortex> 10 + 25\n");
-            printf("  vortex> let mut x = 40; x = x + 2; x\n");
+            printf("  vortex> let mut x = 1_000; x += 24; x > 500 ? x : 0\n");
+            printf("  vortex> let xs = [10, 20, 30]; slice_len(xs)\n");
+            printf("  vortex> enum Role { Guest, Admin = 10 } Role::Admin\n");
             printf("  vortex> struct Vec3 { x: f32, y: f32, z: f32 }\n");
-            printf("  vortex> fn fib(n) { if n <= 1 { return n; } return fib(n-1) + fib(n-2); }\n");
-            printf("  vortex> :time fib(30)\n");
-            printf("----------------------------\n\n");
+            printf("  vortex> match 2 { 1 | 2 => print_str(\"ok\\n\"), _ => print(0) }\n");
+            printf("  vortex> :time 2 + 2\n");
+            printf("---------------------------------------------------\n\n");
             continue;
         }
 
@@ -339,6 +422,7 @@ static void vortex_repl(void) {
 
 int main(int argc, char** argv) {
     g_pkg_import_hook = pkg_resolve_import;
+    vortex_set_program_args(argc, argv);
     if (check_and_run_embedded_payload(argc, argv)) {
         return 0;
     }
@@ -415,6 +499,7 @@ int main(int argc, char** argv) {
         }
     }
     filtered_argv[filtered_argc] = NULL;
+    vortex_set_program_args(filtered_argc, filtered_argv);
 
     if (filtered_argc == 1) {
         vortex_repl();
@@ -426,11 +511,11 @@ int main(int argc, char** argv) {
         vortex_repl();
         return 0;
     }
-    if (strcmp(arg1, "--help") == 0 || strcmp(arg1, "-h") == 0) {
+    if (strcmp(arg1, "help") == 0 || strcmp(arg1, "--help") == 0 || strcmp(arg1, "-h") == 0) {
         print_usage(filtered_argv[0]);
         return 0;
     }
-    if (strcmp(arg1, "--version") == 0 || strcmp(arg1, "-v") == 0) {
+    if (strcmp(arg1, "version") == 0 || strcmp(arg1, "--version") == 0 || strcmp(arg1, "-v") == 0) {
         print_version();
         return 0;
     }
@@ -445,6 +530,9 @@ int main(int argc, char** argv) {
     }
     if (strcmp(arg1, "test") == 0) {
         return vortex_cmd_test(filtered_argc, filtered_argv);
+    }
+    if (strcmp(arg1, "fmt") == 0) {
+        return vortex_cmd_fmt(filtered_argc, filtered_argv);
     }
     if (strcmp(arg1, "spec") == 0) {
         return vortex_cmd_spec(filtered_argc, filtered_argv);

@@ -96,7 +96,7 @@ try {
     Send-Lsp @{ jsonrpc = "2.0"; method = "initialized"; params = @{} }
 
     $uri = "file:///C:/temp/lsp_probe.vx"
-    $src = "struct Vec2 { x: f32, y: f32 }`nfn add_x(v: Vec2, dx: f32) -> f32 { return v.x + dx; }`nlet p = Vec2 { x: 1.0, y: 2.0 };`nlet s = add_x(p, 3.0);`n"
+    $src = "struct Vec2 { x: f32, y: f32 }`nfn add_x(v: Vec2, dx: f32) -> f32 { return v.x + dx; }`nlet p = Vec2 { x: 1.0, y: 2.0 };`nlet s = add_x(p, 3.0);`nprint(s);`n"
 
     # 2. didOpen clean -> empty diagnostics
     $stage = "didOpen"
@@ -139,7 +139,7 @@ try {
     $null = Recv-Lsp
     Send-Lsp @{
         jsonrpc = "2.0"; id = 4; method = "textDocument/completion"
-        params = @{ textDocument = @{ uri = $uri }; position = @{ line = 4; character = 10 } }
+        params = @{ textDocument = @{ uri = $uri }; position = @{ line = 5; character = 10 } }
     }
     $r4 = Recv-Lsp
     $labels = @($r4.result.items | ForEach-Object { $_.label })
@@ -147,9 +147,9 @@ try {
         throw "Dot completion missing Vec2 fields: $($labels -join ',')"
     }
 
-    # 6. didChange introducing unsafe violation -> non-empty diagnostic
+    # 6. didChange introducing unsafe violation -> error diagnostic on line 1
     $stage = "didChange_bad"
-    $badSrc = "let k = 1;`nlet bad = 1 as *i64;`n"
+    $badSrc = "let _k = 1;`nlet _bad = 1 as *i64;`n"
     Send-Lsp @{
         jsonrpc = "2.0"; method = "textDocument/didChange"
         params = @{
@@ -160,6 +160,23 @@ try {
     $d2 = Recv-Lsp
     if ($d2.params.diagnostics.Count -lt 1) { throw "Expected safety error diagnostic" }
     if ($d2.params.diagnostics[0].range.start.line -ne 1) { throw "Expected error on line 1, got $($d2.params.diagnostics[0].range.start.line)" }
+
+    # 6b. didChange with multiple errors + warning under ultrasafe 3 -> all reported in line order
+    $stage = "didChange_multi"
+    $multiSrc = "fn f1() -> ptr { return alloc(16); }`nfn f2() -> i64 {`n    let unused_v = 7;`n    let g = nope_fn(1);`n    return g;`n}`nfn f3() -> i64 { let a = [1, 2]; return a[9]; }`nprint(f3());`nprint(f2());`nprint(f1());`n"
+    Send-Lsp @{
+        jsonrpc = "2.0"; method = "textDocument/didChange"
+        params = @{
+            textDocument = @{ uri = $uri; version = 4 }
+            contentChanges = @(@{ text = $multiSrc })
+        }
+    }
+    $d3 = Recv-Lsp
+    if ($d3.params.diagnostics.Count -lt 4) { throw "Expected >=4 multi-error+warning diagnostics, got $($d3.params.diagnostics.Count)" }
+    $codes = @($d3.params.diagnostics | ForEach-Object { $_.code })
+    foreach ($req in @("E302", "W104", "E101", "E202")) {
+        if ($codes -notcontains $req) { throw "Missing $req in LSP diagnostics: $($codes -join ',')" }
+    }
 
     # 7. shutdown + exit
     $stage = "shutdown"

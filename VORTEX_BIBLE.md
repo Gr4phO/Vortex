@@ -1,6 +1,6 @@
 # VORTEX_BIBLE.md — Référence Technique Exhaustive du Langage Vortex
 
-> **Public cible** : Document de référence unique destiné aux agents IA chargés d'écrire un moteur de jeu 3D voxel et un serveur multijoueur haute performance en Vortex (`v1.1.5`).  
+> **Public cible** : Document de référence unique destiné aux agents IA chargés d'écrire un moteur de jeu 3D voxel et un serveur multijoueur haute performance en Vortex (`v1.2.0`).  
 > **Périmètre vérifié** : Toutes les règles, limites, syntaxes, fonctions intégrées et comportements ci-dessous ont été vérifiés directement dans le code source C99 du compilateur/runtime (`src/*.c`, `src/vortex.h`, ~20 500 lignes), de la bibliothèque standard (`std/*.vx`) et du binaire compilateur (`vortex.exe`, `vortex spec`). Toute fonctionnalité absente de ces sources est explicitement marquée **NON SUPPORTÉ**.
 
 ---
@@ -123,22 +123,23 @@ fn os_tag() -> str {
   - Multi-ligne : `/* commentaire sur une ou plusieurs lignes */` (non imbriqués).
 - **BOM UTF-8** : automatiquement ignoré s'il est présent au début du fichier (ainsi que dans le serveur LSP).
 - **Identifiants** : `[A-Za-z_][A-Za-z0-9_]*`. Les noms de symboles, champs, fonctions, `struct` et `enum` sont stockés dans des tampons de **64 octets** (`char name[64]`, soit **63 caractères** significatifs max).
-- **Mots-clés réservés exacts du lexer** (`22` jetons dédiés dans `src/lexer.c`) :  
-  `let`, `mut`, `for`, `parallel_for`, `in`, `while`, `if`, `else`, `fn`, `return`, `struct`, `enum`, `extern`, `unsafe`, `as`, `import`, `break`, `continue`, `true`, `false`, `i64`, `f32`.  
-  *(Les noms de types `i32`, `f64`, `ptr`, `str`, `void`, `str?`, `ptr?` sont analysés contextuellement comme spécificateurs de type.)*
-- **Littéraux booléens** : `true` (vaut `1` de type `i64`) et `false` (vaut `0` de type `i64`).
-- **Littéraux entiers (`i64`)** :
-  - Décimaux (`0`, `42`, `4096`) ou hexadécimaux (`0xFF`, `0X1A2B`).
-  - Séparateurs numériques `1_000`, notation binaire `0b1010`, notation octale `0o755`, suffixes de type (`42u64`, `42i32`, `42L`) : **NON SUPPORTÉ**.
+- **Mots-clés réservés exacts du lexer** (`24` jetons dédiés dans `src/lexer.c`) :  
+  `let`, `mut`, `const`, `for`, `parallel_for`, `in`, `while`, `if`, `else`, `fn`, `return`, `struct`, `enum`, `match`, `extern`, `unsafe`, `as`, `import`, `break`, `continue`, `true`, `false`, `i64`, `f32`.  
+  *(Les noms de types `bool`, `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `u64`, `usize`, `isize`, `char`, `f64`, `ptr`, `str`, `void`, `str?`, `ptr?` et `<Enum>` sont analysés contextuellement comme spécificateurs de type.)*
+- **Littéraux booléens** : `true` (`1`) et `false` (`0`).
+- **Littéraux entiers (`i64`) et caractère** :
+  - Décimaux (`0`, `42`, `1_000_000`), hexadécimaux (`0xFF_00`), binaires (`0b1010_0101`), octaux (`0o755`). Les séparateurs `_` sont supportés dans tous les littéraux numériques.
+  - Littéraux caractère `'A'`, `'\n'`, `'\t'`, `'\r'`, `'\0'`, `'\\'`, `'\''` (évalués en code ASCII `i64`).
+  - Suffixes de type collés (`42u64`, `42i32`, `42L`) : **NON SUPPORTÉ** (utiliser `42 as u32`).
 - **Littéraux flottants (`f32`)** :
-  - Doivent comporter des chiffres avant et après le point décimal (`0.0`, `3.14159`). Le lexer s'arrête avant `..` afin de ne pas casser les intervalles `0..10`.
-  - Forme sans zéro initial (`.5`), sans décimale (`1.`), notation scientifique (`1e-5`, `2.5E3`), suffixe (`1.0f`) : **NON SUPPORTÉ**.
+  - Décimaux avec point (`0.0`, `3.141_59`) et notation scientifique (`1e-5`, `2.5E+3`, `1.5e2`). Le lexer s'arrête avant `..` afin de ne pas casser les intervalles `0..10`.
+  - Forme sans zéro initial (`.5`), sans décimale (`1.`), suffixe (`1.0f`) : **NON SUPPORTÉ**.
 - **Littéraux chaînes (`str`)** :
   - Délimités par guillemets doubles `"..."`.
   - Séquences d'échappement supportées : `\n`, `\t`, `\r`, `\0`, `\\`, `\"`.
   - **LIMITE (`Token.text[4096]`)** : chaque littéral chaîne individuel peut contenir jusqu'à **4095 octets** (`MAX_LITERAL_STRINGS = 16384` littéraux par programme). Pour assembler des chaînes dynamiques encore plus longues, utiliser `str_concat(a, b)` ou `str_join(vec, sep)`.
-  - Interpolation (`"${x}"`), raw strings (`r"..."`), littéraux caractère (`'A'`) : **NON SUPPORTÉ**.
-- **Points-virgules** : obligatoires après `import`, `extern`, `let`, `return`, `break`, `continue` (tolérés optionnellement après `break`/`continue`/`}` d'`enum`), appels utilisés comme instructions, affectations et `scope_pop(...)`. Interdits après les blocs `{ ... }` de `fn`, `struct`, `if`, `else`, `for`, `while`, `unsafe`.
+  - Interpolation (`"${x}"`), raw strings (`r"..."`) : **NON SUPPORTÉ**.
+- **Points-virgules** : obligatoires après `import`, `extern`, `let`, `return`, `break`, `continue` (optionnels après `break`/`continue`/`}` d'`enum`/`match`), appels utilisés comme instructions, affectations et `scope_pop(...)`. Interdits après les blocs `{ ... }` de `fn`, `struct`, `if`, `else`, `for`, `while`, `unsafe`, `match`.
 
 ### 2.2 Variables, constantes, mutabilité et portée (`scoping`)
 
@@ -161,17 +162,16 @@ dt = 0.016;
 
 #### Constantes et visibilité globale
 
-- Mots-clés `const`, `static`, `constexpr`, `#define` : **NON SUPPORTÉ**.
-- **PORTÉE ISOLÉE DES FONCTIONS** : `parse_function_def` crée une table des symboles vierge (`SymbolTable`) ne contenant que les paramètres de la fonction. **Une fonction `fn` ne peut PAS lire les variables `let` déclarées au niveau racine.**
-- **Pattern officiel pour les constantes globales** : déclarer des fonctions sans paramètre retournant la constante (automatiquement inlinées en `--release` si le corps comporte 40 instructions IR ou moins) :
+- **`const` globales (`MAX_CONSTS = 1024`) : SUPPORTÉ** (`const NOM [: Type] = <expr_constante>;`). Les constantes sont évaluées à la compilation (littéraux `i64`, `f32`, `str`, `enum` ainsi qu'expressions arithmétiques et unaires constantes) et sont visibles dans toutes les fonctions `fn` ainsi que dans les motifs `match`.
+- Mots-clés `static`, `constexpr`, `#define` : **NON SUPPORTÉ**.
+- **PORTÉE ISOLÉE DES VARIABLES `let`** : `parse_function_def` crée une table des symboles vierge (`SymbolTable`) ne contenant que les paramètres de la fonction et l'accès aux constantes `const` / `enum`. **Une fonction `fn` ne peut PAS lire les variables `let` déclarées au niveau racine.**
 
 ```vortex
-fn CHUNK_W() -> i64 { return 16; }
-fn CHUNK_VOL() -> i64 { return 4096; }
+const CHUNK_W = 16;
+const CHUNK_VOL: i64 = CHUNK_W * CHUNK_W * CHUNK_W;
 
 fn voxel_offset(x: i64, y: i64, z: i64) -> i64 {
-    let w = CHUNK_W();
-    return y * 256 + z * w + x;
+    return y * 256 + z * CHUNK_W + x;
 }
 ```
 
@@ -187,8 +187,8 @@ fn voxel_offset(x: i64, y: i64, z: i64) -> i64 {
 
 | Type Vortex | Représentation interne | Taille | Alignement `struct` | Usage et remarques |
 | :--- | :--- | :--- | :--- | :--- |
-| `i64` | Entier signé 64 bits | 8 octets | 8 octets | Type entier principal (boucles, indexation, booléens `0`/`1` ou `false`/`true`, valeurs d'`enum`, tailles) |
-| `i32` | Entier signé 32 bits | 4 octets | 4 octets | Champs compacts, voxels `[i32]`, FFI `int` / `int32_t` |
+| `i64` *(et alias `u64`, `usize`, `isize`, `bool`, `char`, `i8`, `u8`, `i16`, `u16`)* | Entier / booléen / caractère 64 bits | 8 octets | 8 octets | Type entier principal (arithmétique 64 bits signée, booléens `false`/`true`, valeurs d'`enum`, tailles) |
+| `i32` *(et alias `u32`)* | Entier 32 bits (`TYPE_I32`) | 4 octets | 4 octets | Champs compacts, voxels `[i32]`, FFI `int` / `int32_t` |
 | `f32` | Flottant IEEE 754 32 bits | 4 octets | 4 octets | Type flottant principal (physique, vecteurs 3D, SIMD AVX2 8 lanes) |
 | `f64` | Flottant 64 bits (`TYPE_F64`) | 8 octets | — | Reconnu dans les types FFI ; les expressions arithmétiques utilisent `f32` |
 | `str` | Pointeur chaîne C (`\0`) | 8 octets | 8 octets | Chaîne de caractères ; comparer avec `str_eq(a, b) == 1` |
@@ -198,9 +198,9 @@ fn voxel_offset(x: i64, y: i64, z: i64) -> i64 {
 | `*T` | Pointeur typé (`*i64`, `*i32`, `*f32`, `*Struct`) | 8 octets | — | Déréférencement / arithmétique FFI ; non reconnu directement en champ `struct` |
 | `[T]` | Slice d'arène (`[i64]`, `[i32]`, `[f32]`, `[Struct]`) | 8 octets | 8 octets | Tableau contigu alloué en arène avec longueur tracée par en-tête |
 | `NomStruct` | Référence vers `struct` en arène | 8 octets | 8 octets | Pointeur 64 bits vers la structure allouée en arène |
-| `NomEnum` | Constantes nommées `i64` | 8 octets | — | Utiliser `i64` dans les annotations de paramètres/champs/retours ; constantes accessibles via `NomEnum::Var` / `NomEnum.Var` |
+| `NomEnum` | Constantes nommées `i64` | 8 octets | 8 octets | Utilisable directement comme type (`role: NomEnum`) ; variantes via `NomEnum::Var` / `NomEnum.Var` |
 
-Types **NON SUPPORTÉS** : `bool` (en tant qu'annotation de type — utiliser `i64` avec `true`/`false`), `i8`, `i16`, `u8`, `u16`, `u32`, `u64`, `usize`, `isize`, `char`, `string`, tuples `(A, B)`, pointeurs de fonction `fn(...) -> ...` en tant que variable.
+Types **NON SUPPORTÉS** : `string` (utiliser `str`), tuples `(A, B)`, génériques `<T>`, pointeurs de fonction `fn(...) -> ...` en tant que variable. *(Note : les alias `i8`/`u8`/`i16`/`u16`/`u64`/`bool`/`char` sont stockés en registres 64 bits et `u32` en 32 bits sans troncature automatique sur débordement non signé).*
 
 #### Règles de conversion (`as`) — CRITIQUES
 
@@ -252,12 +252,7 @@ let p = Vec3 { x: 1.0, y: 64.0, z: -2.0 };
 let e = Entity(101, p, 20 as i32, 1 as i32);
 ```
 
-- **Règle d'écriture sur sous-structure** : la lecture chaînée `e.pos.x` fonctionne, mais **l'écriture chaînée `e.pos.x = 2.0;` est rejetée par le parser** (`try_parse_ident_stmt` ne supporte que `ident.champ = ...;` et `arr[i].champ = ...;`, y compris avec les affectations composées `+=`, `-=`, etc.). Extraire d'abord le sous-pointeur :
-
-```vortex
-let pos_ref: Vec3 = e.pos;
-pos_ref.x = 2.0;    // Modifie directement la Vec3 pointée en arène
-```
+- **Écriture chaînée sur sous-structure** : la lecture (`e.pos.x`) ET l'écriture chaînée (`world.player.pos.x = 2.0;` ou `world.player.pos.x += 1.0;`, jusqu'à 16 niveaux) sont **supportées**. *(Exception : l'écriture à 2 niveaux sur un élément de slice extrait dans un sous-champ reste à faire via variable locale ou helper `arr[i].champ = ...;`.)*
 
 - **Règle d'accès à un champ slice `[T]` d'une `struct`** : copier un champ slice dans un `let` local (`let a: [i32] = chunk.blocks; a[0]`) perd le suivi de slice et déclenche `[VORTEX SAFETY ERROR] Indexing untracked raw pointer requires an 'unsafe' block or 'unsafe fn'`. **Solution idiomatique sans `unsafe`** : passer `chunk.blocks` directement en argument à une fonction dont le paramètre est typé `[i32]` (voir Sections 3 et 8).
 - **Méthodes `impl` / `self` / `this`** : **NON SUPPORTÉ**. Utiliser des fonctions libres prenant la structure en premier argument : `fn entity_move(e: Entity, dx: f32) -> i64`.
@@ -285,7 +280,8 @@ if st == NetState.Connected {
 
 #### Tableaux fixes, littéraux de tableau, slices, vecteurs et maps
 
-- **Tableaux fixes `[T; N]` et littéraux `[1, 2, 3]`** : **NON SUPPORTÉ**.
+- **Tableaux fixes `[T; N]` et littéraux vides `[]`** : **NON SUPPORTÉ** *(utiliser `slice_i64(0)` / `slice_f32(0)`)*.
+- **Littéraux de tableau `[e0, e1, ...]` (jusqu'à 256 éléments)** : **SUPPORTÉ** ! Allouent automatiquement un slice d'arène typé selon le premier élément (`[10, 20, 30]` -> `[i64]`, `[1.5, 2.5]` -> `[f32]`, `[p1, p2]` -> `[Struct]`) avec `slice_len(...)` connu à la compilation pour `IR_BOUNDS_CHECK` et `E202`.
 - **Slices contigus d'arène (`[i64]`, `[i32]`, `[f32]`, `[Struct]`)** :
   - Allocation initialisée à zéro en arène :
     - `let a = slice_i64(n);` (éléments 8 octets)
@@ -294,7 +290,7 @@ if st == NetState.Connected {
   - Longueur maximale : `1000000000`.
   - Nombre d'éléments : `slice_len(s)` (retourne `i64`).
   - Lecture / écriture : `let v = s[i];` et `s[i] = v;`.
-  - **Indexation chaînée `mat[i][j]` ou `obj.arr[i]`** : **NON SUPPORTÉ**.
+  - **Indexation chaînée `obj.arr[i]`, `a.b.arr[i] += v`, `mat[i][j]` et `arr[i].champ`** : **SUPPORTÉ** (lecture, écriture et affectation composée).
 - **Vecteurs dynamiques (`VortexVec`, type `ptr`/`i64`)** :
   - `let v = vec_new();` (capacité initiale `8`, doublement automatique dans l'arène ; stocke des valeurs 64 bits : `i64`, `str`, `ptr`, `Struct`).
   - `vec_push(v, val);`
@@ -397,11 +393,24 @@ while true {
 }
 ```
 
+#### Filtrage par motifs (`match`)
+
+- **`match`** (`parse_match_stmt` dans `src/parser_stmt.c`) : **SUPPORTÉ** avec bras multi-motifs `p1 | p2 => ...` et joker `_ => ...` (bloc `{ ... }` ou instruction unique, virgule entre bras optionnelle).
+
+```vortex
+match role {
+    Role::Guest => print_str("guest\n"),
+    Role::Member | Role::Admin => {
+        print_str("privileged\n");
+    },
+    _ => print_str("unknown\n")
+}
+```
+
 #### Instructions absentes
 
-- `match` / `switch` / `case` / `default` : **NON SUPPORTÉ**. Utiliser des chaînes `if ... { ... } else if ... { ... }`.
-- Opérateur ternaire `cond ? a : b` : **NON SUPPORTÉ**.
 - `loop { ... }`, `do { ... } while (...)` : **NON SUPPORTÉ**.
+- **Opérateur ternaire `cond ? then_expr : else_expr`** : **SUPPORTÉ** (associatif à droite : `a ? b : c ? d : e`).
 
 ### 2.7 Opérateurs et précédence exacte (`src/parser_expr.c`, `src/parser_stmt.c`)
 
@@ -695,10 +704,10 @@ Toutes ces fonctions sont disponibles sans `import` :
    - `print_str(s: str)` : affiche `str` sans saut de ligne.
    - `exit(code: i64)` : quitte immédiatement le processus.
 
-### 5.4 Bibliothèque standard (`std/` — 6 modules disponibles)
+### 5.4 Bibliothèque standard (`std/` — 10 modules disponibles)
 
-Il n'existe actuellement **QUE 6 modules** dans `std/` : `net`, `http`, `json`, `crypto`, `db` et `gpu`.  
-Modules absents (**NON SUPPORTÉS** dans `std/`) : il n'existe pas de `std/fs` (accès fichiers), `std/math`, `std/str`, `std/collections`, `std/sync`, `std/thread`, ni `std/time`. Pour la trigonométrie flottante de base (`sinf_rad`, `cosf_rad`, `sqrtf_val`), utiliser les builtins intégrés ; pour l'E/S fichiers, d'autres fonctions `libm` (`atan2f`, `powf`) ou les threads/mutex OS, passer par `extern` C (`fopen`/`fread`/`fwrite`/`fclose`, etc.).
+Il existe **10 modules** dans `std/` : `net`, `http`, `json`, `crypto`, `db`, `gpu`, `fs`, `math`, `str` et `env` *(appuyés par **91 builtins** runtime)*.  
+Modules absents (**NON SUPPORTÉS** dans `std/`) : il n'existe pas de `std/collections`, `std/sync`, `std/thread`, ni `std/time` *(note : `unix_now_ms()` et `sleep_ms()` sont disponibles via `std/env`)*. Pour les threads/mutex OS, passer par `extern` C.
 
 #### 1. `std/net` (`import "std/net";`) — Sockets TCP non bloquants multi-OS (`ws2_32.dll` / `libc`)
 - `net_init() -> i64` *(initialise Winsock sous Windows ; retourne `0` ou `< 0`)*
@@ -741,11 +750,25 @@ Modules absents (**NON SUPPORTÉS** dans `std/`) : il n'existe pas de `std/fs` (
 - Structure : `GpuInfo { backend: str, driver_loaded: i64, device_count: i64, device_name: str, status: i64 }` (`backend` : `"vulkan"`, `"dx12"`, `"metal"`, ou `"cpu_simd"`).
 - Fonctions : `gpu_vulkan_available() -> i64`, `gpu_dx12_available() -> i64`, `gpu_metal_available() -> i64`, `gpu_probe() -> GpuInfo`, `gpu_compute_saxpy(y: [f32], a: f32, x: [f32], n: i64) -> i64` *(implémente `y[i] = a * x[i] + y[i]` via `parallel_for` CPU SIMD)*.
 
+#### 7. `std/fs` (`import "std/fs";`) — Systèmes de fichiers portables
+- Fonctions : `fs_read_text(path: str) -> str`, `fs_write_text(path: str, content: str) -> i64`, `fs_append_text(path: str, content: str) -> i64`, `fs_exists_path(path: str) -> i64`, `fs_remove_path(path: str) -> i64` *(wrappers portables autour des builtins `fs_read`, `fs_write`, `fs_append`, `fs_exists`, `fs_remove`)*.
+
+#### 8. `std/math` (`import "std/math";`) — Trigonométrie, fonctions mathématiques `f32` et utilitaires entiers
+- Constantes : `MATH_PI`, `MATH_TAU`, `MATH_E`.
+- Fonctions `f32` : `math_sin`, `math_cos`, `math_tan`, `math_sqrt`, `math_floor`, `math_ceil`, `math_abs`, `math_exp`, `math_log`, `math_pow`, `math_atan2`, `math_clamp_f32`, `math_lerp_f32` *(appuyées sur les builtins JIT `x86-64`/`ARM64` `sinf_rad`..`atan2f_rad`)*.
+- Fonctions `i64` : `math_min_i64`, `math_max_i64`, `math_abs_i64`, `math_clamp_i64`.
+
+#### 9. `std/str` (`import "std/str";`) — Utilitaires chaînes haut niveau
+- Fonctions : `str_is_empty(s: str) -> i64`, `str_starts_with(s: str, prefix: str) -> i64`, `str_ends_with(s: str, suffix: str) -> i64`, `str_trim(s: str) -> str`, `str_repeat(s: str, count: i64) -> str`, `str_pad_left(s: str, width: i64, fill: str) -> str`.
+
+#### 10. `std/env` (`import "std/env";`) — Arguments CLI, variables d'environnement et horloge
+- Fonctions : `env_argc() -> i64`, `env_argv(idx: i64) -> str`, `env_var(name: str) -> str`, `env_has_var(name: str) -> i64`, `env_var_or(name: str, fallback: str) -> str`, `env_now_ms() -> i64`, `env_sleep(ms: i64) -> i64` *(appuyées sur `args_count`, `args_get`, `env_get`, `env_has`, `unix_now_ms`, `sleep_ms`)*.
+
 ---
 
 ## 6. OUTILS & COMPILATION
 
-### 6.1 Commandes CLI exactes (`vortex --help`, `Vortex v1.1.5`)
+### 6.1 Commandes CLI exactes (`vortex --help`, `Vortex v1.2.0`)
 
 | Commande | Rôle |
 | :--- | :--- |
@@ -756,8 +779,9 @@ Modules absents (**NON SUPPORTÉS** dans `std/`) : il n'existe pas de `std/fs` (
 | `vortex build [drapeaux] <in.vx> [-o out]` | Empaquette un exécutable autonome (*standalone*) |
 | `vortex test [chemin] [--ultrasafe 1\|2\|3] [--json]` | Exécuteur natif de tests (`assert` / `assert_eq` / fonctions `test_*`) |
 | `vortex spec [--json]` | Émet la spécification live extraite directement du compilateur |
+| `vortex fmt [--check\|--stdout] <fichier.vx>` | Formate un fichier `.vx` en place (ou vérifie / affiche sur stdout) |
 | `vortex pkg <sous-commande>` | Gestionnaire de paquets (`vortex.toml` / `vortex.lock`) |
-| `vortex lsp` | Démarre le serveur Language Server Protocol (JSON-RPC sur stdio) |
+| `vortex lsp` | Démarre le serveur Language Server Protocol (JSON-RPC sur stdio : diagnostics `--ultrasafe 3` multi-erreurs + warnings, complétion, survol, définition et `textDocument/formatting`) |
 | `vortex --version` / `-v` | Affiche la version et l'architecture |
 | `vortex --help` / `-h` | Affiche l'aide CLI |
 
@@ -814,16 +838,16 @@ Chaque erreur affiche la catégorie suivie du message, du fichier et de la posit
 | Piège courant (Rust / C++ / Java / Python) | **NE PAS FAIRE EN VORTEX** (invalide ou piégeux) | **FAIRE EN VORTEX** (valide et idiomatique) |
 | :--- | :--- | :--- |
 | Point d'entrée automatique | `fn main() -> i64 { ... }` sans appel racine | Appeler `main();` au niveau racine, ou écrire le flux racine directement |
-| Constantes globales lues en fonction | `let N = 4096; fn f() -> i64 { return N; }` | `fn N() -> i64 { return 4096; }` ou `enum` *(les `fn` ont une portée isolée)* |
+| Constantes globales lues en fonction | `let N = 4096; fn f() -> i64 { return N; }` | `const N = 4096;` ou `enum` *(les `fn` isolées n'accèdent pas aux `let` racines)* |
 | Retour sans valeur | `return;` dans une `fn` | `fn f() -> i64 { return 0; }` *(toute instruction `return` exige une expression)* |
 | Précédence `&` / `^` / `\|` vs `==` | `if flags & 4 != 0 { ... }` *(évalué `flags & (4 != 0)`)* | `if (flags & 4) != 0 { ... }` *(toujours parenthéser autour des comparaisons)* |
 | Incrément/décrément `++`/`--` | `i++; count--;` | `i += 1; count -= 1;` *(affectations composées `+=`..`>>=` supportées, pas `++`/`--`)* |
 | Arithmétique mixte `i64` / `f32` | `let t = us / 1000000.0; let x: f32 = 0;` | `let t = (us as f32) / 1000000.0; let x: f32 = 0.0;` *(zéro cast implicite)* |
-| Annotation de type `bool` et `match`/`switch` | `let ok: bool = true; match state { 0 => ... }` | `let ok: i64 = true; if state == 0 { ... } else if state == 1 { ... }` |
-| Tableaux fixes / littéraux | `let a: [i32; 4] = [1, 2, 3, 4];` | `let a = slice_i32(4); a[0] = 1 as i32; ...` |
-| `enum` à payload / `union` | `enum Msg { Move(i64, i64) }` | `enum MsgKind { Move = 1 }` (`i64`) + `struct Msg { kind: i64, ... }` |
+| Annotation `string` / `tuple` | `let s: string = "a"; let t = (1, 2);` | `let s: str = "a";` (`bool`, `i8`..`u64`, `usize`, `isize`, `char`, `enum` sont supportés) |
+| Littéraux de tableau vide `[]` ou taille fixe `[T; N]` | `let a: [i32; 4] = [];` | `let a = [1, 2, 3, 4];` ou `slice_i32(4)` |
+| `enum` à payload / `union` | `enum Msg { Move(i64, i64) }` | `enum MsgKind { Move = 1 }` (`i64`) + `struct Msg { kind: MsgKind, ... }` |
 | Méthodes `impl` / OOP | `impl Chunk { fn get(&self) ... }` / `chunk.get()` | Fonctions libres : `fn chunk_get(c: Chunk, ...) -> i32` |
-| Mutation à 2 niveaux sur `struct` | `world.player.x = 10.0;` | `let pl: Player = world.player; pl.x = 10.0;` |
+| Écriture dans sous-slice de struct | `chunk.blocks[i] = 1 as i32;` | Passer `chunk.blocks` à une `fn set_b(b: [i32], i: i64)` ou utiliser `let b = chunk.blocks;` en `unsafe` |
 | Indexer directement un slice extrait d'une `struct` | `let b: [i32] = chunk.blocks; b[i] = 1 as i32;` | Passer `chunk.blocks` à une `fn set_b(b: [i32], i: i64)` (ou bloc `unsafe`) |
 | Comparaison / affichage de `str` | `if a == "ping" { print(a); }` | `if str_eq(a, "ping") == 1 { print_str(a); print_str("\n"); }` |
 | Littéral chaîne > 4095 octets | Chaîne littérale géante > 4095 octets | Découper et assembler avec `str_concat` / `str_join` |
@@ -831,7 +855,7 @@ Chaque erreur affiche la catégorie suivie du message, du fichier et de la posit
 | FFI ou pointeurs hors `unsafe` | Appeler `Sleep(10);` ou `alloc(64)` directement | Encapsuler dans `unsafe { Sleep(10); }` ou `unsafe fn ...` |
 | Retourner une allocation d'un bloc `scope_push()` | `let m = scope_push(); let s = slice_i32(8); scope_pop(m); return s;` | Ne placer `scope_push`/`scope_pop` qu'autour des temporaires, jamais autour d'une valeur retournée |
 | Trigo `math_sin` vs `sinf_rad` | Passer des radians `f32` à `math_sin` | `math_sin(deg_x10)` / `math_cos(deg_x10)` sont en dixièmes de degré `i64` (Q12) ; utiliser `sinf_rad(rad)` / `cosf_rad(rad)` / `sqrtf_val(x)` pour `f32` |
-| Visibilité et nombres | `pub fn foo()`, `1_000_000`, `1e-5`, `'a'` | `fn foo()`, `1000000`, `0.00001`, codes ASCII entiers ou `str_byte("a", 0)` |
+| Visibilité et suffixes | `pub fn foo()`, `42u64`, `1.0f` | `fn foo()`, `42 as u64`, `1.0` *(mais `1_000_000`, `0b1010`, `0o755`, `1e-5` et `'a'` sont supportés)* |
 
 ---
 

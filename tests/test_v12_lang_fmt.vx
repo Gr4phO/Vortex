@@ -1,0 +1,90 @@
+// Automated test for global const, chained indexing (obj.arr[i], mat[i][j]), and formatter parity
+
+enum Mode {
+    Fast = 10,
+    Accurate = 25
+}
+
+const MAX_ITEMS = 4;
+const SCALE: f32 = 2.5;
+const BANNER = "vortex_const_ok";
+const COMPUTED = (MAX_ITEMS * 3) + 2;
+const TARGET_MODE = Mode::Accurate;
+
+struct Bucket {
+    label: str,
+    scores: [i64],
+    weights: [f32]
+}
+
+struct Container {
+    main_bucket: Bucket,
+    buckets: [Bucket]
+}
+
+fn read_const_sum(mult: i64) -> i64 {
+    return MAX_ITEMS * mult + COMPUTED;
+}
+
+fn match_const(m: i64) -> i64 {
+    let mut out = 0;
+    match m {
+        TARGET_MODE => { out = 100; },
+        _ => { out = 0; }
+    }
+    return out;
+}
+
+fn test_global_const() -> i64 {
+    assert_eq(MAX_ITEMS, 4);
+    assert_eq(COMPUTED, 14);
+    assert_eq(read_const_sum(5), 34);
+    assert_eq(str_eq(BANNER, "vortex_const_ok"), 1);
+    assert_eq(match_const(25), 100);
+    let s: f32 = (MAX_ITEMS as f32) * SCALE;
+    assert(s > 9.9 && s < 10.1);
+    return 0;
+}
+
+fn test_chained_indexing() -> i64 {
+    let b0 = Bucket { label: "b0", scores: [10, 20, 30, 40], weights: [1.0, 2.0] };
+    let b1 = Bucket { label: "b1", scores: [5, 15, 25], weights: [0.5, 1.5] };
+    let bs = slice_i64(2);
+    unsafe {
+        let bs_p = bs as *Bucket;
+        bs_p[0] = b0;
+        bs_p[1] = b1;
+    }
+    let _b_used = bs;
+
+    let c = Container { main_bucket: b0, buckets: slice_i64(0) };
+    // obj.arr[i] read + write + compound assign
+    assert_eq(c.main_bucket.scores[1], 20);
+    c.main_bucket.scores[1] = 77;
+    c.main_bucket.scores[2] += 11;
+    assert_eq(c.main_bucket.scores[1], 77);
+    assert_eq(c.main_bucket.scores[2], 41);
+
+    c.main_bucket.weights[0] += 1.5;
+    assert(c.main_bucket.weights[0] > 2.4 && c.main_bucket.weights[0] < 2.6);
+
+    // 2D matrix mat[i][j] read + write + compound assign
+    let mat = slice_i64(2);
+    let row0 = [1, 2, 3];
+    let row1 = [4, 5, 6];
+    unsafe {
+        mat[0] = row0 as i64;
+        mat[1] = row1 as i64;
+    }
+    assert_eq(mat[0][2], 3);
+    assert_eq(mat[1][1], 5);
+    mat[0][2] = 99;
+    mat[1][1] += 40;
+    assert_eq(mat[0][2], 99);
+    assert_eq(mat[1][1], 45);
+    return 0;
+}
+
+test_global_const();
+test_chained_indexing();
+print_str("[PASS] test_v12_lang_fmt OK\n");

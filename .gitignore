@@ -17,12 +17,15 @@ dist/
 target/
 releases/
 
-# Official SVG benchmark assets
+# Official SVG benchmark assets & logos
 !docs/
 !docs/assets/
 !docs/assets/*.svg
+!docs/assets/*.png
+!docs/assets/*.ico
 
 # Temporary logs, backups, benchmark scratch, and IDE files
+*.res
 benchmarks/suite_10_langs/results_*.json
 *.log
 *.tmp
@@ -33,6 +36,8 @@ benchmarks/suite_10_langs/results_*.json
 .idea/
 .DS_Store
 Thumbs.db
+editors/vscode/node_modules/
+*.vsix
 
 # Local-only social media / release draft logs (never pushed to GitHub)
 SOCIAL_LOGS.local.md

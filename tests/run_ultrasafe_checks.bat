@@ -115,6 +115,156 @@ if !errorlevel! neq 0 (
 )
 echo   [PASS] vortex test and vortex spec --json succeeded!
 
-del "%TMP1%" "%TMPWARN%" "%TMP2%" "%TMP2REC%" "%TMP3%" "%TEMP%\vx_warn.json" "%TEMP%\vx_us2.out" "%TEMP%\vx_us3.json" "%TEMP%\vx_test.json" "%TEMP%\vx_spec.json" 2>nul
+REM 7) Sibling blocks + std/json import produce 0 errors and 0 warnings under --ultrasafe 3
+set TMP7=%TEMP%\vx_us3_clean_blocks.vx
+> "%TMP7%" (
+    echo import "std/json";
+    echo fn test_blocks^(k: i64^) -^> i64 {
+    echo     if k == 1 { let s = "a"; print_str^(s^); }
+    echo     if k == 2 { let s = "b"; print_str^(s^); }
+    echo     for i in 0..2 { let done = i; print^(done^); }
+    echo     for i in 0..2 { let done = i + 10; print^(done^); }
+    echo     let obj = json_make_object^(^);
+    echo     json_set^(obj, "k", json_make_int^(k^)^);
+    echo     let _out = json_stringify^(obj^);
+    echo     return 0;
+    echo }
+    echo test_blocks^(1^);
+)
+"%VTX%" --ultrasafe 3 --check --json "%TMP7%" >"%TEMP%\vx_us3_clean.json" 2>&1
+if !errorlevel! neq 0 (
+    echo [FAIL] --ultrasafe 3 --check failed on clean blocks + std/json!
+    type "%TEMP%\vx_us3_clean.json"
+    exit /b 1
+)
+findstr /C:"\"warnings\": 0" "%TEMP%\vx_us3_clean.json" >nul
+if !errorlevel! neq 0 (
+    echo [FAIL] --ultrasafe 3 emitted unexpected warnings on std/json or sibling blocks!
+    type "%TEMP%\vx_us3_clean.json"
+    exit /b 1
+)
+echo   [PASS] --ultrasafe 3 clean on sibling blocks + std/json import (0 errors, 0 warnings).
+
+REM 8) Source-map remapping across imports: entry line numbers stay exact AND imported local file reports its real name/line
+set TMP8MOD=%TEMP%\vx_us3_helper_mod.vx
+set TMP8MAIN=%TEMP%\vx_us3_entry_map.vx
+> "%TMP8MOD%" (
+    echo fn mod_unused_fn^(^) -^> i64 { return 1; }
+    echo fn mod_bad^(^) -^> i64 {
+    echo     let arr = slice_i64^(2^);
+    echo     return arr[9];
+    echo }
+)
+> "%TMP8MAIN%" (
+    echo import "std/json";
+    echo import "vx_us3_helper_mod.vx";
+    echo fn main_fn^(^) -^> i64 {
+    echo     let never_used = 42;
+    echo     return mod_bad^(^);
+    echo }
+    echo main_fn^(^);
+)
+"%VTX%" --ultrasafe 3 --check --json "%TMP8MAIN%" >"%TEMP%\vx_us3_map.json" 2>&1
+if !errorlevel! equ 0 (
+    echo [FAIL] --ultrasafe 3 should report E202 in imported helper module!
+    exit /b 1
+)
+findstr /C:"\"line\": 4" "%TEMP%\vx_us3_map.json" >nul
+if !errorlevel! neq 0 (
+    echo [FAIL] Source map did not remap W104/E202 to line 4!
+    type "%TEMP%\vx_us3_map.json"
+    exit /b 1
+)
+findstr /C:"vx_us3_helper_mod.vx" "%TEMP%\vx_us3_map.json" >nul
+if !errorlevel! neq 0 (
+    echo [FAIL] Source map did not report imported filename vx_us3_helper_mod.vx!
+    type "%TEMP%\vx_us3_map.json"
+    exit /b 1
+)
+findstr /C:"W105" "%TEMP%\vx_us3_map.json" >nul
+if !errorlevel! equ 0 (
+    echo [FAIL] Imported module emitted noisy W105 unused-function warning!
+    type "%TEMP%\vx_us3_map.json"
+    exit /b 1
+)
+echo   [PASS] Source map remaps file/line across imports and filters imported W105 warnings.
+
+REM 9) Multi-error single-pass recovery (E301, E302 for alloc, E001x2, E101, E202) with 0 false W104 warnings
+set TMP9=%TEMP%\vx_us3_all6.vx
+> "%TMP9%" (
+    echo fn leak_ref^(^) -^> [i64] {
+    echo     let m = scope_push^(^);
+    echo     let tmp = slice_i64^(4^);
+    echo     scope_pop^(m^);
+    echo     return tmp;
+    echo }
+    echo fn unsafe_alloc^(^) -^> ptr {
+    echo     return alloc^(64^);
+    echo }
+    echo fn multi_fn^(^) -^> i64 {
+    echo     let imm = 10;
+    echo     imm = 20;
+    echo     let broken = ;
+    echo     let ghost = unknown_fn_404^(1, 2^);
+    echo     return ghost;
+    echo }
+    echo fn after_err^(^) -^> i64 {
+    echo     let nums = [1, 2, 3];
+    echo     return nums[99];
+    echo }
+    echo print^(after_err^(^)^);
+    echo print^(multi_fn^(^)^);
+    echo print^(slice_len^(leak_ref^(^)^)^);
+    echo print^(unsafe_alloc^(^)^);
+)
+"%VTX%" --ultrasafe 3 --check --json "%TMP9%" >"%TEMP%\vx_us3_all6.json" 2>&1
+if !errorlevel! equ 0 (
+    echo [FAIL] --ultrasafe 3 should report 6 errors on TMP9!
+    exit /b 1
+)
+for %%c in ("E301" "E302" "E001" "E101" "E202" "\"errors\": 6" "\"warnings\": 0" "\"col\": 17") do (
+    findstr /C:%%c "%TEMP%\vx_us3_all6.json" >nul
+    if !errorlevel! neq 0 (
+        echo [FAIL] --ultrasafe 3 missing %%~c in TMP9 JSON output!
+        type "%TEMP%\vx_us3_all6.json"
+        exit /b 1
+    )
+)
+findstr /C:"[VORTEX " "%TEMP%\vx_us3_all6.json" >nul
+if !errorlevel! equ 0 (
+    echo [FAIL] --ultrasafe 3 emitted duplicate [VORTEX ...] prefix inside JSON message!
+    type "%TEMP%\vx_us3_all6.json"
+    exit /b 1
+)
+echo   [PASS] --ultrasafe 3 reported all 6 distinct sorted errors with clean messages, exact cols, and 0 warnings.
+
+REM 10) Native formatter (vortex fmt --check / --stdout)
+set TMPFMT=%TEMP%\vx_fmt_test.vx
+> "%TMPFMT%" (
+    echo fn ugly^(x: i64^) -^> i64 {
+    echo if x ^> 0 {
+    echo   return x + 1;
+    echo }
+    echo     return 0;
+    echo }
+)
+"%VTX%" fmt --check "%TMPFMT%" >nul 2>&1
+if !errorlevel! equ 0 (
+    echo [FAIL] vortex fmt --check should have flagged unformatted file!
+    exit /b 1
+)
+"%VTX%" fmt "%TMPFMT%" >nul 2>&1
+if !errorlevel! neq 0 (
+    echo [FAIL] vortex fmt failed!
+    exit /b 1
+)
+"%VTX%" fmt --check "%TMPFMT%" >nul 2>&1
+if !errorlevel! neq 0 (
+    echo [FAIL] vortex fmt output failed --check!
+    exit /b 1
+)
+echo   [PASS] vortex fmt formatted source and verified clean via --check.
+
+del "%TMP1%" "%TMPWARN%" "%TMP2%" "%TMP2REC%" "%TMP3%" "%TMP7%" "%TMP8MOD%" "%TMP8MAIN%" "%TMP9%" "%TMPFMT%" "%TEMP%\vx_warn.json" "%TEMP%\vx_us2.out" "%TEMP%\vx_us3.json" "%TEMP%\vx_test.json" "%TEMP%\vx_spec.json" "%TEMP%\vx_us3_clean.json" "%TEMP%\vx_us3_map.json" "%TEMP%\vx_us3_all6.json" 2>nul
 echo [ULTRASAFE CHECKS] All checks PASSED!
 exit /b 0

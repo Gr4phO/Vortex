@@ -78,7 +78,7 @@ r1 = recv()
 assert r1["result"]["serverInfo"]["name"] == "vortex-lsp"
 send({"jsonrpc":"2.0","method":"initialized","params":{}})
 uri = "file:///tmp/lsp_probe.vx"
-src = "struct Vec2 { x: f32, y: f32 }\nfn add_x(v: Vec2, dx: f32) -> f32 { return v.x + dx; }\nlet p = Vec2 { x: 1.0, y: 2.0 };\nlet s = add_x(p, 3.0);\n"
+src = "struct Vec2 { x: f32, y: f32 }\nfn add_x(v: Vec2, dx: f32) -> f32 { return v.x + dx; }\nlet p = Vec2 { x: 1.0, y: 2.0 };\nlet s = add_x(p, 3.0);\nprint(s);\n"
 send({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":uri,"languageId":"vortex","version":1,"text":src}}})
 d1 = recv()
 assert len(d1["params"]["diagnostics"]) == 0
@@ -86,9 +86,14 @@ send({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textD
 assert recv()["result"]["range"]["start"]["line"] == 1
 send({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":uri},"position":{"line":3,"character":9}}})
 assert "add_x" in recv()["result"]["contents"]["value"]
-send({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"let k = 1;\nlet bad = 1 as *i64;\n"}]}})
+send({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"let _k = 1;\nlet bad = 1 as *i64;\n"}]}})
 d2 = recv()
 assert len(d2["params"]["diagnostics"]) >= 1
+send({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":uri,"version":3},"contentChanges":[{"text":"fn f1() -> ptr { return alloc(16); }\nfn f2() -> i64 {\n    let unused_v = 7;\n    let g = nope_fn(1);\n    return g;\n}\nfn f3() -> i64 { let a = [1, 2]; return a[9]; }\nprint(f3());\nprint(f2());\nprint(f1());\n"}]}})
+d3 = recv()
+codes = [d["code"] for d in d3["params"]["diagnostics"]]
+for req in ("E302", "W104", "E101", "E202"):
+    assert req in codes, f"Missing {req}: {codes}"
 send({"jsonrpc":"2.0","id":4,"method":"shutdown","params":None})
 recv()
 send({"jsonrpc":"2.0","method":"exit","params":None})

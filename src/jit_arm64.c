@@ -1221,9 +1221,32 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 if (ins->func_ptr == (void*)helper_print_f32 ||
                     ins->func_ptr == (void*)vortex_math_sinf ||
                     ins->func_ptr == (void*)vortex_math_cosf ||
-                    ins->func_ptr == (void*)vortex_math_sqrtf) {
+                    ins->func_ptr == (void*)vortex_math_sqrtf ||
+                    ins->func_ptr == (void*)vortex_math_tanf ||
+                    ins->func_ptr == (void*)vortex_math_floorf ||
+                    ins->func_ptr == (void*)vortex_math_ceilf ||
+                    ins->func_ptr == (void*)vortex_math_fabsf ||
+                    ins->func_ptr == (void*)vortex_math_expf ||
+                    ins->func_ptr == (void*)vortex_math_logf) {
                     int s = a64_get_float_reg(ir, ins->args[0], 0, j);
                     a64_fmov_ss(j, 0, s);
+                    a64_mov_imm64(j, A64_X16, (uint64_t)(uintptr_t)ins->func_ptr);
+                    a64_blr(j, A64_X16);
+                } else if (ins->func_ptr == (void*)vortex_math_powf ||
+                           ins->func_ptr == (void*)vortex_math_atan2f) {
+                    int s0 = a64_get_float_reg(ir, ins->args[0], 0, j);
+                    int s1 = a64_get_float_reg(ir, ins->args[1], 1, j);
+                    if (s0 == 1 && s1 == 0) {
+                        a64_fmov_ss(j, 2, 1);
+                        a64_fmov_ss(j, 1, 0);
+                        a64_fmov_ss(j, 0, 2);
+                    } else if (s1 == 0) {
+                        a64_fmov_ss(j, 1, 0);
+                        if (s0 != 0) a64_fmov_ss(j, 0, s0);
+                    } else {
+                        if (s0 != 0) a64_fmov_ss(j, 0, s0);
+                        if (s1 != 1) a64_fmov_ss(j, 1, s1);
+                    }
                     a64_mov_imm64(j, A64_X16, (uint64_t)(uintptr_t)ins->func_ptr);
                     a64_blr(j, A64_X16);
                 } else {

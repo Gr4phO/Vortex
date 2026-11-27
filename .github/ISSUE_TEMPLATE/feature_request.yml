@@ -1,0 +1,33 @@
+name: Demande de fonctionnalité (Feature Request)
+description: Proposer une amélioration du langage, de la sûreté, de std/ ou de l'extension VS Code
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Domaine concerné
+      options:
+        - Syntaxe / Types
+        - Optimiseur IR / JIT / SIMD
+        - Sûreté / --ultrasafe / Arènes
+        - Bibliothèque standard (std/) / FFI
+        - Outillage CLI (test, spec, pkg, lsp)
+        - Extension VS Code
+        - Benchmarks / Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Problème ou besoin
+      description: Qu'est-ce qui est frustrant ou manquant aujourd'hui ?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposition concrète / exemple `.vx`
+      description: À quoi ressemblerait la syntaxe, la commande CLI ou le comportement idéal ?
+    validations:
+      required: false

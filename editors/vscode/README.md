@@ -1,13 +1,28 @@
-# Vortex VS Code Extension
+# Vortex Systems Language (.vx) for VS Code
 
-Provides syntax highlighting, real-time diagnostics, go-to-definition, hover documentation, and completion for `.vx` files via the built-in `vortex lsp` language server.
+Official VS Code extension for the **Vortex** systems programming language (`x86-64` AVX2 & `ARM64` NEON JIT, 2 MiB paged arenas, zero-GC).
 
-## Development / Usage
+## Features
 
-1. Ensure `vortex` (or `vortex.exe`) is in your `PATH`, or configure `"vortex.serverPath"` in VS Code Settings.
-2. Install Node client dependency:
-   ```bash
+- **▶ Run in Terminal Button**: One-click **Run Vortex File in Terminal** button in the top-right editor toolbar (just like Python), plus a dropdown menu for:
+  - `Run Vortex File (--release)`
+  - `Run Vortex File (--ultrasafe 1)`
+  - `Run Vortex File (--ultrasafe 2)`
+  - `Run Vortex File (--ultrasafe 3)`
+  - `Check File (--ultrasafe 3 --check)`
+  - `Run Native Tests (vortex test)`
+  - `Build Standalone Executable`
+  - `Open Interactive Vortex REPL`
+- **Native Language Server (`vortex lsp`)**: Real-time `--ultrasafe 3` diagnostics (multi-error + warnings), go-to-definition, hover info, auto-completion, and native formatting (`vortex fmt` / `textDocument/formatting`).
+- **Full Syntax Highlighting**: Supports `const`, `match`, `enum`, `struct`, `parallel_for`, `unsafe`, `bool`/`u8..u64`/`usize`/`isize`/`char`, array literals, `0b`/`0o`/`0x`/`_`/`1e-5` numbers, `'a'` char literals, and `//` + `/* ... */` comments.
+
+## Setup
+
+1. Make sure `vortex` (or `vortex.exe`) is in your `PATH`, in your workspace root, or set `"vortex.serverPath"` in VS Code Settings.
+2. Package or install:
+   ```sh
    cd editors/vscode
    npm install
+   npx @vscode/vsce package
+   code --install-extension vortex-systems-1.2.0.vsix
    ```
-3. Open `editors/vscode` in VS Code and press `F5` to launch the Extension Development Host, or package with `vsce package`.

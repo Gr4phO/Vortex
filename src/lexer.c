@@ -99,28 +99,77 @@ void next_token(Lexer* lex) {
     if (isdigit((unsigned char)c)) {
         size_t start = lex->pos;
         if (c == '0' && lex->pos + 1 < lex->len &&
-            (lex->src[lex->pos + 1] == 'x' || lex->src[lex->pos + 1] == 'X')) {
+            (lex->src[lex->pos + 1] == 'x' || lex->src[lex->pos + 1] == 'X' ||
+             lex->src[lex->pos + 1] == 'b' || lex->src[lex->pos + 1] == 'B' ||
+             lex->src[lex->pos + 1] == 'o' || lex->src[lex->pos + 1] == 'O')) {
+            char prefix = lex->src[lex->pos + 1];
+            int base = (prefix == 'x' || prefix == 'X') ? 16 : ((prefix == 'b' || prefix == 'B') ? 2 : 8);
             lex->pos += 2; lex->col += 2;
-            while (lex->pos < lex->len && isxdigit((unsigned char)lex->src[lex->pos])) {
+            char clean[128];
+            size_t ci = 0;
+            while (lex->pos < lex->len) {
+                char ch = lex->src[lex->pos];
+                if (ch == '_') {
+                    lex->pos++; lex->col++;
+                    continue;
+                }
+                bool valid = (base == 16) ? (isxdigit((unsigned char)ch) != 0) :
+                             (base == 2)  ? (ch == '0' || ch == '1') :
+                                            (ch >= '0' && ch <= '7');
+                if (!valid) break;
+                if (ci + 1 < sizeof(clean)) clean[ci++] = ch;
                 lex->pos++; lex->col++;
             }
+            clean[ci] = '\0';
             size_t len = lex->pos - start;
             if (len >= sizeof(lex->cur.text)) len = sizeof(lex->cur.text) - 1;
             memcpy(lex->cur.text, &lex->src[start], len);
             lex->cur.text[len] = '\0';
             lex->cur.type = TOK_INT;
-            lex->cur.int_val = (int64_t)strtoull(lex->cur.text, NULL, 16);
+            lex->cur.int_val = (int64_t)strtoull(clean[0] ? clean : "0", NULL, base);
             return;
         }
 
         bool is_float = false;
-        while (lex->pos < lex->len && (isdigit((unsigned char)lex->src[lex->pos]) || lex->src[lex->pos] == '.')) {
-            if (lex->src[lex->pos] == '.') {
+        char clean[128];
+        size_t ci = 0;
+        while (lex->pos < lex->len) {
+            char ch = lex->src[lex->pos];
+            if (ch == '_') {
+                lex->pos++; lex->col++;
+                continue;
+            }
+            if (isdigit((unsigned char)ch)) {
+                if (ci + 1 < sizeof(clean)) clean[ci++] = ch;
+                lex->pos++; lex->col++;
+                continue;
+            }
+            if (ch == '.') {
                 if (lex->pos + 1 < lex->len && lex->src[lex->pos + 1] == '.') break;
                 is_float = true;
+                if (ci + 1 < sizeof(clean)) clean[ci++] = '.';
+                lex->pos++; lex->col++;
+                continue;
             }
-            lex->pos++; lex->col++;
+            if (ch == 'e' || ch == 'E') {
+                size_t next_p = lex->pos + 1;
+                if (next_p < lex->len && (lex->src[next_p] == '+' || lex->src[next_p] == '-')) {
+                    next_p++;
+                }
+                if (next_p < lex->len && isdigit((unsigned char)lex->src[next_p])) {
+                    is_float = true;
+                    if (ci + 1 < sizeof(clean)) clean[ci++] = ch;
+                    lex->pos++; lex->col++;
+                    if (lex->pos < lex->len && (lex->src[lex->pos] == '+' || lex->src[lex->pos] == '-')) {
+                        if (ci + 1 < sizeof(clean)) clean[ci++] = lex->src[lex->pos];
+                        lex->pos++; lex->col++;
+                    }
+                    continue;
+                }
+            }
+            break;
         }
+        clean[ci] = '\0';
         size_t len = lex->pos - start;
         if (len >= sizeof(lex->cur.text)) len = sizeof(lex->cur.text) - 1;
         memcpy(lex->cur.text, &lex->src[start], len);
@@ -128,11 +177,45 @@ void next_token(Lexer* lex) {
 
         if (is_float) {
             lex->cur.type = TOK_FLOAT;
-            lex->cur.float_val = (float)strtod(lex->cur.text, NULL);
+            lex->cur.float_val = (float)strtod(clean[0] ? clean : "0.0", NULL);
         } else {
             lex->cur.type = TOK_INT;
-            lex->cur.int_val = strtoll(lex->cur.text, NULL, 10);
+            lex->cur.int_val = strtoll(clean[0] ? clean : "0", NULL, 10);
         }
+        return;
+    }
+
+    if (c == '\'') {
+        lex->pos++; lex->col++;
+        int64_t ch_val = 0;
+        if (lex->pos < lex->len && lex->src[lex->pos] == '\\' && lex->pos + 1 < lex->len) {
+            lex->pos++; lex->col++;
+            char esc = lex->src[lex->pos];
+            switch (esc) {
+                case 'n':  ch_val = '\n'; break;
+                case 't':  ch_val = '\t'; break;
+                case 'r':  ch_val = '\r'; break;
+                case '0':  ch_val = '\0'; break;
+                case '\\': ch_val = '\\'; break;
+                case '\'': ch_val = '\''; break;
+                case '\"': ch_val = '\"'; break;
+                default:   ch_val = (unsigned char)esc; break;
+            }
+            lex->pos++; lex->col++;
+        } else if (lex->pos < lex->len && lex->src[lex->pos] != '\'') {
+            ch_val = (unsigned char)lex->src[lex->pos];
+            lex->pos++; lex->col++;
+        }
+        if (lex->pos < lex->len && lex->src[lex->pos] == '\'') {
+            lex->pos++; lex->col++;
+        } else {
+            fprintf(stderr, "[VORTEX SYNTAX ERROR] Unterminated character literal at %s:%d:%d\n",
+                    g_current_filename ? g_current_filename : "<input>", lex->cur.line, lex->cur.col);
+            vortex_error("");
+        }
+        snprintf(lex->cur.text, sizeof(lex->cur.text), "%lld", (long long)ch_val);
+        lex->cur.type = TOK_INT;
+        lex->cur.int_val = ch_val;
         return;
     }
 
@@ -158,10 +241,12 @@ void next_token(Lexer* lex) {
         else if (strcmp(lex->cur.text, "return") == 0) lex->cur.type = TOK_RETURN;
         else if (strcmp(lex->cur.text, "struct") == 0) lex->cur.type = TOK_STRUCT;
         else if (strcmp(lex->cur.text, "enum") == 0) lex->cur.type = TOK_ENUM;
+        else if (strcmp(lex->cur.text, "match") == 0) lex->cur.type = TOK_MATCH;
         else if (strcmp(lex->cur.text, "extern") == 0) lex->cur.type = TOK_EXTERN;
         else if (strcmp(lex->cur.text, "unsafe") == 0) lex->cur.type = TOK_UNSAFE;
         else if (strcmp(lex->cur.text, "as") == 0) lex->cur.type = TOK_AS;
         else if (strcmp(lex->cur.text, "import") == 0) lex->cur.type = TOK_IMPORT;
+        else if (strcmp(lex->cur.text, "const") == 0) lex->cur.type = TOK_CONST;
         else if (strcmp(lex->cur.text, "break") == 0) lex->cur.type = TOK_BREAK;
         else if (strcmp(lex->cur.text, "continue") == 0) lex->cur.type = TOK_CONTINUE;
         else if (strcmp(lex->cur.text, "true") == 0) lex->cur.type = TOK_TRUE;
@@ -214,6 +299,7 @@ void next_token(Lexer* lex) {
         char c2 = lex->src[lex->pos + 1];
         if (c == '-' && c2 == '>') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_ARROW; strcpy(lex->cur.text, "->"); return; }
         if (c == '.' && c2 == '.') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_DOTDOT; strcpy(lex->cur.text, ".."); return; }
+        if (c == '=' && c2 == '>') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_FAT_ARROW; strcpy(lex->cur.text, "=>"); return; }
         if (c == '=' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_EQEQ; strcpy(lex->cur.text, "=="); return; }
         if (c == '!' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_NEQ; strcpy(lex->cur.text, "!="); return; }
         if (c == '<' && c2 == '=') { lex->pos += 2; lex->col += 2; lex->cur.type = TOK_LE; strcpy(lex->cur.text, "<="); return; }
@@ -270,12 +356,18 @@ void next_token(Lexer* lex) {
 }
 
 void vortex_lexer_sync(Lexer* l, bool in_function) {
-    if (!l || l->cur.type == TOK_EOF) return;
-    int brace_depth = 0;
+    if (!l || l->cur.type == TOK_EOF || l->cur.type == TOK_RBRACE) return;
     if (l->cur.type == TOK_SEMI) {
         next_token(l);
         return;
     }
+    if (in_function && (l->cur.type == TOK_LET || l->cur.type == TOK_IF || l->cur.type == TOK_FOR ||
+                        l->cur.type == TOK_MATCH || l->cur.type == TOK_WHILE || l->cur.type == TOK_RETURN ||
+                        l->cur.type == TOK_BREAK || l->cur.type == TOK_CONTINUE || l->cur.type == TOK_UNSAFE ||
+                        l->cur.type == TOK_FN)) {
+        return;
+    }
+    int brace_depth = 0;
     if (l->cur.type == TOK_LBRACE) brace_depth = 1;
     next_token(l);
 
@@ -301,11 +393,12 @@ void vortex_lexer_sync(Lexer* l, bool in_function) {
                 return;
             }
             if (!in_function && (t == TOK_FN || t == TOK_STRUCT || t == TOK_ENUM ||
-                                 t == TOK_EXTERN || t == TOK_IMPORT || t == TOK_UNSAFE || t == TOK_LET)) {
+                                 t == TOK_EXTERN || t == TOK_IMPORT || t == TOK_CONST || t == TOK_UNSAFE || t == TOK_LET)) {
                 return;
             }
-            if (in_function && (t == TOK_LET || t == TOK_IF || t == TOK_FOR ||
-                                t == TOK_WHILE || t == TOK_RETURN || t == TOK_BREAK || t == TOK_CONTINUE)) {
+            if (in_function && (t == TOK_LET || t == TOK_IF || t == TOK_FOR || t == TOK_MATCH ||
+                                t == TOK_WHILE || t == TOK_RETURN || t == TOK_BREAK || t == TOK_CONTINUE ||
+                                t == TOK_UNSAFE)) {
                 return;
             }
         }

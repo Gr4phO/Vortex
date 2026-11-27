@@ -25,7 +25,7 @@ elif [ "$OS_NAME" = "Darwin" ]; then
     FFI_TEST="test_ffi_darwin.vx"
 fi
 
-for t in test_struct.vx test_vec_struct.vx test_fib.vx "$FFI_TEST" test_memory_1m.vx test_safety_pass.vx test_import_main.vx test_opt_regression.vx test_ergonomics.vx; do
+for t in test_struct.vx test_vec_struct.vx test_fib.vx "$FFI_TEST" test_memory_1m.vx test_safety_pass.vx test_import_main.vx test_opt_regression.vx test_ergonomics.vx test_v12_features.vx test_stdlib_v12.vx test_v12_lang_fmt.vx; do
     echo ""
     echo "--- [RUN] $t ---"
     if "$VORTEX_BIN" "$SCRIPT_DIR/$t"; then

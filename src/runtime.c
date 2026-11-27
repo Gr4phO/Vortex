@@ -65,6 +65,150 @@ static char g_host_last_err[2048] = {0};
 static void* s_host_exec_mem = NULL;
 void* g_vortex_dll_handle = NULL;
 
+typedef struct {
+    int merged_start_line;
+    int merged_end_line;
+    int orig_start_line;
+    int file_id;
+    bool is_stdlib;
+    bool is_imported;
+} VortexSourceSpan;
+
+typedef struct {
+    const char* source_ptr;
+    char** files;
+    int file_count;
+    int file_cap;
+    VortexSourceSpan* spans;
+    int span_count;
+    int span_cap;
+} VortexSourceMap;
+
+static VortexSourceMap g_source_map = {0};
+static bool g_source_map_active = false;
+
+#define MAX_CALL_SITES 16384
+typedef struct {
+    char name[64];
+    bool called_in_unsafe;
+    const char* file;
+    int line;
+    int col;
+} VortexCallSite;
+
+static VortexCallSite g_call_sites[MAX_CALL_SITES];
+static int g_call_site_count = 0;
+
+void vortex_record_user_call_site(const char* name, bool called_in_unsafe, const char* file, int line, int col) {
+    if (!name || !name[0] || g_call_site_count >= MAX_CALL_SITES) return;
+    VortexCallSite* cs = &g_call_sites[g_call_site_count++];
+    vx_str_copy(cs->name, sizeof(cs->name), name);
+    cs->called_in_unsafe = called_in_unsafe;
+    cs->file = file;
+    cs->line = line;
+    cs->col = (col > 0) ? col : 1;
+}
+
+void vortex_source_map_reset(void) {
+    for (int i = 0; i < g_source_map.file_count; i++) {
+        free(g_source_map.files[i]);
+    }
+    free(g_source_map.files);
+    free(g_source_map.spans);
+    memset(&g_source_map, 0, sizeof(g_source_map));
+    g_source_map_active = false;
+}
+
+static int source_map_intern_file(const char* path) {
+    const char* p = (path && path[0]) ? path : "<input>";
+    for (int i = 0; i < g_source_map.file_count; i++) {
+        if (strcmp(g_source_map.files[i], p) == 0) return i;
+    }
+    if (g_source_map.file_count >= g_source_map.file_cap) {
+        int ncap = (g_source_map.file_cap == 0) ? 16 : (g_source_map.file_cap * 2);
+        char** nf = (char**)realloc(g_source_map.files, (size_t)ncap * sizeof(char*));
+        if (!nf) return -1;
+        g_source_map.files = nf;
+        g_source_map.file_cap = ncap;
+    }
+    size_t len = strlen(p);
+    char* copy = (char*)malloc(len + 1);
+    if (!copy) return -1;
+    memcpy(copy, p, len + 1);
+    g_source_map.files[g_source_map.file_count] = copy;
+    return g_source_map.file_count++;
+}
+
+static void source_map_record_line(int merged_line, int orig_line, int file_id, bool is_stdlib, bool is_imported) {
+    if (file_id < 0 || merged_line <= 0 || orig_line <= 0) return;
+    if (g_source_map.span_count > 0) {
+        VortexSourceSpan* last = &g_source_map.spans[g_source_map.span_count - 1];
+        if (last->file_id == file_id &&
+            last->is_stdlib == is_stdlib &&
+            last->is_imported == is_imported &&
+            last->merged_end_line + 1 == merged_line &&
+            last->orig_start_line + (merged_line - last->merged_start_line) == orig_line) {
+            last->merged_end_line = merged_line;
+            return;
+        }
+    }
+    if (g_source_map.span_count >= g_source_map.span_cap) {
+        int ncap = (g_source_map.span_cap == 0) ? 32 : (g_source_map.span_cap * 2);
+        VortexSourceSpan* ns = (VortexSourceSpan*)realloc(g_source_map.spans, (size_t)ncap * sizeof(VortexSourceSpan));
+        if (!ns) return;
+        g_source_map.spans = ns;
+        g_source_map.span_cap = ncap;
+    }
+    VortexSourceSpan* sp = &g_source_map.spans[g_source_map.span_count++];
+    sp->merged_start_line = merged_line;
+    sp->merged_end_line = merged_line;
+    sp->orig_start_line = orig_line;
+    sp->file_id = file_id;
+    sp->is_stdlib = is_stdlib;
+    sp->is_imported = is_imported;
+}
+
+bool vortex_source_map_lookup(int merged_line, const char** out_file, int* out_line, bool* out_is_stdlib, bool* out_is_imported) {
+    if (!g_source_map_active || merged_line <= 0 || g_source_map.span_count == 0) return false;
+    int lo = 0;
+    int hi = g_source_map.span_count - 1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        const VortexSourceSpan* sp = &g_source_map.spans[mid];
+        if (merged_line < sp->merged_start_line) {
+            hi = mid - 1;
+        } else if (merged_line > sp->merged_end_line) {
+            lo = mid + 1;
+        } else {
+            if (out_file && sp->file_id >= 0 && sp->file_id < g_source_map.file_count) {
+                *out_file = g_source_map.files[sp->file_id];
+            }
+            if (out_line) {
+                *out_line = sp->orig_start_line + (merged_line - sp->merged_start_line);
+            }
+            if (out_is_stdlib) *out_is_stdlib = sp->is_stdlib;
+            if (out_is_imported) *out_is_imported = sp->is_imported;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void map_diag_location(const char** file_io, int* line_io) {
+    if (!file_io || !line_io) return;
+    const char* f = *file_io;
+    int ln = *line_io;
+    if (g_source_map_active && ln > 0 &&
+        (!f || !f[0] || (g_current_filename && strcmp(f, g_current_filename) == 0))) {
+        const char* mapped_file = NULL;
+        int mapped_line = 0;
+        if (vortex_source_map_lookup(ln, &mapped_file, &mapped_line, NULL, NULL)) {
+            if (mapped_file && mapped_file[0]) *file_io = mapped_file;
+            if (mapped_line > 0) *line_io = mapped_line;
+        }
+    }
+}
+
 bool vortex_is_cross_target(void) {
     if (g_target_arch != VORTEX_HOST_ARCH) return true;
     if (g_target_arch == VORTEX_ARCH_X86_64 && g_target_abi != VORTEX_HOST_ABI) return true;
@@ -264,24 +408,54 @@ static int extract_line_from_msg(const char* msg) {
     return 0;
 }
 
-void vortex_diag_add(VortexDiagSeverity sev, const char* code, const char* file, int line, int col, const char* msg, const char* suggestion) {
-    if (sev == VDIAG_ERROR) g_diag_error_count++;
-    else if (sev == VDIAG_WARNING) g_diag_warn_count++;
+static const char* strip_vortex_diag_prefix(const char* msg) {
+    if (!msg) return "";
+    if (strncmp(msg, "[VORTEX ", 8) == 0) {
+        const char* close = strchr(msg + 8, ']');
+        if (close && (close - msg) < 48) {
+            const char* p = close + 1;
+            while (*p == ' ') p++;
+            if (*p) return p;
+        }
+    }
+    return msg;
+}
 
-    if (line <= 0 && msg) line = extract_line_from_msg(msg);
+void vortex_diag_add(VortexDiagSeverity sev, const char* code, const char* file, int line, int col, const char* msg, const char* suggestion) {
+    const char* clean_msg = strip_vortex_diag_prefix(msg);
+    if (line <= 0 && clean_msg[0]) line = extract_line_from_msg(clean_msg);
     if (col <= 0) col = 1;
     const char* f = (file && file[0]) ? file : (g_current_filename ? g_current_filename : "<input>");
 
-    /* Deduplicate identical code+line diagnostics */
+    if (g_source_map_active && line > 0 &&
+        (!file || !file[0] || (g_current_filename && strcmp(f, g_current_filename) == 0))) {
+        const char* mapped_file = NULL;
+        int mapped_line = 0;
+        bool is_stdlib = false;
+        bool is_imported = false;
+        if (vortex_source_map_lookup(line, &mapped_file, &mapped_line, &is_stdlib, &is_imported)) {
+            if (sev == VDIAG_WARNING) {
+                if (is_stdlib) return;
+                if (is_imported && code && strcmp(code, "W105") == 0) return;
+            }
+            if (mapped_file && mapped_file[0]) f = mapped_file;
+            if (mapped_line > 0) line = mapped_line;
+        }
+    }
+
+    /* Deduplicate identical code+file+line diagnostics (and collapse duplicate E301 on same line) */
     for (int i = 0; i < g_diag_count; i++) {
         if (g_diags[i].line == line && g_diags[i].severity == sev &&
-            strcmp(g_diags[i].code, code ? code : "") == 0 &&
-            strcmp(g_diags[i].message, msg ? msg : "") == 0) {
-            if (sev == VDIAG_ERROR) g_diag_error_count--;
-            else if (sev == VDIAG_WARNING) g_diag_warn_count--;
+            strcmp(g_diags[i].file, f) == 0 &&
+            ((code && strcmp(code, "E301") == 0 && strcmp(g_diags[i].code, "E301") == 0) ||
+             (strcmp(g_diags[i].code, code ? code : "") == 0 &&
+              strcmp(g_diags[i].message, clean_msg) == 0))) {
             return;
         }
     }
+
+    if (sev == VDIAG_ERROR) g_diag_error_count++;
+    else if (sev == VDIAG_WARNING) g_diag_warn_count++;
 
     if (g_diag_count >= MAX_DIAGNOSTICS) return;
     VortexDiagnostic* d = &g_diags[g_diag_count++];
@@ -290,7 +464,7 @@ void vortex_diag_add(VortexDiagSeverity sev, const char* code, const char* file,
     vx_str_copy(d->file, sizeof(d->file), f);
     d->line = line;
     d->col = col;
-    vx_str_copy(d->message, sizeof(d->message), msg ? msg : "");
+    vx_str_copy(d->message, sizeof(d->message), clean_msg);
     vx_str_copy(d->suggestion, sizeof(d->suggestion), suggestion ? suggestion : "");
 }
 
@@ -311,7 +485,28 @@ static void json_print_escaped(FILE* out, const char* s) {
     fputc('"', out);
 }
 
+static int diag_cmp(const VortexDiagnostic* a, const VortexDiagnostic* b) {
+    int fc = strcmp(a->file, b->file);
+    if (fc != 0) return fc;
+    if (a->line != b->line) return a->line - b->line;
+    return a->col - b->col;
+}
+
+void vortex_diag_sort(void) {
+    for (int i = 1; i < g_diag_count; i++) {
+        VortexDiagnostic key = g_diags[i];
+        int j = i - 1;
+        while (j >= 0 && diag_cmp(&g_diags[j], &key) > 0) {
+            g_diags[j + 1] = g_diags[j];
+            j--;
+        }
+        g_diags[j + 1] = key;
+    }
+}
+
 void vortex_diag_print_all(void) {
+    vortex_diag_sort();
+
     if (g_json_errors) {
         FILE* out = (g_diag_error_count > 0 || g_diag_warn_count > 0) ? stderr : stdout;
         fprintf(out, "{\n  \"version\": \"%s\",\n  \"ultrasafe\": %d,\n  \"ok\": %s,\n  \"errors\": %d,\n  \"warnings\": %d,\n  \"diagnostics\": [\n",
@@ -352,9 +547,12 @@ void vortex_diag_print_all(void) {
 }
 
 void vortex_ultrasafe_div_zero(const char* file, int line) {
+    const char* out_file = file;
+    int out_line = line;
+    map_diag_location(&out_file, &out_line);
     char msg[256];
     snprintf(msg, sizeof(msg), "[VORTEX SAFETY PANIC] Division or modulo by zero at %s:%d",
-             file ? file : "<unknown>", line);
+             out_file ? out_file : "<unknown>", out_line);
     vortex_error(msg);
 }
 
@@ -403,7 +601,7 @@ void vortex_ultrasafe_audit_ir(const IRBuffer* ir, const SymbolTable* st, const 
 
         if (after_term && !warn_unreach_emitted && ins->line > 0) {
             vortex_diag_add(VDIAG_WARNING, "W101", ins->file ? ins->file : g_current_filename,
-                            ins->line, 1, "Unreachable code after return/break/continue",
+                            ins->line, ins->col > 0 ? ins->col : 1, "Unreachable code after return/break/continue",
                             "Remove dead statements or move them before the control-flow jump.");
             warn_unreach_emitted = true;
         }
@@ -445,7 +643,7 @@ void vortex_ultrasafe_audit_ir(const IRBuffer* ir, const SymbolTable* st, const 
                     snprintf(msg, sizeof(msg), "Negative slice allocation length (%lld) in '%s'",
                              (long long)const_val[lv], fn_name ? fn_name : "__main__");
                     vortex_diag_add(VDIAG_ERROR, "E202", ins->file ? ins->file : g_current_filename,
-                                    ins->line, 1, msg, "Use a non-negative integer length >= 0.");
+                                    ins->line, ins->col > 0 ? ins->col : 1, msg, "Use a non-negative integer length >= 0.");
                 }
                 if (slice_len) slice_len[ins->dest] = const_val[lv];
             }
@@ -463,7 +661,7 @@ void vortex_ultrasafe_audit_ir(const IRBuffer* ir, const SymbolTable* st, const 
                 snprintf(msg, sizeof(msg), "Static %s by zero detected in '%s'",
                          (ins->op == IR_MOD) ? "modulo" : "division", fn_name ? fn_name : "__main__");
                 vortex_diag_add(VDIAG_ERROR, "E201", ins->file ? ins->file : g_current_filename,
-                                ins->line, 1, msg, "Ensure the divisor is non-zero before dividing.");
+                                ins->line, ins->col > 0 ? ins->col : 1, msg, "Ensure the divisor is non-zero before dividing.");
             }
             /* Static constant out-of-bounds array access */
             if ((ins->op == IR_LOAD_ARRAY || ins->op == IR_STORE_ARRAY) &&
@@ -477,7 +675,7 @@ void vortex_ultrasafe_audit_ir(const IRBuffer* ir, const SymbolTable* st, const 
                     snprintf(msg, sizeof(msg), "Static out-of-bounds index %lld (length %lld) in '%s'",
                              (long long)idx, (long long)klen, fn_name ? fn_name : "__main__");
                     vortex_diag_add(VDIAG_ERROR, "E202", ins->file ? ins->file : g_current_filename,
-                                    ins->line, 1, msg, "Check the array index bounds: 0 <= idx < len.");
+                                    ins->line, ins->col > 0 ? ins->col : 1, msg, "Check the array index bounds: 0 <= idx < len.");
                 }
             }
             /* Static null dereference / null field access */
@@ -485,7 +683,7 @@ void vortex_ultrasafe_audit_ir(const IRBuffer* ir, const SymbolTable* st, const 
                  ins->op == IR_LOAD_OFFSET || ins->op == IR_STORE_OFFSET) &&
                 ins->src1 >= 0 && ins->src1 < n_vregs && known_null && known_null[ins->src1]) {
                 vortex_diag_add(VDIAG_ERROR, "E203", ins->file ? ins->file : g_current_filename,
-                                ins->line, 1, "Static null pointer dereference (pointer is 0)",
+                                ins->line, ins->col > 0 ? ins->col : 1, "Static null pointer dereference (pointer is 0)",
                                 "Validate the pointer against 0 before dereferencing or accessing fields.");
             }
         }
@@ -500,27 +698,35 @@ void vortex_ultrasafe_audit_ir(const IRBuffer* ir, const SymbolTable* st, const 
     }
 
     if (st) {
-        for (int i = 0; i < st->count; i++) {
-            const Symbol* s = &st->symbols[i];
-            if (s->name[0] == '_' || s->decl_line <= 0) continue;
-            if (!s->used) {
-                char msg[160];
-                snprintf(msg, sizeof(msg), "Unused local variable '%s' in '%s'", s->name, fn_name ? fn_name : "__main__");
-                vortex_diag_add(VDIAG_WARNING, "W104", g_current_filename, s->decl_line, s->decl_col, msg,
-                                "Prefix with '_' (e.g. '_tmp') or remove the unused variable.");
-            } else if (s->is_mut && !s->reassigned) {
-                char msg[160];
-                snprintf(msg, sizeof(msg), "Variable '%s' declared 'mut' is never reassigned", s->name);
-                vortex_diag_add(VDIAG_WARNING, "W102", g_current_filename, s->decl_line, s->decl_col, msg,
-                                "Remove 'mut' so the binding remains immutable.");
-            }
-        }
+        vortex_ultrasafe_audit_symbols(st, 0, st->count, fn_name);
     }
 
     free(has_const);
     free(const_val);
     free(known_null);
     free(slice_len);
+}
+
+void vortex_ultrasafe_audit_symbols(const SymbolTable* st, int start_idx, int end_idx, const char* fn_name) {
+    if (!st || g_ultrasafe_level < 1) return;
+    if (start_idx < 0) start_idx = 0;
+    if (end_idx > st->count) end_idx = st->count;
+    for (int i = start_idx; i < end_idx; i++) {
+        const Symbol* s = &st->symbols[i];
+        if (s->name[0] == '_' || s->decl_line <= 0) continue;
+        if (!s->used) {
+            char msg[160];
+            char help[160];
+            snprintf(msg, sizeof(msg), "Unused local variable '%s' in '%s'", s->name, fn_name && fn_name[0] ? fn_name : "__main__");
+            snprintf(help, sizeof(help), "Prefix with '_' (e.g. '_%s') or remove the unused variable.", s->name);
+            vortex_diag_add(VDIAG_WARNING, "W104", g_current_filename, s->decl_line, s->decl_col, msg, help);
+        } else if (s->is_mut && !s->reassigned) {
+            char msg[160];
+            snprintf(msg, sizeof(msg), "Variable '%s' declared 'mut' is never reassigned", s->name);
+            vortex_diag_add(VDIAG_WARNING, "W102", g_current_filename, s->decl_line, s->decl_col, msg,
+                            "Remove 'mut' so the binding remains immutable.");
+        }
+    }
 }
 
 void vortex_ultrasafe_audit_program(void) {
@@ -553,6 +759,25 @@ int64_t vortex_assert_eq(int64_t a, int64_t b) {
         vortex_error(msg);
     }
     return 1;
+}
+
+void vortex_compile_error(const char* code, int line, int col, const char* msg, const char* suggestion) {
+    const char* c = (code && code[0]) ? code : "E001";
+    const char* m = (msg && msg[0]) ? msg : "Syntax or compilation error";
+    if (g_recover_active && g_ultrasafe_level >= 3) {
+        vortex_diag_add(VDIAG_ERROR, c, g_current_filename, line, col > 0 ? col : 1, m, suggestion);
+        longjmp(g_recover_jmp, 1);
+    }
+    const char* out_file = g_current_filename ? g_current_filename : "<input>";
+    int out_line = line;
+    map_diag_location(&out_file, &out_line);
+    char full[512];
+    if (out_line > 0) {
+        snprintf(full, sizeof(full), "%s at %s:%d:%d", m, out_file, out_line, col > 0 ? col : 1);
+    } else {
+        vx_str_copy(full, sizeof(full), m);
+    }
+    vortex_error(full);
 }
 
 void vortex_error(const char* msg) {
@@ -618,6 +843,174 @@ float vortex_math_cosf(float rad) {
 
 float vortex_math_sqrtf(float x) {
     return x > 0.0f ? sqrtf(x) : 0.0f;
+}
+
+float vortex_math_tanf(float rad) {
+    return tanf(rad);
+}
+
+float vortex_math_floorf(float x) {
+    return floorf(x);
+}
+
+float vortex_math_ceilf(float x) {
+    return ceilf(x);
+}
+
+float vortex_math_fabsf(float x) {
+    return fabsf(x);
+}
+
+float vortex_math_expf(float x) {
+    return expf(x);
+}
+
+float vortex_math_logf(float x) {
+    return logf(x);
+}
+
+float vortex_math_powf(float base, float exp) {
+    return powf(base, exp);
+}
+
+float vortex_math_atan2f(float y, float x) {
+    return atan2f(y, x);
+}
+
+static int g_program_argc = 0;
+static char** g_program_argv = NULL;
+
+void vortex_set_program_args(int argc, char** argv) {
+    g_program_argc = (argc > 0) ? argc : 0;
+    g_program_argv = argv;
+}
+
+static int64_t vortex_arena_dup_cstr(const char* s) {
+    if (!s || !s[0]) return (int64_t)"";
+    size_t len = strlen(s);
+    char* res = (char*)arena_alloc_compact(len + 1);
+    if (!res) return (int64_t)"";
+    memcpy(res, s, len + 1);
+    return (int64_t)res;
+}
+
+int64_t vortex_args_count(void) {
+    return (int64_t)g_program_argc;
+}
+
+int64_t vortex_args_get(int64_t idx) {
+    if (!g_program_argv || idx < 0 || idx >= (int64_t)g_program_argc) {
+        return (int64_t)"";
+    }
+    return vortex_arena_dup_cstr(g_program_argv[(int)idx]);
+}
+
+int64_t vortex_env_get(int64_t name_ptr) {
+    const char* name = (const char*)name_ptr;
+    if (!name || !name[0]) return (int64_t)"";
+    const char* val = getenv(name);
+    return vortex_arena_dup_cstr(val);
+}
+
+int64_t vortex_env_has(int64_t name_ptr) {
+    const char* name = (const char*)name_ptr;
+    if (!name || !name[0]) return 0;
+    return getenv(name) != NULL ? 1 : 0;
+}
+
+int64_t vortex_fs_read(int64_t path_ptr) {
+    const char* path = (const char*)path_ptr;
+    if (!path || !path[0]) return (int64_t)"";
+    FILE* f = fopen(path, "rb");
+    if (!f) return (int64_t)"";
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return (int64_t)"";
+    }
+    long sz = ftell(f);
+    if (sz <= 0) {
+        fclose(f);
+        return (int64_t)"";
+    }
+    fseek(f, 0, SEEK_SET);
+    char* buf = (char*)arena_alloc_compact((size_t)sz + 1);
+    if (!buf) {
+        fclose(f);
+        return (int64_t)"";
+    }
+    size_t n = fread(buf, 1, (size_t)sz, f);
+    buf[n] = '\0';
+    fclose(f);
+    return (int64_t)buf;
+}
+
+int64_t vortex_fs_write(int64_t path_ptr, int64_t content_ptr) {
+    const char* path = (const char*)path_ptr;
+    const char* content = (const char*)content_ptr;
+    if (!path || !path[0]) return 0;
+    if (!content) content = "";
+    FILE* f = fopen(path, "wb");
+    if (!f) return 0;
+    size_t len = strlen(content);
+    size_t written = (len > 0) ? fwrite(content, 1, len, f) : 0;
+    int cerr = ferror(f);
+    fclose(f);
+    return (written == len && cerr == 0) ? 1 : 0;
+}
+
+int64_t vortex_fs_append(int64_t path_ptr, int64_t content_ptr) {
+    const char* path = (const char*)path_ptr;
+    const char* content = (const char*)content_ptr;
+    if (!path || !path[0]) return 0;
+    if (!content) content = "";
+    FILE* f = fopen(path, "ab");
+    if (!f) return 0;
+    size_t len = strlen(content);
+    size_t written = (len > 0) ? fwrite(content, 1, len, f) : 0;
+    int cerr = ferror(f);
+    fclose(f);
+    return (written == len && cerr == 0) ? 1 : 0;
+}
+
+int64_t vortex_fs_exists(int64_t path_ptr) {
+    const char* path = (const char*)path_ptr;
+    if (!path || !path[0]) return 0;
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    fclose(f);
+    return 1;
+}
+
+int64_t vortex_fs_remove(int64_t path_ptr) {
+    const char* path = (const char*)path_ptr;
+    if (!path || !path[0]) return 0;
+    return (remove(path) == 0) ? 1 : 0;
+}
+
+int64_t vortex_sleep_ms(int64_t ms) {
+    if (ms <= 0) return 0;
+#ifdef _WIN32
+    Sleep((DWORD)ms);
+#else
+    struct timespec ts;
+    ts.tv_sec = (time_t)(ms / 1000);
+    ts.tv_nsec = (long)((ms % 1000) * 1000000LL);
+    nanosleep(&ts, NULL);
+#endif
+    return 0;
+}
+
+int64_t vortex_unix_now_ms(void) {
+#ifdef _WIN32
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    uint64_t ticks = ((uint64_t)ft.dwHighDateTime << 32) | (uint64_t)ft.dwLowDateTime;
+    return (int64_t)((ticks - 116444736000000000ULL) / 10000ULL);
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000LL);
+#endif
 }
 
 int64_t helper_exit(int64_t code) {
@@ -870,6 +1263,25 @@ static BuiltinFunc g_builtins[] = {
     {"sinf_rad",       (void*)vortex_math_sinf,      1},
     {"cosf_rad",       (void*)vortex_math_cosf,      1},
     {"sqrtf_val",      (void*)vortex_math_sqrtf,     1},
+    {"tanf_rad",       (void*)vortex_math_tanf,      1},
+    {"floorf_val",     (void*)vortex_math_floorf,    1},
+    {"ceilf_val",      (void*)vortex_math_ceilf,     1},
+    {"fabsf_val",      (void*)vortex_math_fabsf,     1},
+    {"expf_val",       (void*)vortex_math_expf,      1},
+    {"logf_val",       (void*)vortex_math_logf,      1},
+    {"powf_val",       (void*)vortex_math_powf,      2},
+    {"atan2f_rad",     (void*)vortex_math_atan2f,    2},
+    {"args_count",     (void*)vortex_args_count,     0},
+    {"args_get",       (void*)vortex_args_get,       1},
+    {"env_get",        (void*)vortex_env_get,        1},
+    {"env_has",        (void*)vortex_env_has,        1},
+    {"fs_read",        (void*)vortex_fs_read,        1},
+    {"fs_write",       (void*)vortex_fs_write,       2},
+    {"fs_append",      (void*)vortex_fs_append,      2},
+    {"fs_exists",      (void*)vortex_fs_exists,      1},
+    {"fs_remove",      (void*)vortex_fs_remove,      1},
+    {"sleep_ms",       (void*)vortex_sleep_ms,       1},
+    {"unix_now_ms",    (void*)vortex_unix_now_ms,    0},
     {"struct_size",    (void*)vortex_builtin_struct_size, 1},
     {"struct_align",   (void*)vortex_builtin_struct_align, 1},
     {"assert",         (void*)vortex_assert,              1},
@@ -898,10 +1310,14 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
     arena_init();
     debug_info_reset();
     lexer_reset_imports();
-    if (!g_in_repl) {
+    g_source_map_active = (g_source_map.source_ptr != NULL && source == g_source_map.source_ptr);
+    if (!g_in_repl && !g_lsp_capture_errors) {
         g_struct_type_count = 0;
         g_enum_type_count = 0;
         vortex_diag_reset();
+    } else if (g_lsp_capture_errors) {
+        g_struct_type_count = 0;
+        g_enum_type_count = 0;
     }
     vortex_parser_reset_tables(!g_in_repl);
     for (int i = 0; i < g_user_func_count; i++) {
@@ -913,6 +1329,7 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
     }
     g_user_func_count = 0;
     g_user_func_reloc_count = 0;
+    g_call_site_count = 0;
     g_ffi_func_count = 0;
     g_literal_string_count = 0;
 
@@ -929,10 +1346,13 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
     jit.size = 0;
     jit.capacity = MAX_JIT_CODE_SIZE;
 
-    jit_write_protect(exec_mem, MAX_JIT_CODE_SIZE, true);
+    if (!g_check_only && exec_mem) {
+        jit_write_protect(exec_mem, MAX_JIT_CODE_SIZE, true);
+    }
 
     IRBuffer main_ir;
     ir_init(&main_ir);
+    vx_str_copy(main_ir.func_name, sizeof(main_ir.func_name), "__main__");
 
     Compiler comp;
     memset(&comp, 0, sizeof(comp));
@@ -949,12 +1369,18 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
         g_recover_active = true;
         int recovery_steps = 0;
         while (comp.lex->cur.type != TOK_EOF && recovery_steps < 512) {
+            size_t start_pos = comp.lex->pos;
             if (setjmp(g_recover_jmp) == 0) {
                 parse_statement(&comp);
             } else {
                 recovery_steps++;
                 comp.unsafe_depth = 0;
                 comp.loop_depth = 0;
+                if (comp.lex->pos == start_pos &&
+                    comp.lex->cur.type != TOK_EOF &&
+                    comp.lex->cur.type != TOK_SEMI) {
+                    next_token(comp.lex);
+                }
                 vortex_lexer_sync(comp.lex, false);
             }
         }
@@ -984,6 +1410,43 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
     ir_region_verify(&main_ir);
     g_recover_active = saved_rec;
 
+    /* Audit all IR_CALL_USER sites recorded inside user function bodies */
+    for (int i = 0; i < g_call_site_count; i++) {
+        const VortexCallSite* cs = &g_call_sites[i];
+        UserFunc* uf = user_func_find(cs->name);
+        if (!uf) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[VORTEX ERROR] Unresolved user function '%s'", cs->name);
+            if (g_ultrasafe_level >= 3) {
+                vortex_diag_add(VDIAG_ERROR, "E101",
+                                cs->file ? cs->file : g_current_filename,
+                                cs->line, cs->col > 0 ? cs->col : 1, msg, "Define the function or import its module.");
+                continue;
+            }
+            const char* err_file = cs->file ? cs->file : g_current_filename;
+            int err_line = cs->line;
+            map_diag_location(&err_file, &err_line);
+            fprintf(stderr, "%s at %s:%d\n", msg, err_file, err_line);
+            vortex_error("");
+        }
+        uf->called = true;
+        if (uf->is_unsafe && !cs->called_in_unsafe) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[VORTEX SAFETY ERROR] Calling unsafe fn '%s' requires an unsafe block or unsafe fn", uf->name);
+            if (g_ultrasafe_level >= 3) {
+                vortex_diag_add(VDIAG_ERROR, "E302",
+                                cs->file ? cs->file : g_current_filename,
+                                cs->line, cs->col > 0 ? cs->col : 1, msg, "Wrap the call in 'unsafe { ... }' or mark the caller 'unsafe fn'.");
+                continue;
+            }
+            const char* err_file = cs->file ? cs->file : g_current_filename;
+            int err_line = cs->line;
+            map_diag_location(&err_file, &err_line);
+            fprintf(stderr, "%s at %s:%d\n", msg, err_file, err_line);
+            vortex_error("");
+        }
+    }
+
     /* Pre-scan main_ir calls so `--check` and `vortex_ultrasafe_audit_program()` see direct/forward calls */
     for (int i = 0; i < main_ir.count; i++) {
         IRInstruction* ins = &main_ir.instrs[i];
@@ -995,11 +1458,13 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
             if (g_ultrasafe_level >= 3) {
                 vortex_diag_add(VDIAG_ERROR, "E101",
                                 ins->file ? ins->file : g_current_filename,
-                                ins->line, 1, msg, "Define the function or import its module.");
+                                ins->line, ins->col > 0 ? ins->col : 1, msg, "Define the function or import its module.");
                 continue;
             }
-            fprintf(stderr, "%s at %s:%d\n", msg,
-                    ins->file ? ins->file : g_current_filename, ins->line);
+            const char* err_file = ins->file ? ins->file : g_current_filename;
+            int err_line = ins->line;
+            map_diag_location(&err_file, &err_line);
+            fprintf(stderr, "%s at %s:%d\n", msg, err_file, err_line);
             vortex_error("");
         }
         uf->called = true;
@@ -1009,11 +1474,13 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
             if (g_ultrasafe_level >= 3) {
                 vortex_diag_add(VDIAG_ERROR, "E302",
                                 ins->file ? ins->file : g_current_filename,
-                                ins->line, 1, msg, "Wrap the call in 'unsafe { ... }' or mark the caller 'unsafe fn'.");
+                                ins->line, ins->col > 0 ? ins->col : 1, msg, "Wrap the call in 'unsafe { ... }' or mark the caller 'unsafe fn'.");
                 continue;
             }
-            fprintf(stderr, "%s at %s:%d\n", msg,
-                    ins->file ? ins->file : g_current_filename, ins->line);
+            const char* err_file = ins->file ? ins->file : g_current_filename;
+            int err_line = ins->line;
+            map_diag_location(&err_file, &err_line);
+            fprintf(stderr, "%s at %s:%d\n", msg, err_file, err_line);
             vortex_error("");
         }
     }
@@ -1023,10 +1490,12 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
         vortex_ultrasafe_audit_program();
     }
 
-    if (g_diag_count > 0 && (g_ultrasafe_level > 0 || g_json_errors)) {
-        vortex_diag_print_all();
-    } else if (g_check_only && g_json_errors) {
-        vortex_diag_print_all();
+    if (!g_lsp_capture_errors) {
+        if (g_diag_count > 0 && (g_ultrasafe_level > 0 || g_json_errors)) {
+            vortex_diag_print_all();
+        } else if (g_check_only && g_json_errors) {
+            vortex_diag_print_all();
+        }
     }
 
     if (g_diag_error_count > 0) {
@@ -1084,97 +1553,58 @@ bool vortex_frontend_check(const char* source, const char* file_path, char* diag
     if (diag_out && diag_cap > 0) diag_out[0] = '\0';
     volatile bool prev_capture = g_lsp_capture_errors;
     const char* volatile prev_file = g_current_filename;
+    volatile int prev_ultrasafe = g_ultrasafe_level;
+    volatile bool prev_check = g_check_only;
+    volatile bool prev_json = g_json_errors;
+    volatile VortexBuildMode prev_mode = g_compile_mode;
     jmp_buf saved_jmp;
     memcpy(&saved_jmp, &g_error_jmp, sizeof(saved_jmp));
 
     g_lsp_capture_errors = true;
+    g_ultrasafe_level = 3;
+    g_check_only = true;
+    g_json_errors = false;
+    g_compile_mode = VORTEX_MODE_SAFE;
     g_lsp_diag_len = 0;
     g_lsp_diag_buf[0] = '\0';
     g_current_filename = (file_path && file_path[0]) ? file_path : "<lsp>";
+    vortex_diag_reset();
+
+    char* volatile merged = vortex_resolve_imports_from_memory(source ? source : "", g_current_filename);
+    const char* input_src = merged ? merged : (source ? source : "");
 
     volatile bool ok = false;
-    SymbolTable* volatile symtab = NULL;
     if (setjmp(g_error_jmp) == 0) {
-        arena_init();
-        debug_info_reset();
-        lexer_reset_imports();
-        g_struct_type_count = 0;
-        g_enum_type_count = 0;
-        vortex_parser_reset_tables(true);
-        g_user_func_count = 0;
-        g_user_func_reloc_count = 0;
-        g_ffi_func_count = 0;
-        g_literal_string_count = 0;
-
-        Lexer lexer;
-        lexer_init(&lexer, source ? source : "");
-
-        symtab = (SymbolTable*)calloc(1, sizeof(SymbolTable));
-        if (!symtab) {
-            vortex_error("Out of memory allocating SymbolTable");
-        }
-
         uint8_t dummy_code[64];
         JITBuffer dummy_jit;
+        memset(&dummy_jit, 0, sizeof(dummy_jit));
         dummy_jit.code = dummy_code;
-        dummy_jit.size = 0;
         dummy_jit.capacity = sizeof(dummy_code);
-
-        IRBuffer main_ir;
-        ir_init(&main_ir);
-
-        Compiler comp;
-        memset(&comp, 0, sizeof(comp));
-        comp.lex = &lexer;
-        comp.st = symtab;
-        comp.j = &dummy_jit;
-        comp.ir = &main_ir;
-        comp.last_struct_id = -1;
-
-        while (comp.lex->cur.type != TOK_EOF) {
-            parse_statement(&comp);
-        }
-
-        ir_region_verify(&main_ir);
-
-        for (int r = 0; r < g_user_func_reloc_count; r++) {
-            UserFunc* uf = user_func_find(g_user_func_relocs[r].name);
-            if (!uf) {
-                vortex_diag_emit(stderr, "[VORTEX ERROR] Unresolved user function '%s' at %s:%d\n",
-                                 g_user_func_relocs[r].name,
-                                 g_user_func_relocs[r].call_file ? g_user_func_relocs[r].call_file : g_current_filename,
-                                 g_user_func_relocs[r].call_line);
-                vortex_error("");
-            }
-            if (uf->is_unsafe && !g_user_func_relocs[r].called_in_unsafe) {
-                vortex_diag_emit(stderr,
-                                 "[VORTEX SAFETY ERROR] Calling unsafe fn '%s' requires an unsafe block or unsafe fn at %s:%d\n",
-                                 uf->name,
-                                 g_user_func_relocs[r].call_file ? g_user_func_relocs[r].call_file : g_current_filename,
-                                 g_user_func_relocs[r].call_line);
-                vortex_error("");
-            }
-        }
-
-        free(symtab);
-        symtab = NULL;
-        ir_free(&main_ir);
-        ok = true;
+        ok = compile_vortex_source_internal(input_src, dummy_code, &dummy_jit);
     } else {
-        free(symtab);
-        symtab = NULL;
         ir_free_all_active();
-        if (diag_out && diag_cap > 0) {
-            strncpy(diag_out, g_lsp_diag_buf, diag_cap - 1);
-            diag_out[diag_cap - 1] = '\0';
+        if (diag_out && diag_cap > 0 && g_lsp_diag_buf[0]) {
+            vx_str_copy(diag_out, diag_cap, g_lsp_diag_buf);
         }
         ok = false;
     }
 
+    vortex_diag_sort();
+    if (diag_out && diag_cap > 0 && !diag_out[0] && g_diag_count > 0) {
+        vx_str_copy(diag_out, diag_cap, g_diags[0].message);
+    }
+
+    free(merged);
+    vortex_source_map_reset();
+
     memcpy(&g_error_jmp, &saved_jmp, sizeof(saved_jmp));
     g_current_filename = prev_file;
     g_lsp_capture_errors = prev_capture;
-    return ok;
+    g_ultrasafe_level = prev_ultrasafe;
+    g_check_only = prev_check;
+    g_json_errors = prev_json;
+    g_compile_mode = prev_mode;
+    return ok && (g_diag_error_count == 0);
 }
 
 int execute_vortex_source(const char* source) {
@@ -1252,6 +1682,8 @@ typedef struct {
     char* out_buf;
     size_t out_len;
     size_t out_cap;
+    int cur_merged_line;
+    bool tolerant_missing;
 } VortexImportResolver;
 
 static bool import_append_str(VortexImportResolver* r, const char* s, size_t len) {
@@ -1263,7 +1695,12 @@ static bool import_append_str(VortexImportResolver* r, const char* s, size_t len
         r->out_buf = nb;
         r->out_cap = ncap;
     }
-    if (len > 0) memcpy(r->out_buf + r->out_len, s, len);
+    if (len > 0) {
+        memcpy(r->out_buf + r->out_len, s, len);
+        for (size_t i = 0; i < len; i++) {
+            if (s[i] == '\n') r->cur_merged_line++;
+        }
+    }
     r->out_len += len;
     r->out_buf[r->out_len] = '\0';
     return true;
@@ -1443,29 +1880,11 @@ static char* import_read_file_text(const char* path, size_t* out_len) {
     return buf;
 }
 
-static bool import_resolve_file_recursive(VortexImportResolver* r, const char* file_path, bool is_entry) {
-    char canon[1024];
-    import_canonicalize_path(file_path, canon, sizeof(canon));
-    if (import_has_seen(r, canon)) {
-        return true;
-    }
+static bool import_resolve_file_recursive(VortexImportResolver* r, const char* file_path, bool is_entry, bool is_stdlib);
 
-    size_t len = 0;
-    char* src = import_read_file_text(file_path, &len);
-    if (!src) {
-        if (is_entry) {
-            fprintf(stderr, "[VORTEX ERROR] Cannot open file '%s'\n", file_path);
-        } else {
-            fprintf(stderr, "[VORTEX IMPORT ERROR] Cannot open imported file '%s'\n", file_path);
-        }
-        return false;
-    }
-
-    if (!import_mark_seen(r, canon)) {
-        free(src);
-        fprintf(stderr, "[VORTEX ERROR] Memory allocation error\n");
-        return false;
-    }
+static bool import_resolve_text_lines(VortexImportResolver* r, const char* src, size_t len,
+                                      const char* file_path, bool is_entry, bool is_stdlib) {
+    int file_id = source_map_intern_file(file_path);
 
     size_t pos = 0;
     /* Strip UTF-8 BOM if present */
@@ -1486,40 +1905,80 @@ static bool import_resolve_file_recursive(VortexImportResolver* r, const char* f
         if (import_parse_line_directive(src + line_start, line_len, spec, sizeof(spec))) {
             char resolved[1024];
             if (!import_resolve_target(spec, file_path, resolved, sizeof(resolved))) {
+                if (r->tolerant_missing) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "Cannot open imported file '%s'", spec);
+                    vortex_diag_add(VDIAG_ERROR, "E001", file_path, line_num, 1, msg,
+                                    "Check the import path or install the required package.");
+                    line_num++;
+                    continue;
+                }
                 fprintf(stderr, "[VORTEX IMPORT ERROR] Cannot open imported file '%s' (at %s:%d)\n",
                         spec, file_path, line_num);
-                free(src);
                 return false;
             }
             char target_canon[1024];
             import_canonicalize_path(resolved, target_canon, sizeof(target_canon));
             if (!import_has_seen(r, target_canon)) {
+                bool child_is_stdlib = is_stdlib || (strncmp(spec, "std/", 4) == 0) || (strncmp(spec, "std\\", 4) == 0);
                 char marker[1280];
                 snprintf(marker, sizeof(marker), "// --- begin import \"%s\" (%s:%d) ---\n",
                          spec, file_path, line_num);
                 if (!import_append_cstr(r, marker) ||
-                    !import_resolve_file_recursive(r, resolved, false)) {
-                    free(src);
+                    !import_resolve_file_recursive(r, resolved, false, child_is_stdlib)) {
                     return false;
                 }
                 snprintf(marker, sizeof(marker), "\n// --- end import \"%s\" ---\n", spec);
                 if (!import_append_cstr(r, marker)) {
-                    free(src);
                     return false;
                 }
             }
         } else {
+            source_map_record_line(r->cur_merged_line, line_num, file_id, is_stdlib, !is_entry);
             if (!import_append_str(r, src + line_start, line_len) ||
                 (has_nl && !import_append_str(r, "\n", 1))) {
-                free(src);
                 return false;
             }
         }
         line_num++;
     }
 
-    free(src);
     return true;
+}
+
+static bool import_resolve_file_recursive(VortexImportResolver* r, const char* file_path, bool is_entry, bool is_stdlib) {
+    char canon[1024];
+    import_canonicalize_path(file_path, canon, sizeof(canon));
+    if (import_has_seen(r, canon)) {
+        return true;
+    }
+
+    size_t len = 0;
+    char* src = import_read_file_text(file_path, &len);
+    if (!src) {
+        if (r->tolerant_missing && !is_entry) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "Cannot open imported file '%s'", file_path);
+            vortex_diag_add(VDIAG_ERROR, "E001", file_path, 1, 1, msg, NULL);
+            return true;
+        }
+        if (is_entry) {
+            fprintf(stderr, "[VORTEX ERROR] Cannot open file '%s'\n", file_path);
+        } else {
+            fprintf(stderr, "[VORTEX IMPORT ERROR] Cannot open imported file '%s'\n", file_path);
+        }
+        return false;
+    }
+
+    if (!import_mark_seen(r, canon)) {
+        free(src);
+        fprintf(stderr, "[VORTEX ERROR] Memory allocation error\n");
+        return false;
+    }
+
+    bool ok = import_resolve_text_lines(r, src, len, file_path, is_entry, is_stdlib);
+    free(src);
+    return ok;
 }
 
 char* vortex_resolve_imports(const char* entry_path) {
@@ -1528,14 +1987,17 @@ char* vortex_resolve_imports(const char* entry_path) {
         return NULL;
     }
 
+    vortex_source_map_reset();
+
     VortexImportResolver r;
     memset(&r, 0, sizeof(r));
+    r.cur_merged_line = 1;
     if (!import_append_cstr(&r, "")) {
         free(r.out_buf);
         return NULL;
     }
 
-    bool ok = import_resolve_file_recursive(&r, entry_path, true);
+    bool ok = import_resolve_file_recursive(&r, entry_path, true, false);
     for (int i = 0; i < r.count; i++) {
         free(r.paths[i]);
     }
@@ -1543,8 +2005,44 @@ char* vortex_resolve_imports(const char* entry_path) {
 
     if (!ok) {
         free(r.out_buf);
+        vortex_source_map_reset();
         return NULL;
     }
+    g_source_map.source_ptr = r.out_buf;
+    return r.out_buf;
+}
+
+char* vortex_resolve_imports_from_memory(const char* source, const char* virtual_path) {
+    const char* vpath = (virtual_path && virtual_path[0]) ? virtual_path : "<lsp>";
+    const char* text = source ? source : "";
+
+    vortex_source_map_reset();
+
+    VortexImportResolver r;
+    memset(&r, 0, sizeof(r));
+    r.cur_merged_line = 1;
+    r.tolerant_missing = true;
+    if (!import_append_cstr(&r, "")) {
+        free(r.out_buf);
+        return NULL;
+    }
+
+    char canon[1024];
+    import_canonicalize_path(vpath, canon, sizeof(canon));
+    import_mark_seen(&r, canon);
+
+    bool ok = import_resolve_text_lines(&r, text, strlen(text), vpath, true, false);
+    for (int i = 0; i < r.count; i++) {
+        free(r.paths[i]);
+    }
+    free(r.paths);
+
+    if (!ok) {
+        free(r.out_buf);
+        vortex_source_map_reset();
+        return NULL;
+    }
+    g_source_map.source_ptr = r.out_buf;
     return r.out_buf;
 }
 
@@ -1869,16 +2367,17 @@ int vortex_cmd_spec(int argc, char** argv) {
 
     static const char* k_keywords[] = {
         "let", "mut", "fn", "unsafe", "return", "if", "else", "while", "for",
-        "in", "parallel_for", "struct", "enum", "import", "extern", "from",
+        "in", "parallel_for", "struct", "enum", "match", "import", "extern",
         "as", "break", "continue", "true", "false"
     };
     static const char* k_types[] = {
-        "i64", "i32", "f32", "str", "ptr", "void", "[i64]", "[i32]", "[f32]", "<Struct>", "<Enum>"
+        "i64", "i32", "i16", "i8", "u64", "u32", "u16", "u8", "usize", "isize",
+        "bool", "char", "f32", "f64", "str", "ptr", "void", "[T]", "<Struct>", "<Enum>"
     };
     static const char* k_ops[] = {
         "+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=",
         "&&", "||", "!", "&", "|", "^", "~", "<<", ">>",
-        "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "::"
+        "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "::", "?:", "=>"
     };
 
     if (as_json) {

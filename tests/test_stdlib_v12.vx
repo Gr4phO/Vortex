@@ -1,0 +1,91 @@
+// Automated test for std/fs, std/math, std/str, std/env (Vortex v1.2)
+import "std/fs";
+import "std/math";
+import "std/str";
+import "std/env";
+
+fn vec_str_at(v: ptr, idx: i64) -> str {
+    let raw = vec_get(v, idx);
+    let mut s = "";
+    unsafe { s = raw as str; }
+    return s;
+}
+
+fn test_std_math() -> i64 {
+    assert_eq(abs_i64(-42), 42);
+    assert_eq(min_i64(3, 9), 3);
+    assert_eq(max_i64(3, 9), 9);
+    assert_eq(clamp_i64(25, 0, 10), 10);
+
+    let p = pow_f32(2.0, 5.0);
+    assert(abs_f32(p - 32.0) < 0.01);
+    assert(abs_f32(floor_f32(3.8) - 3.0) < 0.01);
+    assert(abs_f32(ceil_f32(3.2) - 4.0) < 0.01);
+    assert(abs_f32(round_f32(3.6) - 4.0) < 0.01);
+    assert(abs_f32(round_f32(-3.6) + 4.0) < 0.01);
+    assert(abs_f32(lerp_f32(10.0, 20.0, 0.25) - 12.5) < 0.01);
+    assert(abs_f32(atan2_f32(1.0, 1.0) - MATH_PI() * 0.25) < 0.01);
+    assert(abs_f32(tan_f32(0.0)) < 0.01);
+    assert(abs_f32(log_f32(exp_f32(2.0)) - 2.0) < 0.01);
+    assert(abs_f32(deg_to_rad(180.0) - MATH_PI()) < 0.01);
+    assert(abs_f32(rad_to_deg(MATH_TAU()) - 360.0) < 0.1);
+    assert(abs_f32(clamp_f32(clamp_f32(5.0, 0.0, 3.0), min_f32(1.0, 2.0), max_f32(3.0, 4.0)) - 3.0) < 0.01);
+    return 0;
+}
+
+fn test_std_str() -> i64 {
+    assert_eq(str_starts_with("vortex_lang", "vortex"), 1);
+    assert_eq(str_ends_with("vortex_lang", "lang"), 1);
+    assert_eq(str_contains("vortex_lang", "tex_l"), 1);
+    assert_eq(str_eq(str_trim("  \thello world \r\n"), "hello world"), 1);
+    assert_eq(str_eq(str_to_upper("Vortex 1.2!"), "VORTEX 1.2!"), 1);
+    assert_eq(str_eq(str_to_lower("Vortex 1.2!"), "vortex 1.2!"), 1);
+    assert_eq(str_eq(str_replace("foo-bar-foo", "foo", "vx"), "vx-bar-vx"), 1);
+    assert_eq(str_eq(str_repeat("ab", 3), "ababab"), 1);
+
+    let parts = str_split("one,two,three", ",");
+    assert_eq(vec_len(parts), 3);
+    assert_eq(str_eq(vec_str_at(parts, 0), "one"), 1);
+    assert_eq(str_eq(vec_str_at(parts, 1), "two"), 1);
+    assert_eq(str_eq(vec_str_at(parts, 2), "three"), 1);
+    return 0;
+}
+
+fn test_std_env() -> i64 {
+    assert(env_argc() >= 1);
+    assert(str_len(env_arg(0)) > 0);
+    assert_eq(str_eq(env_var_or("VORTEX_DEFINITELY_UNSET_VAR_999", "fallback_ok"), "fallback_ok"), 1);
+    assert_eq(env_exists("PATH") + env_exists("Path") >= 1 ? 1 : 0, 1);
+    let t0 = time_now_ms();
+    assert(t0 > 1500000000000);
+    let _sl = time_sleep_ms(1);
+    let _ev = env_var("PATH");
+    return 0;
+}
+
+fn test_std_fs() -> i64 {
+    let tmp_dir = env_var_or("TEMP", env_var_or("TMPDIR", "/tmp"));
+    let sep = env_exists("TEMP") != 0 ? "\\" : "/";
+    let path = str_concat(tmp_dir, str_concat(sep, str_concat("vortex_std_fs_test_", str_concat(str_from_i64(time_now_ms()), ".txt"))));
+
+    assert_eq(fs_write_text(path, "alpha\nbeta\n"), 1);
+    assert_eq(fs_file_exists(path), 1);
+    assert_eq(fs_append_text(path, "gamma"), 1);
+    assert_eq(str_eq(fs_read_text(path), "alpha\nbeta\ngamma"), 1);
+
+    let lines = fs_read_lines(path);
+    assert_eq(vec_len(lines), 3);
+    assert_eq(str_eq(vec_str_at(lines, 0), "alpha"), 1);
+    assert_eq(str_eq(vec_str_at(lines, 1), "beta"), 1);
+    assert_eq(str_eq(vec_str_at(lines, 2), "gamma"), 1);
+
+    assert_eq(fs_delete(path), 1);
+    assert_eq(fs_file_exists(path), 0);
+    return 0;
+}
+
+test_std_math();
+test_std_str();
+test_std_env();
+test_std_fs();
+print_str("[PASS] test_stdlib_v12 OK\n");

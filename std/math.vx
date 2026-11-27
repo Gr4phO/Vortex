@@ -1,0 +1,89 @@
+// Vortex Standard Library: std/math
+// Integer and single-precision floating point mathematical utilities
+
+fn MATH_PI() -> f32 { return 3.14159265; }
+fn MATH_TAU() -> f32 { return 6.28318530; }
+fn MATH_E() -> f32 { return 2.71828183; }
+
+fn abs_i64(x: i64) -> i64 {
+    return x < 0 ? -x : x;
+}
+
+fn min_i64(a: i64, b: i64) -> i64 {
+    return a < b ? a : b;
+}
+
+fn max_i64(a: i64, b: i64) -> i64 {
+    return a > b ? a : b;
+}
+
+fn clamp_i64(x: i64, lo: i64, hi: i64) -> i64 {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+
+fn abs_f32(x: f32) -> f32 {
+    return fabsf_val(x);
+}
+
+fn min_f32(a: f32, b: f32) -> f32 {
+    return a < b ? a : b;
+}
+
+fn max_f32(a: f32, b: f32) -> f32 {
+    return a > b ? a : b;
+}
+
+fn clamp_f32(x: f32, lo: f32, hi: f32) -> f32 {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+
+fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
+    return a + (b - a) * t;
+}
+
+fn floor_f32(x: f32) -> f32 {
+    return floorf_val(x);
+}
+
+fn ceil_f32(x: f32) -> f32 {
+    return ceilf_val(x);
+}
+
+fn round_f32(x: f32) -> f32 {
+    if x >= 0.0 {
+        return floorf_val(x + 0.5);
+    }
+    return ceilf_val(x - 0.5);
+}
+
+fn pow_f32(base: f32, exp: f32) -> f32 {
+    return powf_val(base, exp);
+}
+
+fn tan_f32(rad: f32) -> f32 {
+    return tanf_rad(rad);
+}
+
+fn atan2_f32(y: f32, x: f32) -> f32 {
+    return atan2f_rad(y, x);
+}
+
+fn exp_f32(x: f32) -> f32 {
+    return expf_val(x);
+}
+
+fn log_f32(x: f32) -> f32 {
+    return logf_val(x);
+}
+
+fn deg_to_rad(deg: f32) -> f32 {
+    return deg * 0.017453292;
+}
+
+fn rad_to_deg(rad: f32) -> f32 {
+    return rad * 57.2957795;
+}

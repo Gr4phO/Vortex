@@ -84,6 +84,8 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
 
     IRBuffer fn_ir;
     ir_init(&fn_ir);
+    strncpy(fn_ir.func_name, uf->name, sizeof(fn_ir.func_name) - 1);
+    fn_ir.func_name[sizeof(fn_ir.func_name) - 1] = '\0';
 
     SymbolTable* fn_st = (SymbolTable*)calloc(1, sizeof(SymbolTable));
     if (!fn_st) {
@@ -125,6 +127,7 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
         g_recover_active = true;
         int recovery_steps = 0;
         while (fn_comp.lex->cur.type != TOK_RBRACE && fn_comp.lex->cur.type != TOK_EOF && recovery_steps < 512) {
+            size_t start_pos = fn_comp.lex->pos;
             if (setjmp(g_recover_jmp) == 0) {
                 parse_statement(&fn_comp);
             } else {
@@ -132,6 +135,12 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
                 recovery_steps++;
                 fn_comp.unsafe_depth = is_unsafe ? 1 : 0;
                 fn_comp.loop_depth = 0;
+                if (fn_comp.lex->pos == start_pos &&
+                    fn_comp.lex->cur.type != TOK_EOF &&
+                    fn_comp.lex->cur.type != TOK_SEMI &&
+                    fn_comp.lex->cur.type != TOK_RBRACE) {
+                    next_token(fn_comp.lex);
+                }
                 vortex_lexer_sync(fn_comp.lex, true);
             }
         }
@@ -170,6 +179,16 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
 
     if (g_ultrasafe_level >= 1) {
         vortex_ultrasafe_audit_ir(&fn_ir, fn_st, uf->name, explicit_ret_type ? uf->ret_type : TYPE_VOID, fn_decl_line);
+    }
+
+    for (int i = 0; i < fn_ir.count; i++) {
+        if (fn_ir.instrs[i].op == IR_CALL_USER) {
+            vortex_record_user_call_site(fn_ir.instrs[i].func_name,
+                                         fn_ir.instrs[i].imm != 0,
+                                         fn_ir.instrs[i].file,
+                                         fn_ir.instrs[i].line,
+                                         fn_ir.instrs[i].col);
+        }
     }
 
     if (g_diag_error_count > err_before) {
@@ -319,6 +338,160 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
     bk->patch_jump(c->j, skip_func_jmp);
     free(fn_st);
     ir_free(&fn_ir);
+}
+
+typedef struct {
+    VortexType type;
+    int64_t iv;
+    float fv;
+    char* sv;
+} ConstVal;
+
+static void consume_stmt_end(Compiler* c);
+static ConstVal parse_const_add(Compiler* c);
+
+static ConstVal parse_const_primary(Compiler* c) {
+    Lexer* l = c->lex;
+    ConstVal res = { TYPE_I64, 0, 0.0f, NULL };
+    if (l->cur.type == TOK_MINUS || l->cur.type == TOK_PLUS) {
+        bool neg = (l->cur.type == TOK_MINUS);
+        next_token(l);
+        res = parse_const_primary(c);
+        if (neg) {
+            if (res.type == TYPE_F32) res.fv = -res.fv;
+            else res.iv = -res.iv;
+        }
+        return res;
+    }
+    if (l->cur.type == TOK_LPAREN) {
+        next_token(l);
+        res = parse_const_add(c);
+        vortex_parser_match(c, TOK_RPAREN);
+        return res;
+    }
+    if (l->cur.type == TOK_TRUE) { next_token(l); res.iv = 1; return res; }
+    if (l->cur.type == TOK_FALSE) { next_token(l); res.iv = 0; return res; }
+    if (l->cur.type == TOK_INT) { res.iv = l->cur.int_val; next_token(l); return res; }
+    if (l->cur.type == TOK_FLOAT) { res.type = TYPE_F32; res.fv = l->cur.float_val; next_token(l); return res; }
+    if (l->cur.type == TOK_STRING) {
+        res.type = TYPE_STR;
+        res.sv = strdup(l->cur.text);
+        next_token(l);
+        return res;
+    }
+    if (l->cur.type == TOK_IDENT) {
+        char id[64];
+        strncpy(id, l->cur.text, sizeof(id) - 1);
+        id[sizeof(id) - 1] = '\0';
+        int line = l->cur.line, col = l->cur.col;
+        next_token(l);
+        if (l->cur.type == TOK_COLONCOLON) {
+            next_token(l);
+            VortexEnumType* en = enum_type_find(id);
+            if (en && l->cur.type == TOK_IDENT) {
+                for (int vi = 0; vi < en->variant_count; vi++) {
+                    if (strcmp(en->variants[vi].name, l->cur.text) == 0) {
+                        res.iv = en->variants[vi].value;
+                        next_token(l);
+                        return res;
+                    }
+                }
+            }
+            vortex_compile_error("E001", line, col, "Unknown enum variant in const expression", NULL);
+        }
+        VortexConst* kc = vortex_const_find(id);
+        if (!kc) {
+            char msg[192];
+            snprintf(msg, sizeof(msg), "Undefined constant '%s' in const expression", id);
+            vortex_compile_error("E001", line, col, msg, NULL);
+        }
+        res.type = kc->type;
+        res.iv = kc->int_val;
+        res.fv = kc->float_val;
+        if (kc->str_val) res.sv = strdup(kc->str_val);
+        return res;
+    }
+    vortex_compile_error("E001", l->cur.line, l->cur.col, "Expected constant expression after 'const'", NULL);
+    return res;
+}
+
+static ConstVal parse_const_mul(Compiler* c) {
+    ConstVal left = parse_const_primary(c);
+    while (c->lex->cur.type == TOK_STAR || c->lex->cur.type == TOK_SLASH || c->lex->cur.type == TOK_PERCENT) {
+        VortexTokenType op = c->lex->cur.type;
+        int line = c->lex->cur.line, col = c->lex->cur.col;
+        next_token(c->lex);
+        ConstVal right = parse_const_primary(c);
+        if (left.type == TYPE_F32 || right.type == TYPE_F32) {
+            float lf = (left.type == TYPE_F32) ? left.fv : (float)left.iv;
+            float rf = (right.type == TYPE_F32) ? right.fv : (float)right.iv;
+            left.type = TYPE_F32;
+            if (op == TOK_STAR) left.fv = lf * rf;
+            else if (op == TOK_SLASH) {
+                if (rf == 0.0f) vortex_compile_error("E201", line, col, "Division by zero in const expression", NULL);
+                left.fv = lf / rf;
+            }
+        } else {
+            if (op == TOK_STAR) left.iv *= right.iv;
+            else if (op == TOK_SLASH) {
+                if (right.iv == 0) vortex_compile_error("E201", line, col, "Division by zero in const expression", NULL);
+                left.iv /= right.iv;
+            } else {
+                if (right.iv == 0) vortex_compile_error("E201", line, col, "Modulo by zero in const expression", NULL);
+                left.iv %= right.iv;
+            }
+        }
+    }
+    return left;
+}
+
+static ConstVal parse_const_add(Compiler* c) {
+    ConstVal left = parse_const_mul(c);
+    while (c->lex->cur.type == TOK_PLUS || c->lex->cur.type == TOK_MINUS) {
+        VortexTokenType op = c->lex->cur.type;
+        next_token(c->lex);
+        ConstVal right = parse_const_mul(c);
+        if (left.type == TYPE_F32 || right.type == TYPE_F32) {
+            float lf = (left.type == TYPE_F32) ? left.fv : (float)left.iv;
+            float rf = (right.type == TYPE_F32) ? right.fv : (float)right.iv;
+            left.type = TYPE_F32;
+            left.fv = (op == TOK_PLUS) ? (lf + rf) : (lf - rf);
+        } else {
+            left.iv = (op == TOK_PLUS) ? (left.iv + right.iv) : (left.iv - right.iv);
+        }
+    }
+    return left;
+}
+
+static void parse_const_stmt(Compiler* c) {
+    Lexer* l = c->lex;
+    next_token(l); /* consume 'const' */
+    if (l->cur.type != TOK_IDENT) {
+        vortex_compile_error("E001", l->cur.line, l->cur.col, "Expected identifier after 'const'", NULL);
+    }
+    char cname[64];
+    strncpy(cname, l->cur.text, sizeof(cname) - 1);
+    cname[sizeof(cname) - 1] = '\0';
+    next_token(l);
+
+    VortexType explicit_t = TYPE_UNKNOWN;
+    if (l->cur.type == TOK_COLON) {
+        next_token(l);
+        explicit_t = parse_type_name(l, NULL);
+    }
+    vortex_parser_match(c, TOK_EQ);
+    ConstVal val = parse_const_add(c);
+    consume_stmt_end(c);
+
+    VortexType final_t = (explicit_t != TYPE_UNKNOWN) ? explicit_t : val.type;
+    if (final_t == TYPE_F32 && val.type != TYPE_F32) {
+        val.fv = (float)val.iv;
+    } else if (final_t != TYPE_F32 && final_t != TYPE_STR && val.type == TYPE_F32) {
+        val.iv = (int64_t)val.fv;
+    }
+    const char* stored_sv = val.sv ? vortex_intern_cstr(val.sv) : NULL;
+    free(val.sv);
+    vortex_const_add(cname, final_t, val.iv, val.fv, stored_sv);
 }
 
 static void parse_cfg_stmt(Compiler* c) {
@@ -593,12 +766,18 @@ static void parse_struct_stmt(Compiler* c) {
             ftype = TYPE_F32; fsize = 4; falign = 4;
             next_token(l);
         } else if (l->cur.type == TOK_IDENT) {
-            if (strcmp(l->cur.text, "i32") == 0) {
+            if (strcmp(l->cur.text, "i32") == 0 || strcmp(l->cur.text, "u32") == 0) {
                 ftype = TYPE_I32; fsize = 4; falign = 4;
             } else if (strcmp(l->cur.text, "ptr") == 0) {
                 ftype = TYPE_PTR; fsize = 8; falign = 8;
             } else if (strcmp(l->cur.text, "str") == 0) {
                 ftype = TYPE_STR; fsize = 8; falign = 8;
+            } else if (strcmp(l->cur.text, "bool") == 0 || strcmp(l->cur.text, "u64") == 0 ||
+                       strcmp(l->cur.text, "usize") == 0 || strcmp(l->cur.text, "isize") == 0 ||
+                       strcmp(l->cur.text, "i8") == 0 || strcmp(l->cur.text, "u8") == 0 ||
+                       strcmp(l->cur.text, "i16") == 0 || strcmp(l->cur.text, "u16") == 0 ||
+                       strcmp(l->cur.text, "char") == 0) {
+                ftype = TYPE_I64; fsize = 8; falign = 8;
             } else {
                 VortexStructType* sub_st = struct_type_find(l->cur.text);
                 if (sub_st) {
@@ -611,8 +790,14 @@ static void parse_struct_stmt(Compiler* c) {
         } else if (l->cur.type == TOK_LBRACKET) {
             next_token(l);
             if (l->cur.type == TOK_F32_KW) ftype = TYPE_PTR_F32;
-            else if (l->cur.type == TOK_IDENT && strcmp(l->cur.text, "i32") == 0) ftype = TYPE_PTR_I32;
-            else ftype = TYPE_PTR_I64;
+            else if (l->cur.type == TOK_IDENT && (strcmp(l->cur.text, "i32") == 0 || strcmp(l->cur.text, "u32") == 0)) ftype = TYPE_PTR_I32;
+            else if (l->cur.type == TOK_IDENT && struct_type_find(l->cur.text) != NULL) {
+                VortexStructType* elem_st = struct_type_find(l->cur.text);
+                ftype = TYPE_PTR_STRUCT;
+                sub_sid = elem_st->id;
+            } else {
+                ftype = TYPE_PTR_I64;
+            }
             fsize = 8; falign = 8;
             next_token(l);
             vortex_parser_match(c, TOK_RBRACKET);
@@ -703,6 +888,13 @@ static void parse_enum_stmt(Compiler* c) {
     if (l->cur.type == TOK_SEMI) next_token(l);
 }
 
+static void consume_stmt_end(Compiler* c) {
+    if (c->in_match_arm && (c->lex->cur.type == TOK_COMMA || c->lex->cur.type == TOK_RBRACE)) {
+        return;
+    }
+    vortex_parser_match(c, TOK_SEMI);
+}
+
 static void parse_let_stmt(Compiler* c, int stmt_line, int stmt_col) {
     Lexer* l = c->lex;
     next_token(l);
@@ -732,7 +924,7 @@ static void parse_let_stmt(Compiler* c, int stmt_line, int stmt_col) {
     c->last_struct_id = -1;
     VReg v_expr;
     VortexType expr_type = vortex_parse_expr(c, &v_expr);
-    vortex_parser_match(c, TOK_SEMI);
+    consume_stmt_end(c);
 
     if (explicit_type != TYPE_UNKNOWN && vortex_is_pointer_type(explicit_type) && vortex_is_scalar_int_type(expr_type)) {
         vortex_require_unsafe(c, "Integer-to-pointer assignment", stmt_line, stmt_col);
@@ -941,6 +1133,14 @@ static void parse_parallel_for_stmt(Compiler* c) {
     ir_emit_call(c->ir, v_ret, (void*)vortex_parallel_for_dispatch, dispatch_args, 4, TYPE_VOID);
 }
 
+static void pop_block_scope(Compiler* c, int saved_st_count) {
+    if (g_ultrasafe_level >= 1) {
+        vortex_ultrasafe_audit_symbols(c->st, saved_st_count, c->st->count,
+                                       c->ir->func_name[0] ? c->ir->func_name : "__main__");
+    }
+    c->st->count = saved_st_count;
+}
+
 static void parse_for_stmt(Compiler* c) {
     Lexer* l = c->lex;
     next_token(l);
@@ -950,6 +1150,7 @@ static void parse_for_stmt(Compiler* c) {
     vortex_parser_match(c, TOK_IDENT);
     vortex_parser_match(c, TOK_IN);
 
+    int saved_for_st_count = c->st->count;
     VReg v_start;
     vortex_parse_expr(c, &v_start);
     Symbol* i_sym = vortex_symtab_add(c->st, var_name, TYPE_I64, true);
@@ -967,6 +1168,7 @@ static void parse_for_stmt(Compiler* c) {
     ir_emit_mov(c->ir, lim_sym->vreg, v_end);
 
     if (vortex_try_match_and_emit_unrolled_riemann(c, i_sym, lim_sym)) {
+        c->st->count = saved_for_st_count;
         return;
     }
 
@@ -992,7 +1194,7 @@ static void parse_for_stmt(Compiler* c) {
     }
     if (c->loop_depth > 0) c->loop_depth--;
     vortex_parser_match(c, TOK_RBRACE);
-    c->st->count = saved_loop_st_count;
+    pop_block_scope(c, saved_loop_st_count);
 
     ir_emit_label(c->ir, lbl_step);
     VReg v_one = ir_new_vreg(c->ir, TYPE_I64);
@@ -1001,6 +1203,7 @@ static void parse_for_stmt(Compiler* c) {
 
     ir_emit_jmp(c->ir, lbl_start);
     ir_emit_label(c->ir, lbl_exit);
+    c->st->count = saved_for_st_count;
 }
 
 static void parse_while_stmt(Compiler* c) {
@@ -1026,8 +1229,8 @@ static void parse_while_stmt(Compiler* c) {
         parse_statement(c);
     }
     if (c->loop_depth > 0) c->loop_depth--;
-    c->st->count = saved_loop_st_count;
     vortex_parser_match(c, TOK_RBRACE);
+    pop_block_scope(c, saved_loop_st_count);
 
     ir_emit_jmp(c->ir, lbl_start);
     ir_emit_label(c->ir, lbl_exit);
@@ -1051,10 +1254,12 @@ static void parse_if_stmt(Compiler* c) {
     c->block_returned = false;
 
     vortex_parser_match(c, TOK_LBRACE);
+    int saved_if_st_count = c->st->count;
     while (c->lex->cur.type != TOK_RBRACE && c->lex->cur.type != TOK_EOF) {
         parse_statement(c);
     }
     vortex_parser_match(c, TOK_RBRACE);
+    pop_block_scope(c, saved_if_st_count);
 
     bool if_returned = c->block_returned;
     if (if_returned) {
@@ -1087,10 +1292,12 @@ static void parse_if_stmt(Compiler* c) {
             parse_statement(c);
         } else {
             vortex_parser_match(c, TOK_LBRACE);
+            int saved_else_st_count = c->st->count;
             while (c->lex->cur.type != TOK_RBRACE && c->lex->cur.type != TOK_EOF) {
                 parse_statement(c);
             }
             vortex_parser_match(c, TOK_RBRACE);
+            pop_block_scope(c, saved_else_st_count);
         }
         bool else_returned = c->block_returned;
         if (!if_returned && else_returned) {
@@ -1146,29 +1353,37 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
         next_token(l);
         VReg v_val;
         vortex_parse_expr(c, &v_val);
-        vortex_parser_match(c, TOK_SEMI);
+        consume_stmt_end(c);
 
         Symbol* sym = vortex_symtab_find(c->st, name);
         if (!sym) {
-            fprintf(stderr, "[VORTEX ERROR] Variable '%s' not found for assignment at %s:%d:%d\n",
-                    name, g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-            vortex_error("");
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[VORTEX ERROR] Variable '%s' not found for assignment", name);
+            vortex_compile_error("E001", stmt_line, stmt_col, msg, "Declare the variable with 'let mut' first.");
         }
+        sym->used = true;
         if (!sym->is_mut) {
-            fprintf(stderr, "[VORTEX SAFETY ERROR] Cannot reassign immutable binding '%s' at %s:%d:%d\n",
-                    name, g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-            vortex_error("");
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[VORTEX SAFETY ERROR] Cannot reassign immutable binding '%s'", name);
+            if (g_recover_active && g_ultrasafe_level >= 3) {
+                vortex_diag_add(VDIAG_ERROR, "E001", g_current_filename, stmt_line, stmt_col, msg,
+                                "Declare the binding with 'let mut' if it should be mutable.");
+                return true;
+            }
+            vortex_compile_error("E001", stmt_line, stmt_col, msg,
+                                 "Declare the binding with 'let mut' if it should be mutable.");
         }
         sym->reassigned = true;
         if (assign_op == TOK_EQ) {
             if (v_val >= 0 && v_val < c->ir->vreg_count && c->ir->vregs[v_val].is_ref) {
                 int val_depth = c->ir->vregs[v_val].region_depth;
                 if (val_depth > sym->region_depth) {
-                    fprintf(stderr,
-                            "[VORTEX REGION ERROR] Reference from inner arena scope (depth %d) cannot escape to outer variable '%s' (depth %d) at %s:%d:%d\n",
-                            val_depth, sym->name, sym->region_depth,
-                            g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-                    vortex_error("");
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                             "[VORTEX REGION ERROR] Reference from inner arena scope (depth %d) cannot escape to outer variable '%s' (depth %d)",
+                             val_depth, sym->name, sym->region_depth);
+                    vortex_compile_error("E301", stmt_line, stmt_col, msg,
+                                         "Allocate the value in the outer scope instead.");
                 }
                 sym->is_ref = true;
                 sym->region_id = c->ir->vregs[v_val].region_id;
@@ -1187,127 +1402,157 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
         return true;
     }
 
-    if (next_t == TOK_DOT) {
-        next_token(l);
-        vortex_parser_match(c, TOK_DOT);
-        if (l->cur.type != TOK_IDENT) {
-            fprintf(stderr, "[VORTEX ERROR] Expected field name after '.' at %s:%d:%d\n",
-                    g_current_filename ? g_current_filename : "<input>", l->cur.line, l->cur.col);
-            vortex_error("");
-        }
-        char fname[64];
-        strncpy(fname, l->cur.text, sizeof(fname) - 1);
-        fname[sizeof(fname) - 1] = '\0';
-        next_token(l);
+    if (next_t == TOK_DOT || next_t == TOK_LBRACKET) {
+        typedef struct {
+            bool is_index;
+            char field[64];
+            VReg v_idx;
+            int line;
+            int col;
+        } ChainStep;
 
-        if (l->cur.type == TOK_EQ || is_compound_assign_tok(l->cur.type)) {
-            VortexTokenType assign_op = l->cur.type;
+        /* Lookahead without mutating IR to verify an assignment operator terminates the chain */
+        bool has_assign = false;
+        {
             next_token(l);
-            VReg v_val;
-            VortexType val_t = vortex_parse_expr(c, &v_val);
-            vortex_parser_match(c, TOK_SEMI);
-
-            Symbol* sym = vortex_symtab_find(c->st, name);
-            if (!sym) {
-                fprintf(stderr, "[VORTEX ERROR] Variable '%s' not found for field assignment at %s:%d:%d\n",
-                        name, g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-                vortex_error("");
-            }
-            vortex_check_symbol_alive(c, sym, stmt_line, stmt_col);
-            sym->used = true;
-
-            if (assign_op == TOK_EQ && v_val >= 0 && v_val < c->ir->vreg_count &&
-                c->ir->vregs[v_val].is_ref && c->ir->vregs[v_val].region_depth > sym->region_depth) {
-                fprintf(stderr,
-                        "[VORTEX REGION ERROR] Cannot store inner arena reference (depth %d) in outer struct '%s' (depth %d) at %s:%d:%d\n",
-                        c->ir->vregs[v_val].region_depth, sym->name, sym->region_depth,
-                        g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-                vortex_error("");
-            }
-
-            VortexField* f = vortex_resolve_struct_field(sym->struct_id, fname);
-            if (!f) {
-                fprintf(stderr, "[VORTEX ERROR] Unknown field '%s' on variable '%s' at %s:%d:%d\n",
-                        fname, name, g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-                vortex_error("");
-            }
-            if (g_compile_mode == VORTEX_MODE_SAFE && c->unsafe_depth == 0) {
-                ir_emit_ptr_check(c->ir, sym->vreg, g_current_filename ? g_current_filename : "<input>", stmt_line);
-            }
-            VortexType ft = (val_t == TYPE_F32 || f->type == TYPE_F32) ? TYPE_F32 : f->type;
-            if (assign_op == TOK_EQ) {
-                ir_emit_store_offset(c->ir, sym->vreg, f->offset, v_val, ft);
-            } else {
-                bool is_f32 = (ft == TYPE_F32);
-                if (!is_f32 && (assign_op == TOK_SLASH_EQ || assign_op == TOK_PERCENT_EQ) &&
-                    g_ultrasafe_level >= 1 && c->unsafe_depth == 0) {
-                    ir_emit_div_check(c->ir, v_val, g_current_filename, stmt_line);
+            int steps = 0;
+            while ((l->cur.type == TOK_DOT || l->cur.type == TOK_LBRACKET) && steps < 16) {
+                if (l->cur.type == TOK_DOT) {
+                    next_token(l);
+                    if (l->cur.type != TOK_IDENT) break;
+                    next_token(l);
+                } else {
+                    next_token(l);
+                    int bdepth = 1;
+                    while (l->cur.type != TOK_EOF && bdepth > 0) {
+                        if (l->cur.type == TOK_LBRACKET) bdepth++;
+                        else if (l->cur.type == TOK_RBRACKET) bdepth--;
+                        next_token(l);
+                    }
                 }
-                VReg v_cur = ir_new_vreg(c->ir, ft);
-                VReg v_next = ir_new_vreg(c->ir, ft);
-                ir_emit_load_offset(c->ir, v_cur, sym->vreg, f->offset, ft);
-                ir_emit_binop(c->ir, compound_assign_ir_op(assign_op, is_f32), v_next, v_cur, v_val, is_f32 ? TYPE_F32 : TYPE_I64);
-                ir_emit_store_offset(c->ir, sym->vreg, f->offset, v_next, ft);
+                steps++;
             }
-            return true;
+            if (steps > 0 && (l->cur.type == TOK_EQ || is_compound_assign_tok(l->cur.type))) {
+                has_assign = true;
+            }
+            *c->lex = saved;
         }
-        *c->lex = saved;
-        return false;
-    }
-
-    if (next_t == TOK_LBRACKET) {
-        next_token(l);
-        vortex_parser_match(c, TOK_LBRACKET);
-        VReg v_idx;
-        vortex_parse_expr(c, &v_idx);
-        vortex_parser_match(c, TOK_RBRACKET);
+        if (!has_assign) return false;
 
         Symbol* sym = vortex_symtab_find(c->st, name);
         if (!sym) {
-            fprintf(stderr, "[VORTEX ERROR] Variable '%s' not found at %s:%d:%d\n",
-                    name, g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-            vortex_error("");
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[VORTEX ERROR] Variable '%s' not found for assignment", name);
+            vortex_compile_error("E001", stmt_line, stmt_col, msg, "Declare the variable first.");
         }
-        vortex_check_symbol_alive(c, sym, stmt_line, stmt_col);
         sym->used = true;
+        vortex_check_symbol_alive(c, sym, stmt_line, stmt_col);
 
-        if (l->cur.type == TOK_DOT) {
-            vortex_parser_match(c, TOK_DOT);
-            if (l->cur.type != TOK_IDENT) {
-                fprintf(stderr, "[VORTEX ERROR] Expected field name after '.' at %s:%d:%d\n",
-                        g_current_filename ? g_current_filename : "<input>", l->cur.line, l->cur.col);
-                vortex_error("");
+        ChainStep chain[16];
+        int chain_len = 0;
+        next_token(l); /* consume base ident */
+        while ((l->cur.type == TOK_DOT || l->cur.type == TOK_LBRACKET) && chain_len < 16) {
+            ChainStep* cs = &chain[chain_len];
+            memset(cs, 0, sizeof(*cs));
+            cs->line = l->cur.line;
+            cs->col = l->cur.col;
+            if (l->cur.type == TOK_DOT) {
+                cs->is_index = false;
+                next_token(l);
+                strncpy(cs->field, l->cur.text, sizeof(cs->field) - 1);
+                next_token(l);
+            } else {
+                cs->is_index = true;
+                next_token(l);
+                vortex_parse_expr(c, &cs->v_idx);
+                vortex_parser_match(c, TOK_RBRACKET);
             }
-            char fname[64];
-            strncpy(fname, l->cur.text, sizeof(fname) - 1);
-            fname[sizeof(fname) - 1] = '\0';
-            next_token(l);
-            if (l->cur.type != TOK_EQ && !is_compound_assign_tok(l->cur.type)) {
-                *c->lex = saved;
-                return false;
-            }
-            VortexTokenType assign_op = l->cur.type;
-            next_token(l);
-            VReg v_val;
-            VortexType val_t = vortex_parse_expr(c, &v_val);
-            vortex_parser_match(c, TOK_SEMI);
+            chain_len++;
+        }
 
-            VortexField* f = vortex_resolve_struct_field(sym->struct_id, fname);
-            int f_offset = f ? f->offset : 0;
-            VortexType ft = (val_t == TYPE_F32 || (f && f->type == TYPE_F32)) ? TYPE_F32 : TYPE_I64;
+        VortexTokenType assign_op = l->cur.type;
+        next_token(l);
+        VReg v_val;
+        VortexType val_t = vortex_parse_expr(c, &v_val);
+        consume_stmt_end(c);
 
-            if ((c->unsafe_depth == 0 || sym->is_slice_ptr) &&
-                (g_compile_mode == VORTEX_MODE_SAFE || sym->is_slice_ptr)) {
-                if (!sym->is_slice_ptr && c->unsafe_depth == 0) {
-                    vortex_require_unsafe(c, "Indexing untracked raw pointer", stmt_line, stmt_col);
+        if (assign_op == TOK_EQ && v_val >= 0 && v_val < c->ir->vreg_count &&
+            c->ir->vregs[v_val].is_ref && c->ir->vregs[v_val].region_depth > sym->region_depth) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "[VORTEX REGION ERROR] Cannot store inner arena reference (depth %d) in outer container '%s' (depth %d)",
+                     c->ir->vregs[v_val].region_depth, sym->name, sym->region_depth);
+            vortex_compile_error("E301", stmt_line, stmt_col, msg,
+                                 "Allocate the value in an outer arena scope.");
+        }
+
+        VReg base_v = sym->vreg;
+        VortexType cur_t = sym->type;
+        int cur_sid = sym->struct_id;
+        bool cur_slice = sym->is_slice_ptr;
+        VReg cur_len_vreg = sym->len_vreg;
+        int64_t cur_known_len = sym->known_len;
+
+        for (int ci = 0; ci < chain_len - 1; ci++) {
+            ChainStep* cs = &chain[ci];
+            if (!cs->is_index) {
+                VortexField* f_mid = vortex_resolve_struct_field(cur_sid, cs->field);
+                if (!f_mid) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "[VORTEX ERROR] Unknown field '%s' on '%s'", cs->field, name);
+                    vortex_compile_error("E001", cs->line, cs->col, msg, NULL);
                 }
-                ir_emit_bounds_check(c->ir, sym->vreg, v_idx, sym->len_vreg, sym->known_len, 8,
-                                     g_current_filename ? g_current_filename : "<input>", stmt_line);
+                if (g_compile_mode == VORTEX_MODE_SAFE && c->unsafe_depth == 0) {
+                    ir_emit_ptr_check(c->ir, base_v, g_current_filename ? g_current_filename : "<input>", cs->line);
+                }
+                VReg v_next_ptr = ir_new_vreg(c->ir, f_mid->type);
+                ir_emit_load_offset(c->ir, v_next_ptr, base_v, f_mid->offset, f_mid->type);
+                base_v = v_next_ptr;
+                cur_t = f_mid->type;
+                cur_sid = f_mid->struct_id;
+                cur_len_vreg = VREG_NONE;
+                cur_known_len = -1;
+                cur_slice = (f_mid->type == TYPE_PTR_I64 || f_mid->type == TYPE_PTR_I32 ||
+                             f_mid->type == TYPE_PTR_F32 || f_mid->type == TYPE_PTR_STRUCT);
+            } else {
+                VortexType elem_t = (cur_t == TYPE_PTR_F32) ? TYPE_F32 :
+                                    (cur_t == TYPE_PTR_I32) ? TYPE_I32 :
+                                    (cur_t == TYPE_PTR_STRUCT) ? TYPE_PTR_STRUCT : TYPE_I64;
+                int32_t elem_size = (elem_t == TYPE_F32 || elem_t == TYPE_I32) ? 4 : 8;
+                bool nested_slice = (cur_t == TYPE_I64 && cur_slice);
+                bool eff_slice = cur_slice || nested_slice;
+                if (!eff_slice && c->unsafe_depth == 0) {
+                    vortex_require_unsafe(c, "Indexing untracked raw pointer", cs->line, cs->col);
+                }
+                if ((c->unsafe_depth == 0 || eff_slice) &&
+                    (g_compile_mode == VORTEX_MODE_SAFE || eff_slice)) {
+                    ir_emit_bounds_check(c->ir, base_v, cs->v_idx, cur_len_vreg, cur_known_len, elem_size,
+                                         g_current_filename ? g_current_filename : "<input>", cs->line);
+                }
+                VReg v_elem = ir_new_vreg(c->ir, elem_t);
+                ir_emit_load_array(c->ir, v_elem, base_v, cs->v_idx, elem_t);
+                base_v = v_elem;
+                cur_t = (elem_t == TYPE_PTR_STRUCT) ? TYPE_STRUCT : elem_t;
+                cur_len_vreg = VREG_NONE;
+                cur_known_len = -1;
+                cur_slice = eff_slice;
             }
-            VReg v_elem = ir_new_vreg(c->ir, TYPE_PTR_STRUCT);
-            ir_emit_load_array(c->ir, v_elem, sym->vreg, v_idx, TYPE_PTR_STRUCT);
+        }
+
+        ChainStep* last = &chain[chain_len - 1];
+        if (!last->is_index) {
+            VortexField* f = vortex_resolve_struct_field(cur_sid, last->field);
+            if (!f) {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "[VORTEX ERROR] Unknown field '%s' on '%s'", last->field, name);
+                vortex_compile_error("E001", last->line, last->col, msg, NULL);
+            }
+            if (g_compile_mode == VORTEX_MODE_SAFE && c->unsafe_depth == 0) {
+                ir_emit_ptr_check(c->ir, base_v, g_current_filename ? g_current_filename : "<input>", last->line);
+            }
+            VortexType ft = (val_t == TYPE_F32 || f->type == TYPE_F32) ? TYPE_F32 : f->type;
             if (assign_op == TOK_EQ) {
-                ir_emit_store_offset(c->ir, v_elem, f_offset, v_val, ft);
+                ir_emit_store_offset(c->ir, base_v, f->offset, v_val, ft);
             } else {
                 bool is_f32 = (ft == TYPE_F32);
                 if (!is_f32 && (assign_op == TOK_SLASH_EQ || assign_op == TOK_PERCENT_EQ) &&
@@ -1316,42 +1561,32 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
                 }
                 VReg v_cur = ir_new_vreg(c->ir, ft);
                 VReg v_next = ir_new_vreg(c->ir, ft);
-                ir_emit_load_offset(c->ir, v_cur, v_elem, f_offset, ft);
+                ir_emit_load_offset(c->ir, v_cur, base_v, f->offset, ft);
                 ir_emit_binop(c->ir, compound_assign_ir_op(assign_op, is_f32), v_next, v_cur, v_val, is_f32 ? TYPE_F32 : TYPE_I64);
-                ir_emit_store_offset(c->ir, v_elem, f_offset, v_next, ft);
+                ir_emit_store_offset(c->ir, base_v, f->offset, v_next, ft);
             }
-            return true;
-        }
-
-        if (l->cur.type == TOK_EQ || is_compound_assign_tok(l->cur.type)) {
-            VortexTokenType assign_op = l->cur.type;
-            next_token(l);
-            VReg v_val;
-            VortexType val_t = vortex_parse_expr(c, &v_val);
-            vortex_parser_match(c, TOK_SEMI);
-
-            if (assign_op == TOK_EQ && v_val >= 0 && v_val < c->ir->vreg_count &&
-                c->ir->vregs[v_val].is_ref && c->ir->vregs[v_val].region_depth > sym->region_depth) {
-                fprintf(stderr,
-                        "[VORTEX REGION ERROR] Cannot store inner arena reference (depth %d) in outer array '%s' (depth %d) at %s:%d:%d\n",
-                        c->ir->vregs[v_val].region_depth, sym->name, sym->region_depth,
-                        g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-                vortex_error("");
-            }
-
-            VortexType elem_t = (sym->type == TYPE_PTR_F32 || val_t == TYPE_F32) ? TYPE_F32 :
-                                (sym->type == TYPE_PTR_I32) ? TYPE_I32 : TYPE_I64;
+        } else {
+            VortexType elem_t = (cur_t == TYPE_PTR_F32) ? TYPE_F32 :
+                                (cur_t == TYPE_PTR_I32) ? TYPE_I32 :
+                                (cur_t == TYPE_PTR_STRUCT) ? TYPE_PTR_STRUCT :
+                                (val_t == TYPE_F32 && (cur_t == TYPE_PTR || cur_t == TYPE_I64)) ? TYPE_F32 : TYPE_I64;
             int32_t elem_size = (elem_t == TYPE_F32 || elem_t == TYPE_I32) ? 4 : 8;
-            if (!sym->is_slice_ptr && c->unsafe_depth == 0) {
-                vortex_require_unsafe(c, "Indexing untracked raw pointer", stmt_line, stmt_col);
+            bool nested_slice = (cur_t == TYPE_I64 && cur_slice);
+            bool eff_slice = cur_slice || nested_slice;
+            if (!eff_slice && c->unsafe_depth == 0) {
+                vortex_require_unsafe(c, "Indexing untracked raw pointer", last->line, last->col);
             }
-            if ((c->unsafe_depth == 0 || sym->is_slice_ptr) &&
-                (g_compile_mode == VORTEX_MODE_SAFE || sym->is_slice_ptr)) {
-                ir_emit_bounds_check(c->ir, sym->vreg, v_idx, sym->len_vreg, sym->known_len, elem_size,
-                                     g_current_filename ? g_current_filename : "<input>", stmt_line);
+            if ((c->unsafe_depth == 0 || eff_slice) &&
+                (g_compile_mode == VORTEX_MODE_SAFE || eff_slice)) {
+                ir_emit_bounds_check(c->ir, base_v, last->v_idx, cur_len_vreg, cur_known_len, elem_size,
+                                     g_current_filename ? g_current_filename : "<input>", last->line);
             }
             if (assign_op == TOK_EQ) {
-                ir_emit_store_array(c->ir, sym->vreg, v_idx, v_val, elem_t);
+                ir_emit_store_array(c->ir, base_v, last->v_idx, v_val, elem_t);
+                if (c->ir->count > 0) {
+                    c->ir->instrs[c->ir->count - 1].line = stmt_line;
+                    c->ir->instrs[c->ir->count - 1].col = stmt_col;
+                }
             } else {
                 bool is_f32 = (elem_t == TYPE_F32);
                 if (!is_f32 && (assign_op == TOK_SLASH_EQ || assign_op == TOK_PERCENT_EQ) &&
@@ -1360,16 +1595,94 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
                 }
                 VReg v_cur = ir_new_vreg(c->ir, elem_t);
                 VReg v_next = ir_new_vreg(c->ir, elem_t);
-                ir_emit_load_array(c->ir, v_cur, sym->vreg, v_idx, elem_t);
+                ir_emit_load_array(c->ir, v_cur, base_v, last->v_idx, elem_t);
                 ir_emit_binop(c->ir, compound_assign_ir_op(assign_op, is_f32), v_next, v_cur, v_val, is_f32 ? TYPE_F32 : TYPE_I64);
-                ir_emit_store_array(c->ir, sym->vreg, v_idx, v_next, elem_t);
+                ir_emit_store_array(c->ir, base_v, last->v_idx, v_next, elem_t);
+                if (c->ir->count > 0) {
+                    c->ir->instrs[c->ir->count - 1].line = stmt_line;
+                    c->ir->instrs[c->ir->count - 1].col = stmt_col;
+                }
             }
-            return true;
         }
-        *c->lex = saved;
+        return true;
     }
 
     return false;
+}
+
+static void parse_match_stmt(Compiler* c) {
+    Lexer* l = c->lex;
+    next_token(l); /* consume 'match' */
+    VReg v_scrut;
+    VortexType scrut_t = vortex_parse_expr(c, &v_scrut);
+    vortex_parser_match(c, TOK_LBRACE);
+
+    int lbl_end = ir_new_label(c->ir);
+    bool saved_ret = c->block_returned;
+    bool all_arms_returned = true;
+    bool has_wildcard = false;
+
+    while (l->cur.type != TOK_RBRACE && l->cur.type != TOK_EOF) {
+        bool is_wild = (l->cur.type == TOK_IDENT && strcmp(l->cur.text, "_") == 0);
+        int lbl_body = ir_new_label(c->ir);
+        int lbl_next = ir_new_label(c->ir);
+
+        if (is_wild) {
+            next_token(l);
+            has_wildcard = true;
+            ir_emit_jmp(c->ir, lbl_body);
+        } else {
+            while (l->cur.type != TOK_FAT_ARROW && l->cur.type != TOK_EOF) {
+                VReg v_pat;
+                VortexType pat_t = vortex_parse_match_pattern(c, &v_pat);
+                VReg v_cmp = ir_new_vreg(c->ir, TYPE_I64);
+                if (scrut_t == TYPE_F32 || pat_t == TYPE_F32) {
+                    ir_emit_binop(c->ir, IR_FEQ, v_cmp, v_scrut, v_pat, TYPE_F32);
+                } else {
+                    ir_emit_binop(c->ir, IR_EQ, v_cmp, v_scrut, v_pat, TYPE_I64);
+                }
+                int lbl_try_next = ir_new_label(c->ir);
+                ir_emit_jz(c->ir, v_cmp, lbl_try_next);
+                ir_emit_jmp(c->ir, lbl_body);
+                ir_emit_label(c->ir, lbl_try_next);
+                if (l->cur.type == TOK_PIPE) {
+                    next_token(l);
+                } else {
+                    break;
+                }
+            }
+            ir_emit_jmp(c->ir, lbl_next);
+        }
+
+        vortex_parser_match(c, TOK_FAT_ARROW);
+        ir_emit_label(c->ir, lbl_body);
+        c->block_returned = false;
+        if (l->cur.type == TOK_LBRACE) {
+            next_token(l);
+            bool saved_arm = c->in_match_arm;
+            int saved_arm_st_count = c->st->count;
+            c->in_match_arm = false;
+            while (l->cur.type != TOK_RBRACE && l->cur.type != TOK_EOF) {
+                parse_statement(c);
+            }
+            c->in_match_arm = saved_arm;
+            vortex_parser_match(c, TOK_RBRACE);
+            pop_block_scope(c, saved_arm_st_count);
+        } else {
+            bool saved_arm = c->in_match_arm;
+            c->in_match_arm = true;
+            parse_statement(c);
+            c->in_match_arm = saved_arm;
+        }
+        if (!c->block_returned) all_arms_returned = false;
+        ir_emit_jmp(c->ir, lbl_end);
+        ir_emit_label(c->ir, lbl_next);
+
+        if (l->cur.type == TOK_COMMA || l->cur.type == TOK_SEMI) next_token(l);
+    }
+    vortex_parser_match(c, TOK_RBRACE);
+    ir_emit_label(c->ir, lbl_end);
+    c->block_returned = saved_ret || (has_wildcard && all_arms_returned);
 }
 
 void parse_statement(Compiler* c) {
@@ -1380,10 +1693,12 @@ void parse_statement(Compiler* c) {
 
     if (l->cur.type == TOK_HASH) { parse_cfg_stmt(c); return; }
     if (l->cur.type == TOK_IMPORT) { parse_import_stmt(c); return; }
+    if (l->cur.type == TOK_CONST) { parse_const_stmt(c); return; }
     if (l->cur.type == TOK_EXTERN) { parse_extern_stmt(c); return; }
     if (l->cur.type == TOK_FN) { parse_function_def(c, false); return; }
     if (l->cur.type == TOK_STRUCT) { parse_struct_stmt(c); return; }
     if (l->cur.type == TOK_ENUM) { parse_enum_stmt(c); return; }
+    if (l->cur.type == TOK_MATCH) { parse_match_stmt(c); vortex_stamp_ir_loc(c->ir, ir_start, stmt_line); return; }
 
     if (l->cur.type == TOK_BREAK) {
         next_token(l);
@@ -1418,12 +1733,14 @@ void parse_statement(Compiler* c) {
             return;
         }
         vortex_parser_match(c, TOK_LBRACE);
+        int saved_unsafe_st_count = c->st->count;
         c->unsafe_depth++;
         while (l->cur.type != TOK_RBRACE && l->cur.type != TOK_EOF) {
             parse_statement(c);
         }
         vortex_parser_match(c, TOK_RBRACE);
         c->unsafe_depth--;
+        pop_block_scope(c, saved_unsafe_st_count);
         vortex_stamp_ir_loc(c->ir, ir_start, stmt_line);
         return;
     }
@@ -1436,7 +1753,7 @@ void parse_statement(Compiler* c) {
         vortex_parser_match(c, TOK_EQ);
         VReg v_val;
         VortexType vt = vortex_parse_expr(c, &v_val);
-        vortex_parser_match(c, TOK_SEMI);
+        consume_stmt_end(c);
         VortexType elem_t = (pt == TYPE_PTR_I32) ? TYPE_I32 :
                             (pt == TYPE_PTR_F32) ? TYPE_F32 :
                             (vt == TYPE_F32) ? TYPE_F32 : TYPE_I64;
@@ -1449,15 +1766,18 @@ void parse_statement(Compiler* c) {
         next_token(l);
         VReg v_val;
         VortexType val_t = vortex_parse_expr(c, &v_val);
-        vortex_parser_match(c, TOK_SEMI);
+        consume_stmt_end(c);
         if (v_val >= 0 && v_val < c->ir->vreg_count && c->ir->vregs[v_val].is_ref) {
             int rid = c->ir->vregs[v_val].region_id;
             int rdepth = c->ir->vregs[v_val].region_depth;
             if (vortex_region_is_popped(c, rid) || rdepth > 0) {
-                fprintf(stderr,
-                        "[VORTEX REGION ERROR] Cannot return reference allocated inside internal/popped 'scope_push()' region at %s:%d:%d\n",
-                        g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-                vortex_error("");
+                const char* rmsg = "[VORTEX REGION ERROR] Cannot return reference allocated inside internal/popped 'scope_push()' region";
+                if (g_recover_active && g_ultrasafe_level >= 3) {
+                    vortex_diag_add(VDIAG_ERROR, "E301", g_current_filename, stmt_line, stmt_col, rmsg,
+                                    "Allocate the returned value outside the popped 'scope_push()' region.");
+                } else {
+                    vortex_compile_error("E301", stmt_line, stmt_col, rmsg, NULL);
+                }
             }
         }
         ir_emit_ret(c->ir, v_val, val_t);
@@ -1499,6 +1819,6 @@ void parse_statement(Compiler* c) {
     /* General Expression Statement */
     VReg dummy;
     vortex_parse_expr(c, &dummy);
-    vortex_parser_match(c, TOK_SEMI);
+    consume_stmt_end(c);
     vortex_stamp_ir_loc(c->ir, ir_start, stmt_line);
 }

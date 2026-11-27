@@ -240,6 +240,8 @@ typedef enum {
     TOK_BREAK,
     TOK_CONTINUE,
     TOK_ENUM,
+    TOK_MATCH,
+    TOK_FAT_ARROW,
     TOK_AND,
     TOK_OR,
     TOK_BANG,
@@ -259,7 +261,8 @@ typedef enum {
     TOK_CARET_EQ,
     TOK_SHL_EQ,
     TOK_SHR_EQ,
-    TOK_COLONCOLON
+    TOK_COLONCOLON,
+    TOK_CONST
 } VortexTokenType;
 
 typedef struct {
@@ -325,6 +328,7 @@ typedef struct {
 #define MAX_ENUM_TYPES 256
 #define MAX_ENUM_VARIANTS 128
 #define MAX_SYMBOLS 1024
+#define MAX_CONSTS 1024
 #define MAX_USER_FUNCS 8192
 #define MAX_USER_FUNC_RELOCS 32768
 #define MAX_DYN_LIBS 256
@@ -606,6 +610,7 @@ typedef struct IRInstruction {
     int fixed_param_count;
     /* Source location & region safety metadata */
     int line;
+    int col;
     const char* file;
     int region_id;
     int region_depth;
@@ -693,6 +698,7 @@ typedef struct {
     bool current_fn_is_unsafe;
     bool in_function;
     bool block_returned;
+    bool in_match_arm;
     int loop_break_lbl[MAX_LOOP_DEPTH];
     int loop_cont_lbl[MAX_LOOP_DEPTH];
     int loop_depth;
@@ -936,17 +942,25 @@ int64_t vortex_ffi_call6(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3, int
 
 /* --- src/runtime.c --- */
 void vortex_error(const char* msg);
+void vortex_compile_error(const char* code, int line, int col, const char* msg, const char* suggestion);
+void vortex_record_user_call_site(const char* name, bool called_in_unsafe, const char* file, int line, int col);
 void vortex_diag_reset(void);
+void vortex_diag_sort(void);
 void vortex_diag_add(VortexDiagSeverity sev, const char* code, const char* file, int line, int col, const char* msg, const char* suggestion);
 void vortex_diag_print_all(void);
 void vortex_ultrasafe_div_zero(const char* file, int line);
 void vortex_ultrasafe_check_recursion(int64_t delta, const char* fn_name, const char* file, int line);
 void vortex_ultrasafe_audit_ir(const IRBuffer* ir, const SymbolTable* st, const char* fn_name, VortexType ret_type, int fn_line);
+void vortex_ultrasafe_audit_symbols(const SymbolTable* st, int start_idx, int end_idx, const char* fn_name);
 void vortex_ultrasafe_audit_program(void);
+bool vortex_source_map_lookup(int merged_line, const char** out_file, int* out_line, bool* out_is_stdlib, bool* out_is_imported);
+void vortex_source_map_reset(void);
 int64_t vortex_assert(int64_t cond);
 int64_t vortex_assert_eq(int64_t a, int64_t b);
 int vortex_cmd_test(int argc, char** argv);
 int vortex_cmd_spec(int argc, char** argv);
+int vortex_cmd_fmt(int argc, char** argv);
+char* vortex_format_source(const char* src);
 void helper_print_i64(int64_t val);
 void helper_print_f32(float val);
 void helper_print_str(const char* s);
@@ -956,6 +970,26 @@ int64_t vortex_math_sqrt(int64_t x);
 float vortex_math_sinf(float rad);
 float vortex_math_cosf(float rad);
 float vortex_math_sqrtf(float x);
+float vortex_math_tanf(float rad);
+float vortex_math_floorf(float x);
+float vortex_math_ceilf(float x);
+float vortex_math_fabsf(float x);
+float vortex_math_expf(float x);
+float vortex_math_logf(float x);
+float vortex_math_powf(float base, float exp);
+float vortex_math_atan2f(float y, float x);
+void vortex_set_program_args(int argc, char** argv);
+int64_t vortex_args_count(void);
+int64_t vortex_args_get(int64_t idx);
+int64_t vortex_env_get(int64_t name_ptr);
+int64_t vortex_env_has(int64_t name_ptr);
+int64_t vortex_fs_read(int64_t path_ptr);
+int64_t vortex_fs_write(int64_t path_ptr, int64_t content_ptr);
+int64_t vortex_fs_append(int64_t path_ptr, int64_t content_ptr);
+int64_t vortex_fs_exists(int64_t path_ptr);
+int64_t vortex_fs_remove(int64_t path_ptr);
+int64_t vortex_sleep_ms(int64_t ms);
+int64_t vortex_unix_now_ms(void);
 int64_t helper_time_us(void);
 
 int64_t vortex_gui_window(int64_t title_ptr, int64_t width, int64_t height);
@@ -981,6 +1015,7 @@ void vx_str_copy(char* dst, size_t cap, const char* src);
 void vortex_wait_on_standalone_error(const char* msg);
 bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffer* out_jit);
 char* vortex_resolve_imports(const char* entry_path);
+char* vortex_resolve_imports_from_memory(const char* source, const char* virtual_path);
 int execute_vortex_source(const char* source);
 int execute_vortex_file(const char* filename);
 bool check_and_run_embedded_payload(int argc, char** argv);

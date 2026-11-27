@@ -8,11 +8,24 @@ for /f "tokens=* delims= " %%a in ("%VORTEX_VER%") do set VORTEX_VER=%%a
 echo [BUILD] Compiling Vortex v%VORTEX_VER% modular C99 sources (x86-64 AVX2 + ARM64 NEON backends)...
 set VORTEX_SRCS=src/arena.c src/lexer.c src/modules.c src/parser_expr.c src/parser_stmt.c src/ir_core.c src/ir_opt.c src/ir_vec_ra.c src/ffi.c src/jit_x64_simd.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/gui.c src/packager.c src/runtime.c src/main.c
 
-clang -std=c99 -O2 -Wall -Wextra -DVORTEX_VERSION=\"%VORTEX_VER%\" %VORTEX_SRCS% -o vortex.exe -luser32 -lgdi32
+set VORTEX_RES=
+where llvm-rc >nul 2>nul
+if %ERRORLEVEL% EQU 0 (
+    if exist src\vortex.rc (
+        if exist docs\assets\vortex.ico (
+            llvm-rc /FO vortex.res src\vortex.rc >nul 2>nul
+            if %ERRORLEVEL% EQU 0 set VORTEX_RES=vortex.res
+        )
+    )
+)
 
-if %ERRORLEVEL% NEQ 0 (
-    echo [BUILD FAILED] vortex.exe compilation failed with error code %ERRORLEVEL%.
-    exit /b %ERRORLEVEL%
+clang -std=c99 -O2 -Wall -Wextra -DVORTEX_VERSION=\"%VORTEX_VER%\" %VORTEX_SRCS% %VORTEX_RES% -o vortex.exe -luser32 -lgdi32
+set BUILD_RC=%ERRORLEVEL%
+if exist vortex.res del /Q vortex.res >nul 2>nul
+
+if %BUILD_RC% NEQ 0 (
+    echo [BUILD FAILED] vortex.exe compilation failed with error code %BUILD_RC%.
+    exit /b %BUILD_RC%
 )
 
 echo [BUILD] Compiling vortex.dll (Java FFM / JNI Host Bridge + Shared Package Runtime)...
