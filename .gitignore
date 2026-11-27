@@ -17,12 +17,15 @@ dist/
 target/
 releases/
 
-# Official SVG benchmark assets
+# Official SVG benchmark assets & logos
 !docs/
 !docs/assets/
 !docs/assets/*.svg
+!docs/assets/*.png
+!docs/assets/*.ico
 
 # Temporary logs, backups, benchmark scratch, and IDE files
+*.res
 benchmarks/suite_10_langs/results_*.json
 *.log
 *.tmp

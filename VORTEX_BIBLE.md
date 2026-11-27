@@ -123,22 +123,23 @@ fn os_tag() -> str {
   - Multi-ligne : `/* commentaire sur une ou plusieurs lignes */` (non imbriqués).
 - **BOM UTF-8** : automatiquement ignoré s'il est présent au début du fichier (ainsi que dans le serveur LSP).
 - **Identifiants** : `[A-Za-z_][A-Za-z0-9_]*`. Les noms de symboles, champs, fonctions, `struct` et `enum` sont stockés dans des tampons de **64 octets** (`char name[64]`, soit **63 caractères** significatifs max).
-- **Mots-clés réservés exacts du lexer** (`22` jetons dédiés dans `src/lexer.c`) :  
-  `let`, `mut`, `for`, `parallel_for`, `in`, `while`, `if`, `else`, `fn`, `return`, `struct`, `enum`, `extern`, `unsafe`, `as`, `import`, `break`, `continue`, `true`, `false`, `i64`, `f32`.  
-  *(Les noms de types `i32`, `f64`, `ptr`, `str`, `void`, `str?`, `ptr?` sont analysés contextuellement comme spécificateurs de type.)*
-- **Littéraux booléens** : `true` (vaut `1` de type `i64`) et `false` (vaut `0` de type `i64`).
-- **Littéraux entiers (`i64`)** :
-  - Décimaux (`0`, `42`, `4096`) ou hexadécimaux (`0xFF`, `0X1A2B`).
-  - Séparateurs numériques `1_000`, notation binaire `0b1010`, notation octale `0o755`, suffixes de type (`42u64`, `42i32`, `42L`) : **NON SUPPORTÉ**.
+- **Mots-clés réservés exacts du lexer** (`23` jetons dédiés dans `src/lexer.c`) :  
+  `let`, `mut`, `for`, `parallel_for`, `in`, `while`, `if`, `else`, `fn`, `return`, `struct`, `enum`, `match`, `extern`, `unsafe`, `as`, `import`, `break`, `continue`, `true`, `false`, `i64`, `f32`.  
+  *(Les noms de types `bool`, `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `u64`, `usize`, `isize`, `char`, `f64`, `ptr`, `str`, `void`, `str?`, `ptr?` et `<Enum>` sont analysés contextuellement comme spécificateurs de type.)*
+- **Littéraux booléens** : `true` (`1`) et `false` (`0`).
+- **Littéraux entiers (`i64`) et caractère** :
+  - Décimaux (`0`, `42`, `1_000_000`), hexadécimaux (`0xFF_00`), binaires (`0b1010_0101`), octaux (`0o755`). Les séparateurs `_` sont supportés dans tous les littéraux numériques.
+  - Littéraux caractère `'A'`, `'\n'`, `'\t'`, `'\r'`, `'\0'`, `'\\'`, `'\''` (évalués en code ASCII `i64`).
+  - Suffixes de type collés (`42u64`, `42i32`, `42L`) : **NON SUPPORTÉ** (utiliser `42 as u32`).
 - **Littéraux flottants (`f32`)** :
-  - Doivent comporter des chiffres avant et après le point décimal (`0.0`, `3.14159`). Le lexer s'arrête avant `..` afin de ne pas casser les intervalles `0..10`.
-  - Forme sans zéro initial (`.5`), sans décimale (`1.`), notation scientifique (`1e-5`, `2.5E3`), suffixe (`1.0f`) : **NON SUPPORTÉ**.
+  - Décimaux avec point (`0.0`, `3.141_59`) et notation scientifique (`1e-5`, `2.5E+3`, `1.5e2`). Le lexer s'arrête avant `..` afin de ne pas casser les intervalles `0..10`.
+  - Forme sans zéro initial (`.5`), sans décimale (`1.`), suffixe (`1.0f`) : **NON SUPPORTÉ**.
 - **Littéraux chaînes (`str`)** :
   - Délimités par guillemets doubles `"..."`.
   - Séquences d'échappement supportées : `\n`, `\t`, `\r`, `\0`, `\\`, `\"`.
   - **LIMITE (`Token.text[4096]`)** : chaque littéral chaîne individuel peut contenir jusqu'à **4095 octets** (`MAX_LITERAL_STRINGS = 16384` littéraux par programme). Pour assembler des chaînes dynamiques encore plus longues, utiliser `str_concat(a, b)` ou `str_join(vec, sep)`.
-  - Interpolation (`"${x}"`), raw strings (`r"..."`), littéraux caractère (`'A'`) : **NON SUPPORTÉ**.
-- **Points-virgules** : obligatoires après `import`, `extern`, `let`, `return`, `break`, `continue` (tolérés optionnellement après `break`/`continue`/`}` d'`enum`), appels utilisés comme instructions, affectations et `scope_pop(...)`. Interdits après les blocs `{ ... }` de `fn`, `struct`, `if`, `else`, `for`, `while`, `unsafe`.
+  - Interpolation (`"${x}"`), raw strings (`r"..."`) : **NON SUPPORTÉ**.
+- **Points-virgules** : obligatoires après `import`, `extern`, `let`, `return`, `break`, `continue` (optionnels après `break`/`continue`/`}` d'`enum`/`match`), appels utilisés comme instructions, affectations et `scope_pop(...)`. Interdits après les blocs `{ ... }` de `fn`, `struct`, `if`, `else`, `for`, `while`, `unsafe`, `match`.
 
 ### 2.2 Variables, constantes, mutabilité et portée (`scoping`)
 
@@ -187,8 +188,8 @@ fn voxel_offset(x: i64, y: i64, z: i64) -> i64 {
 
 | Type Vortex | Représentation interne | Taille | Alignement `struct` | Usage et remarques |
 | :--- | :--- | :--- | :--- | :--- |
-| `i64` | Entier signé 64 bits | 8 octets | 8 octets | Type entier principal (boucles, indexation, booléens `0`/`1` ou `false`/`true`, valeurs d'`enum`, tailles) |
-| `i32` | Entier signé 32 bits | 4 octets | 4 octets | Champs compacts, voxels `[i32]`, FFI `int` / `int32_t` |
+| `i64` *(et alias `u64`, `usize`, `isize`, `bool`, `char`, `i8`, `u8`, `i16`, `u16`)* | Entier / booléen / caractère 64 bits | 8 octets | 8 octets | Type entier principal (arithmétique 64 bits signée, booléens `false`/`true`, valeurs d'`enum`, tailles) |
+| `i32` *(et alias `u32`)* | Entier 32 bits (`TYPE_I32`) | 4 octets | 4 octets | Champs compacts, voxels `[i32]`, FFI `int` / `int32_t` |
 | `f32` | Flottant IEEE 754 32 bits | 4 octets | 4 octets | Type flottant principal (physique, vecteurs 3D, SIMD AVX2 8 lanes) |
 | `f64` | Flottant 64 bits (`TYPE_F64`) | 8 octets | — | Reconnu dans les types FFI ; les expressions arithmétiques utilisent `f32` |
 | `str` | Pointeur chaîne C (`\0`) | 8 octets | 8 octets | Chaîne de caractères ; comparer avec `str_eq(a, b) == 1` |
@@ -198,9 +199,9 @@ fn voxel_offset(x: i64, y: i64, z: i64) -> i64 {
 | `*T` | Pointeur typé (`*i64`, `*i32`, `*f32`, `*Struct`) | 8 octets | — | Déréférencement / arithmétique FFI ; non reconnu directement en champ `struct` |
 | `[T]` | Slice d'arène (`[i64]`, `[i32]`, `[f32]`, `[Struct]`) | 8 octets | 8 octets | Tableau contigu alloué en arène avec longueur tracée par en-tête |
 | `NomStruct` | Référence vers `struct` en arène | 8 octets | 8 octets | Pointeur 64 bits vers la structure allouée en arène |
-| `NomEnum` | Constantes nommées `i64` | 8 octets | — | Utiliser `i64` dans les annotations de paramètres/champs/retours ; constantes accessibles via `NomEnum::Var` / `NomEnum.Var` |
+| `NomEnum` | Constantes nommées `i64` | 8 octets | 8 octets | Utilisable directement comme type (`role: NomEnum`) ; variantes via `NomEnum::Var` / `NomEnum.Var` |
 
-Types **NON SUPPORTÉS** : `bool` (en tant qu'annotation de type — utiliser `i64` avec `true`/`false`), `i8`, `i16`, `u8`, `u16`, `u32`, `u64`, `usize`, `isize`, `char`, `string`, tuples `(A, B)`, pointeurs de fonction `fn(...) -> ...` en tant que variable.
+Types **NON SUPPORTÉS** : `string` (utiliser `str`), tuples `(A, B)`, génériques `<T>`, pointeurs de fonction `fn(...) -> ...` en tant que variable. *(Note : les alias `i8`/`u8`/`i16`/`u16`/`u64`/`bool`/`char` sont stockés en registres 64 bits et `u32` en 32 bits sans troncature automatique sur débordement non signé).*
 
 #### Règles de conversion (`as`) — CRITIQUES
 
@@ -252,12 +253,7 @@ let p = Vec3 { x: 1.0, y: 64.0, z: -2.0 };
 let e = Entity(101, p, 20 as i32, 1 as i32);
 ```
 
-- **Règle d'écriture sur sous-structure** : la lecture chaînée `e.pos.x` fonctionne, mais **l'écriture chaînée `e.pos.x = 2.0;` est rejetée par le parser** (`try_parse_ident_stmt` ne supporte que `ident.champ = ...;` et `arr[i].champ = ...;`, y compris avec les affectations composées `+=`, `-=`, etc.). Extraire d'abord le sous-pointeur :
-
-```vortex
-let pos_ref: Vec3 = e.pos;
-pos_ref.x = 2.0;    // Modifie directement la Vec3 pointée en arène
-```
+- **Écriture chaînée sur sous-structure** : la lecture (`e.pos.x`) ET l'écriture chaînée (`world.player.pos.x = 2.0;` ou `world.player.pos.x += 1.0;`, jusqu'à 16 niveaux) sont **supportées**. *(Exception : l'écriture à 2 niveaux sur un élément de slice extrait dans un sous-champ reste à faire via variable locale ou helper `arr[i].champ = ...;`.)*
 
 - **Règle d'accès à un champ slice `[T]` d'une `struct`** : copier un champ slice dans un `let` local (`let a: [i32] = chunk.blocks; a[0]`) perd le suivi de slice et déclenche `[VORTEX SAFETY ERROR] Indexing untracked raw pointer requires an 'unsafe' block or 'unsafe fn'`. **Solution idiomatique sans `unsafe`** : passer `chunk.blocks` directement en argument à une fonction dont le paramètre est typé `[i32]` (voir Sections 3 et 8).
 - **Méthodes `impl` / `self` / `this`** : **NON SUPPORTÉ**. Utiliser des fonctions libres prenant la structure en premier argument : `fn entity_move(e: Entity, dx: f32) -> i64`.
@@ -285,7 +281,8 @@ if st == NetState.Connected {
 
 #### Tableaux fixes, littéraux de tableau, slices, vecteurs et maps
 
-- **Tableaux fixes `[T; N]` et littéraux `[1, 2, 3]`** : **NON SUPPORTÉ**.
+- **Tableaux fixes `[T; N]` et littéraux vides `[]`** : **NON SUPPORTÉ** *(utiliser `slice_i64(0)` / `slice_f32(0)`)*.
+- **Littéraux de tableau `[e0, e1, ...]` (jusqu'à 256 éléments)** : **SUPPORTÉ** ! Allouent automatiquement un slice d'arène typé selon le premier élément (`[10, 20, 30]` -> `[i64]`, `[1.5, 2.5]` -> `[f32]`, `[p1, p2]` -> `[Struct]`) avec `slice_len(...)` connu à la compilation pour `IR_BOUNDS_CHECK` et `E202`.
 - **Slices contigus d'arène (`[i64]`, `[i32]`, `[f32]`, `[Struct]`)** :
   - Allocation initialisée à zéro en arène :
     - `let a = slice_i64(n);` (éléments 8 octets)
@@ -397,11 +394,24 @@ while true {
 }
 ```
 
+#### Filtrage par motifs (`match`)
+
+- **`match`** (`parse_match_stmt` dans `src/parser_stmt.c`) : **SUPPORTÉ** avec bras multi-motifs `p1 | p2 => ...` et joker `_ => ...` (bloc `{ ... }` ou instruction unique, virgule entre bras optionnelle).
+
+```vortex
+match role {
+    Role::Guest => print_str("guest\n"),
+    Role::Member | Role::Admin => {
+        print_str("privileged\n");
+    },
+    _ => print_str("unknown\n")
+}
+```
+
 #### Instructions absentes
 
-- `match` / `switch` / `case` / `default` : **NON SUPPORTÉ**. Utiliser des chaînes `if ... { ... } else if ... { ... }`.
-- Opérateur ternaire `cond ? a : b` : **NON SUPPORTÉ**.
 - `loop { ... }`, `do { ... } while (...)` : **NON SUPPORTÉ**.
+- **Opérateur ternaire `cond ? then_expr : else_expr`** : **SUPPORTÉ** (associatif à droite : `a ? b : c ? d : e`).
 
 ### 2.7 Opérateurs et précédence exacte (`src/parser_expr.c`, `src/parser_stmt.c`)
 
@@ -819,11 +829,11 @@ Chaque erreur affiche la catégorie suivie du message, du fichier et de la posit
 | Précédence `&` / `^` / `\|` vs `==` | `if flags & 4 != 0 { ... }` *(évalué `flags & (4 != 0)`)* | `if (flags & 4) != 0 { ... }` *(toujours parenthéser autour des comparaisons)* |
 | Incrément/décrément `++`/`--` | `i++; count--;` | `i += 1; count -= 1;` *(affectations composées `+=`..`>>=` supportées, pas `++`/`--`)* |
 | Arithmétique mixte `i64` / `f32` | `let t = us / 1000000.0; let x: f32 = 0;` | `let t = (us as f32) / 1000000.0; let x: f32 = 0.0;` *(zéro cast implicite)* |
-| Annotation de type `bool` et `match`/`switch` | `let ok: bool = true; match state { 0 => ... }` | `let ok: i64 = true; if state == 0 { ... } else if state == 1 { ... }` |
-| Tableaux fixes / littéraux | `let a: [i32; 4] = [1, 2, 3, 4];` | `let a = slice_i32(4); a[0] = 1 as i32; ...` |
-| `enum` à payload / `union` | `enum Msg { Move(i64, i64) }` | `enum MsgKind { Move = 1 }` (`i64`) + `struct Msg { kind: i64, ... }` |
+| Annotation `string` / `tuple` | `let s: string = "a"; let t = (1, 2);` | `let s: str = "a";` (`bool`, `i8`..`u64`, `usize`, `isize`, `char`, `enum` sont supportés) |
+| Littéraux de tableau vide `[]` ou taille fixe `[T; N]` | `let a: [i32; 4] = [];` | `let a = [1, 2, 3, 4];` ou `slice_i32(4)` |
+| `enum` à payload / `union` | `enum Msg { Move(i64, i64) }` | `enum MsgKind { Move = 1 }` (`i64`) + `struct Msg { kind: MsgKind, ... }` |
 | Méthodes `impl` / OOP | `impl Chunk { fn get(&self) ... }` / `chunk.get()` | Fonctions libres : `fn chunk_get(c: Chunk, ...) -> i32` |
-| Mutation à 2 niveaux sur `struct` | `world.player.x = 10.0;` | `let pl: Player = world.player; pl.x = 10.0;` |
+| Écriture dans sous-slice de struct | `chunk.blocks[i] = 1 as i32;` | Passer `chunk.blocks` à une `fn set_b(b: [i32], i: i64)` ou utiliser `let b = chunk.blocks;` en `unsafe` |
 | Indexer directement un slice extrait d'une `struct` | `let b: [i32] = chunk.blocks; b[i] = 1 as i32;` | Passer `chunk.blocks` à une `fn set_b(b: [i32], i: i64)` (ou bloc `unsafe`) |
 | Comparaison / affichage de `str` | `if a == "ping" { print(a); }` | `if str_eq(a, "ping") == 1 { print_str(a); print_str("\n"); }` |
 | Littéral chaîne > 4095 octets | Chaîne littérale géante > 4095 octets | Découper et assembler avec `str_concat` / `str_join` |
@@ -831,7 +841,7 @@ Chaque erreur affiche la catégorie suivie du message, du fichier et de la posit
 | FFI ou pointeurs hors `unsafe` | Appeler `Sleep(10);` ou `alloc(64)` directement | Encapsuler dans `unsafe { Sleep(10); }` ou `unsafe fn ...` |
 | Retourner une allocation d'un bloc `scope_push()` | `let m = scope_push(); let s = slice_i32(8); scope_pop(m); return s;` | Ne placer `scope_push`/`scope_pop` qu'autour des temporaires, jamais autour d'une valeur retournée |
 | Trigo `math_sin` vs `sinf_rad` | Passer des radians `f32` à `math_sin` | `math_sin(deg_x10)` / `math_cos(deg_x10)` sont en dixièmes de degré `i64` (Q12) ; utiliser `sinf_rad(rad)` / `cosf_rad(rad)` / `sqrtf_val(x)` pour `f32` |
-| Visibilité et nombres | `pub fn foo()`, `1_000_000`, `1e-5`, `'a'` | `fn foo()`, `1000000`, `0.00001`, codes ASCII entiers ou `str_byte("a", 0)` |
+| Visibilité et suffixes | `pub fn foo()`, `42u64`, `1.0f` | `fn foo()`, `42 as u64`, `1.0` *(mais `1_000_000`, `0b1010`, `0o755`, `1e-5` et `'a'` sont supportés)* |
 
 ---
 

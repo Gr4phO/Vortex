@@ -240,6 +240,8 @@ typedef enum {
     TOK_BREAK,
     TOK_CONTINUE,
     TOK_ENUM,
+    TOK_MATCH,
+    TOK_FAT_ARROW,
     TOK_AND,
     TOK_OR,
     TOK_BANG,
@@ -693,6 +695,7 @@ typedef struct {
     bool current_fn_is_unsafe;
     bool in_function;
     bool block_returned;
+    bool in_match_arm;
     int loop_break_lbl[MAX_LOOP_DEPTH];
     int loop_cont_lbl[MAX_LOOP_DEPTH];
     int loop_depth;

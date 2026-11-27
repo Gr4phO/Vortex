@@ -29,6 +29,7 @@ void vortex_set_vreg_region(IRBuffer* ir, VReg v, bool is_ref, int rid, int dept
 /* --- Parser Primitives & Expressions (src/parser_expr.c) --- */
 void vortex_parser_match(Compiler* c, VortexTokenType expected);
 VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg);
+VortexType vortex_parse_match_pattern(Compiler* c, VReg* out_vreg);
 VortexType vortex_parse_expr(Compiler* c, VReg* out_vreg);
 bool vortex_try_match_and_emit_unrolled_riemann(Compiler* c, Symbol* i_sym, Symbol* lim_sym);
 

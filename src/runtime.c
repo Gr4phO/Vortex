@@ -1869,16 +1869,17 @@ int vortex_cmd_spec(int argc, char** argv) {
 
     static const char* k_keywords[] = {
         "let", "mut", "fn", "unsafe", "return", "if", "else", "while", "for",
-        "in", "parallel_for", "struct", "enum", "import", "extern", "from",
+        "in", "parallel_for", "struct", "enum", "match", "import", "extern",
         "as", "break", "continue", "true", "false"
     };
     static const char* k_types[] = {
-        "i64", "i32", "f32", "str", "ptr", "void", "[i64]", "[i32]", "[f32]", "<Struct>", "<Enum>"
+        "i64", "i32", "i16", "i8", "u64", "u32", "u16", "u8", "usize", "isize",
+        "bool", "char", "f32", "f64", "str", "ptr", "void", "[T]", "<Struct>", "<Enum>"
     };
     static const char* k_ops[] = {
         "+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=",
         "&&", "||", "!", "&", "|", "^", "~", "<<", ">>",
-        "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "::"
+        "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "::", "?:", "=>"
     };
 
     if (as_json) {

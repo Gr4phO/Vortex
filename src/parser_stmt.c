@@ -593,12 +593,18 @@ static void parse_struct_stmt(Compiler* c) {
             ftype = TYPE_F32; fsize = 4; falign = 4;
             next_token(l);
         } else if (l->cur.type == TOK_IDENT) {
-            if (strcmp(l->cur.text, "i32") == 0) {
+            if (strcmp(l->cur.text, "i32") == 0 || strcmp(l->cur.text, "u32") == 0) {
                 ftype = TYPE_I32; fsize = 4; falign = 4;
             } else if (strcmp(l->cur.text, "ptr") == 0) {
                 ftype = TYPE_PTR; fsize = 8; falign = 8;
             } else if (strcmp(l->cur.text, "str") == 0) {
                 ftype = TYPE_STR; fsize = 8; falign = 8;
+            } else if (strcmp(l->cur.text, "bool") == 0 || strcmp(l->cur.text, "u64") == 0 ||
+                       strcmp(l->cur.text, "usize") == 0 || strcmp(l->cur.text, "isize") == 0 ||
+                       strcmp(l->cur.text, "i8") == 0 || strcmp(l->cur.text, "u8") == 0 ||
+                       strcmp(l->cur.text, "i16") == 0 || strcmp(l->cur.text, "u16") == 0 ||
+                       strcmp(l->cur.text, "char") == 0) {
+                ftype = TYPE_I64; fsize = 8; falign = 8;
             } else {
                 VortexStructType* sub_st = struct_type_find(l->cur.text);
                 if (sub_st) {
@@ -611,8 +617,14 @@ static void parse_struct_stmt(Compiler* c) {
         } else if (l->cur.type == TOK_LBRACKET) {
             next_token(l);
             if (l->cur.type == TOK_F32_KW) ftype = TYPE_PTR_F32;
-            else if (l->cur.type == TOK_IDENT && strcmp(l->cur.text, "i32") == 0) ftype = TYPE_PTR_I32;
-            else ftype = TYPE_PTR_I64;
+            else if (l->cur.type == TOK_IDENT && (strcmp(l->cur.text, "i32") == 0 || strcmp(l->cur.text, "u32") == 0)) ftype = TYPE_PTR_I32;
+            else if (l->cur.type == TOK_IDENT && struct_type_find(l->cur.text) != NULL) {
+                VortexStructType* elem_st = struct_type_find(l->cur.text);
+                ftype = TYPE_PTR_STRUCT;
+                sub_sid = elem_st->id;
+            } else {
+                ftype = TYPE_PTR_I64;
+            }
             fsize = 8; falign = 8;
             next_token(l);
             vortex_parser_match(c, TOK_RBRACKET);
@@ -703,6 +715,13 @@ static void parse_enum_stmt(Compiler* c) {
     if (l->cur.type == TOK_SEMI) next_token(l);
 }
 
+static void consume_stmt_end(Compiler* c) {
+    if (c->in_match_arm && (c->lex->cur.type == TOK_COMMA || c->lex->cur.type == TOK_RBRACE)) {
+        return;
+    }
+    vortex_parser_match(c, TOK_SEMI);
+}
+
 static void parse_let_stmt(Compiler* c, int stmt_line, int stmt_col) {
     Lexer* l = c->lex;
     next_token(l);
@@ -732,7 +751,7 @@ static void parse_let_stmt(Compiler* c, int stmt_line, int stmt_col) {
     c->last_struct_id = -1;
     VReg v_expr;
     VortexType expr_type = vortex_parse_expr(c, &v_expr);
-    vortex_parser_match(c, TOK_SEMI);
+    consume_stmt_end(c);
 
     if (explicit_type != TYPE_UNKNOWN && vortex_is_pointer_type(explicit_type) && vortex_is_scalar_int_type(expr_type)) {
         vortex_require_unsafe(c, "Integer-to-pointer assignment", stmt_line, stmt_col);
@@ -1146,7 +1165,7 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
         next_token(l);
         VReg v_val;
         vortex_parse_expr(c, &v_val);
-        vortex_parser_match(c, TOK_SEMI);
+        consume_stmt_end(c);
 
         Symbol* sym = vortex_symtab_find(c->st, name);
         if (!sym) {
@@ -1189,23 +1208,27 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
 
     if (next_t == TOK_DOT) {
         next_token(l);
-        vortex_parser_match(c, TOK_DOT);
-        if (l->cur.type != TOK_IDENT) {
-            fprintf(stderr, "[VORTEX ERROR] Expected field name after '.' at %s:%d:%d\n",
-                    g_current_filename ? g_current_filename : "<input>", l->cur.line, l->cur.col);
-            vortex_error("");
+        char chain_fields[16][64];
+        int chain_len = 0;
+        while (l->cur.type == TOK_DOT && chain_len < 16) {
+            vortex_parser_match(c, TOK_DOT);
+            if (l->cur.type != TOK_IDENT) {
+                fprintf(stderr, "[VORTEX ERROR] Expected field name after '.' at %s:%d:%d\n",
+                        g_current_filename ? g_current_filename : "<input>", l->cur.line, l->cur.col);
+                vortex_error("");
+            }
+            strncpy(chain_fields[chain_len], l->cur.text, 63);
+            chain_fields[chain_len][63] = '\0';
+            chain_len++;
+            next_token(l);
         }
-        char fname[64];
-        strncpy(fname, l->cur.text, sizeof(fname) - 1);
-        fname[sizeof(fname) - 1] = '\0';
-        next_token(l);
 
-        if (l->cur.type == TOK_EQ || is_compound_assign_tok(l->cur.type)) {
+        if (chain_len > 0 && (l->cur.type == TOK_EQ || is_compound_assign_tok(l->cur.type))) {
             VortexTokenType assign_op = l->cur.type;
             next_token(l);
             VReg v_val;
             VortexType val_t = vortex_parse_expr(c, &v_val);
-            vortex_parser_match(c, TOK_SEMI);
+            consume_stmt_end(c);
 
             Symbol* sym = vortex_symtab_find(c->st, name);
             if (!sym) {
@@ -1225,18 +1248,37 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
                 vortex_error("");
             }
 
-            VortexField* f = vortex_resolve_struct_field(sym->struct_id, fname);
+            VReg base_v = sym->vreg;
+            int cur_sid = sym->struct_id;
+            for (int ci = 0; ci < chain_len - 1; ci++) {
+                VortexField* f_mid = vortex_resolve_struct_field(cur_sid, chain_fields[ci]);
+                if (!f_mid) {
+                    fprintf(stderr, "[VORTEX ERROR] Unknown field '%s' on variable '%s' at %s:%d:%d\n",
+                            chain_fields[ci], name, g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
+                    vortex_error("");
+                }
+                if (g_compile_mode == VORTEX_MODE_SAFE && c->unsafe_depth == 0) {
+                    ir_emit_ptr_check(c->ir, base_v, g_current_filename ? g_current_filename : "<input>", stmt_line);
+                }
+                VReg v_next_ptr = ir_new_vreg(c->ir, f_mid->type);
+                ir_emit_load_offset(c->ir, v_next_ptr, base_v, f_mid->offset, f_mid->type);
+                base_v = v_next_ptr;
+                cur_sid = f_mid->struct_id;
+            }
+
+            const char* target_fname = chain_fields[chain_len - 1];
+            VortexField* f = vortex_resolve_struct_field(cur_sid, target_fname);
             if (!f) {
                 fprintf(stderr, "[VORTEX ERROR] Unknown field '%s' on variable '%s' at %s:%d:%d\n",
-                        fname, name, g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
+                        target_fname, name, g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
                 vortex_error("");
             }
             if (g_compile_mode == VORTEX_MODE_SAFE && c->unsafe_depth == 0) {
-                ir_emit_ptr_check(c->ir, sym->vreg, g_current_filename ? g_current_filename : "<input>", stmt_line);
+                ir_emit_ptr_check(c->ir, base_v, g_current_filename ? g_current_filename : "<input>", stmt_line);
             }
             VortexType ft = (val_t == TYPE_F32 || f->type == TYPE_F32) ? TYPE_F32 : f->type;
             if (assign_op == TOK_EQ) {
-                ir_emit_store_offset(c->ir, sym->vreg, f->offset, v_val, ft);
+                ir_emit_store_offset(c->ir, base_v, f->offset, v_val, ft);
             } else {
                 bool is_f32 = (ft == TYPE_F32);
                 if (!is_f32 && (assign_op == TOK_SLASH_EQ || assign_op == TOK_PERCENT_EQ) &&
@@ -1245,9 +1287,9 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
                 }
                 VReg v_cur = ir_new_vreg(c->ir, ft);
                 VReg v_next = ir_new_vreg(c->ir, ft);
-                ir_emit_load_offset(c->ir, v_cur, sym->vreg, f->offset, ft);
+                ir_emit_load_offset(c->ir, v_cur, base_v, f->offset, ft);
                 ir_emit_binop(c->ir, compound_assign_ir_op(assign_op, is_f32), v_next, v_cur, v_val, is_f32 ? TYPE_F32 : TYPE_I64);
-                ir_emit_store_offset(c->ir, sym->vreg, f->offset, v_next, ft);
+                ir_emit_store_offset(c->ir, base_v, f->offset, v_next, ft);
             }
             return true;
         }
@@ -1290,7 +1332,7 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
             next_token(l);
             VReg v_val;
             VortexType val_t = vortex_parse_expr(c, &v_val);
-            vortex_parser_match(c, TOK_SEMI);
+            consume_stmt_end(c);
 
             VortexField* f = vortex_resolve_struct_field(sym->struct_id, fname);
             int f_offset = f ? f->offset : 0;
@@ -1328,7 +1370,7 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
             next_token(l);
             VReg v_val;
             VortexType val_t = vortex_parse_expr(c, &v_val);
-            vortex_parser_match(c, TOK_SEMI);
+            consume_stmt_end(c);
 
             if (assign_op == TOK_EQ && v_val >= 0 && v_val < c->ir->vreg_count &&
                 c->ir->vregs[v_val].is_ref && c->ir->vregs[v_val].region_depth > sym->region_depth) {
@@ -1372,6 +1414,79 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
     return false;
 }
 
+static void parse_match_stmt(Compiler* c) {
+    Lexer* l = c->lex;
+    next_token(l); /* consume 'match' */
+    VReg v_scrut;
+    VortexType scrut_t = vortex_parse_expr(c, &v_scrut);
+    vortex_parser_match(c, TOK_LBRACE);
+
+    int lbl_end = ir_new_label(c->ir);
+    bool saved_ret = c->block_returned;
+    bool all_arms_returned = true;
+    bool has_wildcard = false;
+
+    while (l->cur.type != TOK_RBRACE && l->cur.type != TOK_EOF) {
+        bool is_wild = (l->cur.type == TOK_IDENT && strcmp(l->cur.text, "_") == 0);
+        int lbl_body = ir_new_label(c->ir);
+        int lbl_next = ir_new_label(c->ir);
+
+        if (is_wild) {
+            next_token(l);
+            has_wildcard = true;
+            ir_emit_jmp(c->ir, lbl_body);
+        } else {
+            while (l->cur.type != TOK_FAT_ARROW && l->cur.type != TOK_EOF) {
+                VReg v_pat;
+                VortexType pat_t = vortex_parse_match_pattern(c, &v_pat);
+                VReg v_cmp = ir_new_vreg(c->ir, TYPE_I64);
+                if (scrut_t == TYPE_F32 || pat_t == TYPE_F32) {
+                    ir_emit_binop(c->ir, IR_FEQ, v_cmp, v_scrut, v_pat, TYPE_F32);
+                } else {
+                    ir_emit_binop(c->ir, IR_EQ, v_cmp, v_scrut, v_pat, TYPE_I64);
+                }
+                int lbl_try_next = ir_new_label(c->ir);
+                ir_emit_jz(c->ir, v_cmp, lbl_try_next);
+                ir_emit_jmp(c->ir, lbl_body);
+                ir_emit_label(c->ir, lbl_try_next);
+                if (l->cur.type == TOK_PIPE) {
+                    next_token(l);
+                } else {
+                    break;
+                }
+            }
+            ir_emit_jmp(c->ir, lbl_next);
+        }
+
+        vortex_parser_match(c, TOK_FAT_ARROW);
+        ir_emit_label(c->ir, lbl_body);
+        c->block_returned = false;
+        if (l->cur.type == TOK_LBRACE) {
+            next_token(l);
+            bool saved_arm = c->in_match_arm;
+            c->in_match_arm = false;
+            while (l->cur.type != TOK_RBRACE && l->cur.type != TOK_EOF) {
+                parse_statement(c);
+            }
+            c->in_match_arm = saved_arm;
+            vortex_parser_match(c, TOK_RBRACE);
+        } else {
+            bool saved_arm = c->in_match_arm;
+            c->in_match_arm = true;
+            parse_statement(c);
+            c->in_match_arm = saved_arm;
+        }
+        if (!c->block_returned) all_arms_returned = false;
+        ir_emit_jmp(c->ir, lbl_end);
+        ir_emit_label(c->ir, lbl_next);
+
+        if (l->cur.type == TOK_COMMA || l->cur.type == TOK_SEMI) next_token(l);
+    }
+    vortex_parser_match(c, TOK_RBRACE);
+    ir_emit_label(c->ir, lbl_end);
+    c->block_returned = saved_ret || (has_wildcard && all_arms_returned);
+}
+
 void parse_statement(Compiler* c) {
     Lexer* l = c->lex;
     int stmt_line = l->cur.line;
@@ -1384,6 +1499,7 @@ void parse_statement(Compiler* c) {
     if (l->cur.type == TOK_FN) { parse_function_def(c, false); return; }
     if (l->cur.type == TOK_STRUCT) { parse_struct_stmt(c); return; }
     if (l->cur.type == TOK_ENUM) { parse_enum_stmt(c); return; }
+    if (l->cur.type == TOK_MATCH) { parse_match_stmt(c); vortex_stamp_ir_loc(c->ir, ir_start, stmt_line); return; }
 
     if (l->cur.type == TOK_BREAK) {
         next_token(l);
@@ -1436,7 +1552,7 @@ void parse_statement(Compiler* c) {
         vortex_parser_match(c, TOK_EQ);
         VReg v_val;
         VortexType vt = vortex_parse_expr(c, &v_val);
-        vortex_parser_match(c, TOK_SEMI);
+        consume_stmt_end(c);
         VortexType elem_t = (pt == TYPE_PTR_I32) ? TYPE_I32 :
                             (pt == TYPE_PTR_F32) ? TYPE_F32 :
                             (vt == TYPE_F32) ? TYPE_F32 : TYPE_I64;
@@ -1449,7 +1565,7 @@ void parse_statement(Compiler* c) {
         next_token(l);
         VReg v_val;
         VortexType val_t = vortex_parse_expr(c, &v_val);
-        vortex_parser_match(c, TOK_SEMI);
+        consume_stmt_end(c);
         if (v_val >= 0 && v_val < c->ir->vreg_count && c->ir->vregs[v_val].is_ref) {
             int rid = c->ir->vregs[v_val].region_id;
             int rdepth = c->ir->vregs[v_val].region_depth;
@@ -1499,6 +1615,6 @@ void parse_statement(Compiler* c) {
     /* General Expression Statement */
     VReg dummy;
     vortex_parse_expr(c, &dummy);
-    vortex_parser_match(c, TOK_SEMI);
+    consume_stmt_end(c);
     vortex_stamp_ir_loc(c->ir, ir_start, stmt_line);
 }

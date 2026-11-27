@@ -6,7 +6,15 @@ Toutes les modifications notables du projet sont listées ci-dessous **dans l'or
 
 ## [En cours / branche `dev`]
 
-- Branche `dev` dédiée aux correctifs rapides et développements en cours afin de garder `main` strictement stable.
+- **Logo officiel & icône Windows** : ajout de `docs/assets/vortex_logo.png`, `docs/assets/vortex.ico` et `src/vortex.rc` (intégré à `vortex.exe` via `llvm-rc` dans `build.bat` si présent, et affiché dans `README.md`).
+- **REPL & Aide CLI refondus** : bannière ASCII `VORTEX` lisible dans le terminal interactif, sous-titre dynamique selon l'architecture/SIMD et le mode actif, nouvelles commandes REPL `:mode` et `:enums` (et alias `help` / `vortex help` / `vortex version`), aide `--help`, `pkg --help` et `vortex spec` synchronisées.
+- **Levée des irritants langage** :
+  - Types acceptés en annotations (`bool`, `i8`, `u8`, `i16`, `u16`, `u32`, `u64`, `usize`, `isize`, `char`, `<Enum>`).
+  - Littéraux numériques & caractère : séparateurs `_` (`1_000_000`), binaire `0b...`, octal `0o...`, notation scientifique `1.5e-3`, caractères `'A'` / `'\n'`.
+  - Littéraux de tableau `[10, 20, 30]` / `[1.5, 2.5]` (alloués en arène avec `slice_len` et bornes tracées).
+  - Instruction `match` (bras multi-motifs `|` et joker `_`), opérateur ternaire `cond ? a : b`, et écriture chaînée multi-niveaux sur sous-structures (`world.player.pos.x += 1.0;`).
+- **Benchmarks reproductibles multi-OS** : ajout de `benchmarks/suite_10_langs/run_benchmarks.py` (Python 3 stdlib, compatible Windows / Linux / macOS).
+- **Tests** : ajout de `tests/test_v12_features.vx` à la suite automatisée (`run_tests.bat` / `run_tests.sh`).
 
 ---
 
