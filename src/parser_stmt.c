@@ -84,6 +84,8 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
 
     IRBuffer fn_ir;
     ir_init(&fn_ir);
+    strncpy(fn_ir.func_name, uf->name, sizeof(fn_ir.func_name) - 1);
+    fn_ir.func_name[sizeof(fn_ir.func_name) - 1] = '\0';
 
     SymbolTable* fn_st = (SymbolTable*)calloc(1, sizeof(SymbolTable));
     if (!fn_st) {
@@ -960,6 +962,14 @@ static void parse_parallel_for_stmt(Compiler* c) {
     ir_emit_call(c->ir, v_ret, (void*)vortex_parallel_for_dispatch, dispatch_args, 4, TYPE_VOID);
 }
 
+static void pop_block_scope(Compiler* c, int saved_st_count) {
+    if (g_ultrasafe_level >= 1) {
+        vortex_ultrasafe_audit_symbols(c->st, saved_st_count, c->st->count,
+                                       c->ir->func_name[0] ? c->ir->func_name : "__main__");
+    }
+    c->st->count = saved_st_count;
+}
+
 static void parse_for_stmt(Compiler* c) {
     Lexer* l = c->lex;
     next_token(l);
@@ -969,6 +979,7 @@ static void parse_for_stmt(Compiler* c) {
     vortex_parser_match(c, TOK_IDENT);
     vortex_parser_match(c, TOK_IN);
 
+    int saved_for_st_count = c->st->count;
     VReg v_start;
     vortex_parse_expr(c, &v_start);
     Symbol* i_sym = vortex_symtab_add(c->st, var_name, TYPE_I64, true);
@@ -986,6 +997,7 @@ static void parse_for_stmt(Compiler* c) {
     ir_emit_mov(c->ir, lim_sym->vreg, v_end);
 
     if (vortex_try_match_and_emit_unrolled_riemann(c, i_sym, lim_sym)) {
+        c->st->count = saved_for_st_count;
         return;
     }
 
@@ -1011,7 +1023,7 @@ static void parse_for_stmt(Compiler* c) {
     }
     if (c->loop_depth > 0) c->loop_depth--;
     vortex_parser_match(c, TOK_RBRACE);
-    c->st->count = saved_loop_st_count;
+    pop_block_scope(c, saved_loop_st_count);
 
     ir_emit_label(c->ir, lbl_step);
     VReg v_one = ir_new_vreg(c->ir, TYPE_I64);
@@ -1020,6 +1032,7 @@ static void parse_for_stmt(Compiler* c) {
 
     ir_emit_jmp(c->ir, lbl_start);
     ir_emit_label(c->ir, lbl_exit);
+    c->st->count = saved_for_st_count;
 }
 
 static void parse_while_stmt(Compiler* c) {
@@ -1045,8 +1058,8 @@ static void parse_while_stmt(Compiler* c) {
         parse_statement(c);
     }
     if (c->loop_depth > 0) c->loop_depth--;
-    c->st->count = saved_loop_st_count;
     vortex_parser_match(c, TOK_RBRACE);
+    pop_block_scope(c, saved_loop_st_count);
 
     ir_emit_jmp(c->ir, lbl_start);
     ir_emit_label(c->ir, lbl_exit);
@@ -1070,10 +1083,12 @@ static void parse_if_stmt(Compiler* c) {
     c->block_returned = false;
 
     vortex_parser_match(c, TOK_LBRACE);
+    int saved_if_st_count = c->st->count;
     while (c->lex->cur.type != TOK_RBRACE && c->lex->cur.type != TOK_EOF) {
         parse_statement(c);
     }
     vortex_parser_match(c, TOK_RBRACE);
+    pop_block_scope(c, saved_if_st_count);
 
     bool if_returned = c->block_returned;
     if (if_returned) {
@@ -1106,10 +1121,12 @@ static void parse_if_stmt(Compiler* c) {
             parse_statement(c);
         } else {
             vortex_parser_match(c, TOK_LBRACE);
+            int saved_else_st_count = c->st->count;
             while (c->lex->cur.type != TOK_RBRACE && c->lex->cur.type != TOK_EOF) {
                 parse_statement(c);
             }
             vortex_parser_match(c, TOK_RBRACE);
+            pop_block_scope(c, saved_else_st_count);
         }
         bool else_returned = c->block_returned;
         if (!if_returned && else_returned) {
@@ -1464,12 +1481,14 @@ static void parse_match_stmt(Compiler* c) {
         if (l->cur.type == TOK_LBRACE) {
             next_token(l);
             bool saved_arm = c->in_match_arm;
+            int saved_arm_st_count = c->st->count;
             c->in_match_arm = false;
             while (l->cur.type != TOK_RBRACE && l->cur.type != TOK_EOF) {
                 parse_statement(c);
             }
             c->in_match_arm = saved_arm;
             vortex_parser_match(c, TOK_RBRACE);
+            pop_block_scope(c, saved_arm_st_count);
         } else {
             bool saved_arm = c->in_match_arm;
             c->in_match_arm = true;
@@ -1534,12 +1553,14 @@ void parse_statement(Compiler* c) {
             return;
         }
         vortex_parser_match(c, TOK_LBRACE);
+        int saved_unsafe_st_count = c->st->count;
         c->unsafe_depth++;
         while (l->cur.type != TOK_RBRACE && l->cur.type != TOK_EOF) {
             parse_statement(c);
         }
         vortex_parser_match(c, TOK_RBRACE);
         c->unsafe_depth--;
+        pop_block_scope(c, saved_unsafe_st_count);
         vortex_stamp_ir_loc(c->ir, ir_start, stmt_line);
         return;
     }
