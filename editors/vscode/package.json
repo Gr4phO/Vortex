@@ -2,10 +2,15 @@
   "name": "vortex-systems",
   "displayName": "Vortex Systems Language (.vx)",
   "description": "One-click Run in Terminal, syntax highlighting, --ultrasafe checks, REPL, and native LSP support for the Vortex systems language.",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "publisher": "Gr4phO",
   "license": "Apache-2.0",
   "icon": "icon.png",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
   "homepage": "https://github.com/Gr4phO/Vortex#readme",
   "repository": {
     "type": "git",
@@ -66,6 +71,13 @@
         "path": "./syntaxes/vortex.tmLanguage.json"
       }
     ],
+    "iconThemes": [
+      {
+        "id": "vortex-icons",
+        "label": "Vortex File Icons",
+        "path": "./themes/vortex-icon-theme.json"
+      }
+    ],
     "commands": [
       {
         "command": "vortex.runFile",
@@ -114,49 +126,66 @@
       "editor/title/run": [
         {
           "command": "vortex.runFile",
-          "when": "editorLangId == vortex || resourceExtname == .vx",
-          "group": "navigation@1"
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@0"
         },
         {
           "command": "vortex.runFileRelease",
-          "when": "editorLangId == vortex || resourceExtname == .vx",
-          "group": "navigation@2"
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@1"
         },
         {
           "command": "vortex.checkFileUltrasafe",
-          "when": "editorLangId == vortex || resourceExtname == .vx",
-          "group": "navigation@3"
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@2"
         },
         {
           "command": "vortex.runTests",
-          "when": "editorLangId == vortex || resourceExtname == .vx",
-          "group": "navigation@4"
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@3"
         },
         {
           "command": "vortex.buildStandalone",
-          "when": "editorLangId == vortex || resourceExtname == .vx",
-          "group": "navigation@5"
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@4"
         },
         {
           "command": "vortex.openRepl",
-          "when": "editorLangId == vortex || resourceExtname == .vx",
-          "group": "navigation@6"
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@5"
         }
       ],
       "editor/context": [
         {
           "command": "vortex.runFile",
-          "when": "editorLangId == vortex || resourceExtname == .vx",
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
           "group": "navigation@1"
         },
         {
           "command": "vortex.runFileRelease",
-          "when": "editorLangId == vortex || resourceExtname == .vx",
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
           "group": "navigation@2"
         },
         {
           "command": "vortex.checkFileUltrasafe",
-          "when": "editorLangId == vortex || resourceExtname == .vx",
+          "when": "editorLangId == vortex || resourceLangId == vortex || resourceExtname == .vx",
+          "group": "navigation@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "vortex.runFile",
+          "when": "resourceExtname == .vx || resourceLangId == vortex",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vortex.runFileRelease",
+          "when": "resourceExtname == .vx || resourceLangId == vortex",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vortex.checkFileUltrasafe",
+          "when": "resourceExtname == .vx || resourceLangId == vortex",
           "group": "navigation@3"
         }
       ]

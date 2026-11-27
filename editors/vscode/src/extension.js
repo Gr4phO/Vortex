@@ -73,21 +73,33 @@ function getOrCreateTerminal(cwd) {
   return vortexTerminal;
 }
 
-async function prepareActiveVortexFile(requireSaved = true) {
+async function prepareTargetVortexUri(targetUri) {
+  const config = vscode.workspace.getConfiguration("vortex");
+  const saveBeforeRun = config.get("saveBeforeRun", true);
+
+  if (targetUri && targetUri.fsPath) {
+    const openDoc = vscode.workspace.textDocuments.find(
+      (d) => d.uri.fsPath === targetUri.fsPath
+    );
+    if (openDoc && saveBeforeRun && openDoc.isDirty) {
+      await openDoc.save();
+    }
+    return targetUri;
+  }
+
   const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.document.languageId !== "vortex") {
-    vscode.window.showWarningMessage("Open a Vortex (.vx) file first.");
+  if (!editor || (editor.document.languageId !== "vortex" && !editor.document.fileName.endsWith(".vx"))) {
+    vscode.window.showWarningMessage("Open or select a Vortex (.vx) file first.");
     return null;
   }
-  const config = vscode.workspace.getConfiguration("vortex");
-  if (config.get("saveBeforeRun", true) && editor.document.isDirty) {
+  if (saveBeforeRun && editor.document.isDirty) {
     await editor.document.save();
   }
-  if (requireSaved && editor.document.isUntitled) {
+  if (editor.document.isUntitled) {
     vscode.window.showWarningMessage("Save the .vx file to disk before running Vortex.");
     return null;
   }
-  return editor.document;
+  return editor.document.uri;
 }
 
 function runInVortexTerminal(args, uri) {
@@ -160,23 +172,23 @@ function activate(context) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("vortex.runFile", async () => {
-      const doc = await prepareActiveVortexFile(true);
-      if (!doc) return;
+    vscode.commands.registerCommand("vortex.runFile", async (uri) => {
+      const target = await prepareTargetVortexUri(uri);
+      if (!target) return;
       const mode = vscode.workspace.getConfiguration("vortex").get("defaultRunMode", "safe");
-      runInVortexTerminal(["run", ...modeFlags(mode), doc.uri.fsPath], doc.uri);
+      runInVortexTerminal(["run", ...modeFlags(mode), target.fsPath], target);
     }),
 
-    vscode.commands.registerCommand("vortex.runFileRelease", async () => {
-      const doc = await prepareActiveVortexFile(true);
-      if (!doc) return;
-      runInVortexTerminal(["run", "--release", doc.uri.fsPath], doc.uri);
+    vscode.commands.registerCommand("vortex.runFileRelease", async (uri) => {
+      const target = await prepareTargetVortexUri(uri);
+      if (!target) return;
+      runInVortexTerminal(["run", "--release", target.fsPath], target);
     }),
 
-    vscode.commands.registerCommand("vortex.checkFileUltrasafe", async () => {
-      const doc = await prepareActiveVortexFile(true);
-      if (!doc) return;
-      runInVortexTerminal(["--ultrasafe", "3", "--check", doc.uri.fsPath], doc.uri);
+    vscode.commands.registerCommand("vortex.checkFileUltrasafe", async (uri) => {
+      const target = await prepareTargetVortexUri(uri);
+      if (!target) return;
+      runInVortexTerminal(["--ultrasafe", "3", "--check", target.fsPath], target);
     }),
 
     vscode.commands.registerCommand("vortex.runTests", async () => {
@@ -187,13 +199,13 @@ function activate(context) {
       runInVortexTerminal(["test", targetPath, "--ultrasafe", "2"], doc?.uri || ws?.uri);
     }),
 
-    vscode.commands.registerCommand("vortex.buildStandalone", async () => {
-      const doc = await prepareActiveVortexFile(true);
-      if (!doc) return;
-      const parsed = path.parse(doc.uri.fsPath);
+    vscode.commands.registerCommand("vortex.buildStandalone", async (uri) => {
+      const target = await prepareTargetVortexUri(uri);
+      if (!target) return;
+      const parsed = path.parse(target.fsPath);
       const outExt = process.platform === "win32" ? ".exe" : "";
       const outPath = path.join(parsed.dir, `${parsed.name}${outExt}`);
-      runInVortexTerminal(["build", "--release", doc.uri.fsPath, "-o", outPath], doc.uri);
+      runInVortexTerminal(["build", "--release", target.fsPath, "-o", outPath], target);
     }),
 
     vscode.commands.registerCommand("vortex.openRepl", () => {
