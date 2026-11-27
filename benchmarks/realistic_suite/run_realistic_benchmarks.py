@@ -182,7 +182,7 @@ def main():
         out_rs = SUITE_DIR / f"_tmp_rs{ext}"
         temps.append(out_rs)
         compile_and_bench(
-            "Rust (-O3)", "rustc 1.99 (-C opt-level=3 -C target-cpu=native)",
+            "Rust (-O3)", "rustc 1.99 (-C opt-level=3 -C target-cpu=native, safe zip)",
             [rustc, "-C", "opt-level=3", "-C", "target-cpu=native", "bench_rust.rs", "-o", str(out_rs)],
             [str(out_rs)], out_rs, args.runs, results, ref_chk,
         )
@@ -200,12 +200,12 @@ def main():
     vortex_bin = detect_vortex_bin()
     if vortex_bin:
         compile_and_bench(
-            "Vortex (--release)", "JIT x86-64 v1.3.0 (f64 SSE2 + 12T spin-pool)",
+            "Vortex (--release)", "JIT x86-64 v1.3.0 (AVX2 f64 + 12T, sans bornes)",
             None, [vortex_bin, "run", "--release", "bench_vortex.vx"],
             vortex_bin, args.runs, results, ref_chk,
         )
         compile_and_bench(
-            "Vortex (--safe)", "JIT x86-64 v1.3.0 (bounds/arena checks ON)",
+            "Vortex (--safe)", "JIT x86-64 v1.3.0 (bornes + arenes + stacktraces)",
             None, [vortex_bin, "run", "--safe", "bench_vortex.vx"],
             vortex_bin, args.runs, results, ref_chk,
         )
@@ -216,7 +216,7 @@ def main():
         cls = SUITE_DIR / "BenchJava.class"
         temps.append(cls)
         compile_and_bench(
-            "Java (OpenJDK 21)", "HotSpot 21 C2 JIT (parallel IntStream T5)",
+            "Java (OpenJDK 21)", "HotSpot 21 C2 JIT (a froid, IntStream T5)",
             [javac, "BenchJava.java"],
             [java, "-cp", str(SUITE_DIR), "BenchJava"], cls, args.runs, results, ref_chk,
         )
@@ -226,7 +226,7 @@ def main():
         out_cs = SUITE_DIR / "_tmp_cs.exe"
         temps.append(out_cs)
         compile_and_bench(
-            "C# (.NET v4.8)", "csc 64-bit /optimize+ (Parallel.For T5)",
+            "C# (.NET v4.8)", "csc .NET Framework 4.8 /optimize+ (pas .NET 8/9)",
             [csc, "/nologo", "/optimize+", "/platform:x64", f"/out:{out_cs}", "BenchCSharp.cs"],
             [str(out_cs)], out_cs, args.runs, results, ref_chk,
         )
@@ -234,7 +234,7 @@ def main():
     node = shutil.which("node")
     if node:
         compile_and_bench(
-            "Node.js (v26 V8)", "V8 JIT + worker_threads T5",
+            "Node.js (v26 V8)", "V8 JIT (a froid, worker_threads T5)",
             None, [node, "bench_js.js"], node, args.runs, results, ref_chk,
         )
 

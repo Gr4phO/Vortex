@@ -61,6 +61,7 @@ static bool ir_has_side_effect(IROpcode op) {
         case IR_VEC_ARR_OP:
         case IR_VEC_GRID_MOD:
         case IR_VEC_MOD_FILL:
+        case IR_VEC_F64_AXPY:
         case IR_SUB_MOD_IMM:
             return true;
         default:
@@ -249,7 +250,8 @@ static void ir_compute_def_use(IRBuffer* ir, int* def_count, int* use_count) {
             if (ins->args[a] >= 0 && ins->args[a] < n) use_count[ins->args[a]]++;
         }
         if (ins->op == IR_RAW_RIEMANN || ins->op == IR_VEC_LOOP ||
-            ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD || ins->op == IR_VEC_MOD_FILL) {
+            ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD ||
+            ins->op == IR_VEC_MOD_FILL || ins->op == IR_VEC_F64_AXPY) {
             if (ins->i_vreg >= 0 && ins->i_vreg < n) { use_count[ins->i_vreg]++; def_count[ins->i_vreg]++; }
             if (ins->lim_vreg >= 0 && ins->lim_vreg < n) use_count[ins->lim_vreg]++;
             if (ins->acc_vreg >= 0 && ins->acc_vreg < n) { use_count[ins->acc_vreg]++; def_count[ins->acc_vreg]++; }
@@ -508,6 +510,7 @@ static void ir_dedup_checks(IRBuffer* ir) {
             case IR_VEC_ARR_OP:
             case IR_VEC_GRID_MOD:
             case IR_VEC_MOD_FILL:
+            case IR_VEC_F64_AXPY:
                 seen_count = 0;
                 break;
 
@@ -569,6 +572,69 @@ static void ir_dedup_checks(IRBuffer* ir) {
     }
 }
 
+static bool ir_is_arena_alloc_call(const IRInstruction* ins) {
+    if (!ins || ins->op != IR_CALL || !ins->func_ptr) return false;
+    return ins->func_ptr == (void*)vortex_alloc_slice_i64 ||
+           ins->func_ptr == (void*)vortex_alloc_slice_f32 ||
+           ins->func_ptr == (void*)vortex_alloc_slice_f64 ||
+           ins->func_ptr == (void*)vortex_alloc_slice_i32 ||
+           ins->func_ptr == (void*)vortex_alloc_struct ||
+           ins->func_ptr == (void*)arena_alloc;
+}
+
+static bool ir_is_scope_pop_call(const IRInstruction* ins) {
+    return ins && ins->op == IR_CALL && ins->func_ptr == (void*)vortex_scope_pop;
+}
+
+static bool ir_safe_ptr_proven_alive(const IRBuffer* ir, int lbl_ip, int ip_jmp,
+                                     VReg base, const VReg* equiv, int vreg_cap,
+                                     const int* def_count) {
+    if (base < 0 || base >= vreg_cap) return false;
+    VReg eb = equiv[base];
+
+    /* 1. Single-def local allocation in this function with no scope_pop/call up to ip_jmp */
+    if (def_count[eb] == 1) {
+        int alloc_ip = -1;
+        for (int p = 0; p < lbl_ip; p++) {
+            const IRInstruction* pi = &ir->instrs[p];
+            if (pi->dest == eb && ir_is_arena_alloc_call(pi)) {
+                alloc_ip = p;
+                break;
+            }
+        }
+        if (alloc_ip >= 0) {
+            bool clean = true;
+            for (int p = alloc_ip + 1; p <= ip_jmp; p++) {
+                const IRInstruction* pi = &ir->instrs[p];
+                if (pi->op == IR_CALL_USER || pi->op == IR_CALL_FFI || ir_is_scope_pop_call(pi)) {
+                    clean = false;
+                    break;
+                }
+            }
+            if (clean) return true;
+        }
+    }
+
+    /* 2. Already checked in straight-line block dominating loop entry (e.g., parameter checked before while) */
+    for (int p = lbl_ip - 1; p >= 0; p--) {
+        const IRInstruction* pi = &ir->instrs[p];
+        if (pi->op == IR_LABEL || pi->op == IR_JMP || pi->op == IR_JZ || pi->op == IR_JNZ || pi->op == IR_RET) {
+            break;
+        }
+        if (pi->op == IR_CALL_USER || pi->op == IR_CALL_FFI || ir_is_scope_pop_call(pi)) {
+            break;
+        }
+        if (pi->op == IR_CALL && !ir_is_inline_math_intrinsic(pi) && !ir_is_arena_alloc_call(pi)) {
+            break;
+        }
+        if ((pi->op == IR_BOUNDS_CHECK || pi->op == IR_PTR_CHECK || pi->op == IR_RANGE_CHECK) &&
+            pi->src1 >= 0 && pi->src1 < vreg_cap && equiv[pi->src1] == eb) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void ir_optimize_bounds_and_licm(IRBuffer* ir) {
     if (!ir || ir->count == 0 || ir->vreg_count == 0) return;
     ir_dedup_checks(ir);
@@ -580,24 +646,25 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
     }
 
     int n_vregs = ir->vreg_count;
-    bool* has_const = (bool*)calloc((size_t)n_vregs, sizeof(bool));
-    int64_t* const_val = (int64_t*)calloc((size_t)n_vregs, sizeof(int64_t));
-    int* def_count = (int*)calloc((size_t)n_vregs, sizeof(int));
-    int* use_count = (int*)calloc((size_t)n_vregs, sizeof(int));
-    int* def_ip = (int*)malloc((size_t)n_vregs * sizeof(int));
-    VReg* equiv = (VReg*)malloc((size_t)n_vregs * sizeof(VReg));
+    int vreg_cap = n_vregs + 256;
+    bool* has_const = (bool*)calloc((size_t)vreg_cap, sizeof(bool));
+    int64_t* const_val = (int64_t*)calloc((size_t)vreg_cap, sizeof(int64_t));
+    int* def_count = (int*)calloc((size_t)vreg_cap, sizeof(int));
+    int* use_count = (int*)calloc((size_t)vreg_cap, sizeof(int));
+    int* def_ip = (int*)malloc((size_t)vreg_cap * sizeof(int));
+    VReg* equiv = (VReg*)malloc((size_t)vreg_cap * sizeof(VReg));
     if (!has_const || !const_val || !def_count || !use_count || !def_ip || !equiv) {
         free(has_const); free(const_val); free(def_count); free(use_count); free(def_ip); free(equiv);
         return;
     }
-    for (int v = 0; v < n_vregs; v++) {
+    for (int v = 0; v < vreg_cap; v++) {
         def_ip[v] = -1;
         equiv[v] = v;
     }
 
     for (int ip = 0; ip < ir->count; ip++) {
         IRInstruction* ins = &ir->instrs[ip];
-        if (ins->dest >= 0 && ins->dest < n_vregs) {
+        if (ins->dest >= 0 && ins->dest < vreg_cap) {
             def_count[ins->dest]++;
             def_ip[ins->dest] = ip;
         }
@@ -605,10 +672,11 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
 
     for (int ip = 0; ip < ir->count; ip++) {
         IRInstruction* ins = &ir->instrs[ip];
-        if (ins->op == IR_CONST_I64 && ins->dest >= 0 && def_count[ins->dest] == 1) {
+        if (ins->op == IR_CONST_I64 && ins->dest >= 0 && ins->dest < vreg_cap && def_count[ins->dest] == 1) {
             has_const[ins->dest] = true;
             const_val[ins->dest] = ins->imm;
-        } else if (ins->op == IR_MOV && ins->dest >= 0 && ins->src1 >= 0 &&
+        } else if (ins->op == IR_MOV && ins->dest >= 0 && ins->dest < vreg_cap &&
+                   ins->src1 >= 0 && ins->src1 < vreg_cap &&
                    def_count[ins->dest] == 1 && def_count[ins->src1] == 1) {
             equiv[ins->dest] = equiv[ins->src1];
             if (has_const[ins->src1]) {
@@ -624,10 +692,10 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
             IRInstruction* ins = &ir->instrs[ip];
             if (ins->op == IR_BOUNDS_CHECK) {
                 int64_t len_c = ins->known_len;
-                if (len_c < 0 && ins->src3 >= 0 && has_const[ins->src3]) {
+                if (len_c < 0 && ins->src3 >= 0 && ins->src3 < vreg_cap && has_const[ins->src3]) {
                     len_c = const_val[ins->src3];
                 }
-                if (len_c >= 0 && ins->src2 >= 0 && has_const[ins->src2]) {
+                if (len_c >= 0 && ins->src2 >= 0 && ins->src2 < vreg_cap && has_const[ins->src2]) {
                     int64_t idx_c = const_val[ins->src2];
                     if (idx_c >= 0 && idx_c < len_c) {
                         ins->op = IR_NOP;
@@ -635,89 +703,133 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
                 }
             }
         }
+    }
 
-        /* Pass 2: Loop-Invariant Bounds Check Elimination & Hoisting (LICM) */
-        bool* modified = (bool*)calloc((size_t)n_vregs, sizeof(bool));
-        if (modified) {
-            for (int ip = 0; ip < ir->count; ip++) {
-                if (ir->instrs[ip].op != IR_LABEL) continue;
-                int lbl_start = (int)ir->instrs[ip].imm;
-                if (ip + 2 >= ir->count) continue;
-                IRInstruction* ins_cmp = &ir->instrs[ip + 1];
-                IRInstruction* ins_jz = &ir->instrs[ip + 2];
-                if (ins_cmp->op != IR_LT || ins_jz->op != IR_JZ || ins_jz->src1 != ins_cmp->dest) continue;
+    /* Pass 2: Loop-Invariant Bounds Check Elimination & Affine Hoisting (--release AND --safe) */
+    bool* modified = (bool*)calloc((size_t)vreg_cap, sizeof(bool));
+    if (modified) {
+        for (int ip = 0; ip < ir->count; ip++) {
+            if (ir->instrs[ip].op != IR_LABEL) continue;
+            int lbl_start = (int)ir->instrs[ip].imm;
+            if (ip + 2 >= ir->count) continue;
+            IRInstruction* ins_cmp = &ir->instrs[ip + 1];
+            IRInstruction* ins_jz = &ir->instrs[ip + 2];
+            if (ins_cmp->op != IR_LT || ins_jz->op != IR_JZ || ins_jz->src1 != ins_cmp->dest) continue;
 
-                int lbl_exit = (int)ins_jz->imm;
-                VReg i_vreg = ins_cmp->src1;
-                VReg lim_vreg = ins_cmp->src2;
+            int lbl_exit = (int)ins_jz->imm;
+            VReg i_vreg = ins_cmp->src1;
+            VReg lim_vreg = ins_cmp->src2;
 
-                int ip_jmp = -1;
-                for (int j = ip + 3; j < ir->count; j++) {
-                    if (ir->instrs[j].op == IR_JMP && (int)ir->instrs[j].imm == lbl_start) {
-                        ip_jmp = j;
-                        break;
+            int ip_jmp = -1;
+            for (int j = ip + 3; j < ir->count; j++) {
+                if (ir->instrs[j].op == IR_JMP && (int)ir->instrs[j].imm == lbl_start) {
+                    ip_jmp = j;
+                    break;
+                }
+            }
+            if (ip_jmp == -1 || ip_jmp + 1 >= ir->count) continue;
+            if (ir->instrs[ip_jmp + 1].op != IR_LABEL || (int)ir->instrs[ip_jmp + 1].imm != lbl_exit) continue;
+
+            /* Reject loops with jumps to start/exit labels from elsewhere */
+            int start_refs = 0, exit_refs = 0;
+            for (int q = 0; q < ir->count; q++) {
+                IROpcode qop = ir->instrs[q].op;
+                if (qop == IR_JMP || qop == IR_JZ || qop == IR_JNZ) {
+                    if ((int)ir->instrs[q].imm == lbl_start) start_refs++;
+                    if ((int)ir->instrs[q].imm == lbl_exit) exit_refs++;
+                }
+            }
+            if (start_refs != 1 || exit_refs != 1) continue;
+
+            /* Verify i_vreg only increments by +1 at end of loop; detect any side-effecting calls */
+            bool valid_ind = false;
+            int ind_writes = 0;
+            bool loop_has_call = false;
+            for (int k = ip + 3; k < ip_jmp; k++) {
+                IROpcode kop = ir->instrs[k].op;
+                if (kop == IR_CALL_USER || kop == IR_CALL_FFI ||
+                    (kop == IR_CALL && !ir_is_inline_math_intrinsic(&ir->instrs[k]))) {
+                    loop_has_call = true;
+                }
+                if (ir->instrs[k].dest == i_vreg) {
+                    ind_writes++;
+                    if (kop == IR_ADD && ir->instrs[k].src1 == i_vreg &&
+                        ir->instrs[k].src2 >= 0 && ir->instrs[k].src2 < vreg_cap &&
+                        has_const[ir->instrs[k].src2] && const_val[ir->instrs[k].src2] == 1) {
+                        valid_ind = true;
                     }
                 }
-                if (ip_jmp == -1 || ip_jmp + 1 >= ir->count) continue;
-                if (ir->instrs[ip_jmp + 1].op != IR_LABEL || (int)ir->instrs[ip_jmp + 1].imm != lbl_exit) continue;
+            }
+            if (!valid_ind || ind_writes != 1) continue;
+            if (g_compile_mode != VORTEX_MODE_RELEASE && loop_has_call) continue;
 
-                /* Verify i_vreg only increments by +1 at end of loop */
-                bool valid_ind = false;
-                int ind_writes = 0;
-                for (int k = ip + 3; k < ip_jmp; k++) {
-                    if (ir->instrs[k].dest == i_vreg) {
-                        ind_writes++;
-                        if (ir->instrs[k].op == IR_ADD && ir->instrs[k].src1 == i_vreg &&
-                            ir->instrs[k].src2 >= 0 && has_const[ir->instrs[k].src2] &&
-                            const_val[ir->instrs[k].src2] == 1) {
-                            valid_ind = true;
+            /* Determine pre-loop starting value of i_vreg */
+            VReg start_vreg = VREG_NONE;
+            for (int pre = ip - 1; pre >= 0; pre--) {
+                if (ir->instrs[pre].dest == i_vreg) {
+                    if (ir->instrs[pre].op == IR_MOV) {
+                        start_vreg = ir->instrs[pre].src1;
+                    } else {
+                        start_vreg = i_vreg;
+                    }
+                    break;
+                }
+            }
+            if (start_vreg == VREG_NONE) continue;
+
+            memset(modified, 0, (size_t)vreg_cap * sizeof(bool));
+            for (int k = ip + 1; k < ip_jmp; k++) {
+                if (ir->instrs[k].dest >= 0 && ir->instrs[k].dest < vreg_cap) {
+                    modified[ir->instrs[k].dest] = true;
+                }
+            }
+            if (lim_vreg < 0 || lim_vreg >= vreg_cap || modified[lim_vreg]) continue;
+
+            /* Hoist or eliminate unconditional prefix checks inside loop body */
+            for (int k = ip + 3; k < ip_jmp; k++) {
+                IROpcode kop = ir->instrs[k].op;
+                if (kop == IR_JMP || kop == IR_JZ || kop == IR_JNZ || kop == IR_LABEL) {
+                    break;
+                }
+                IRInstruction* chk = &ir->instrs[k];
+                if (chk->op == IR_PTR_CHECK) {
+                    if (g_compile_mode == VORTEX_MODE_RELEASE &&
+                        chk->src1 >= 0 && chk->src1 < vreg_cap && !modified[chk->src1]) {
+                        chk->op = IR_NOP;
+                    }
+                    continue;
+                }
+                if (chk->op != IR_BOUNDS_CHECK) continue;
+                VReg base = chk->src1;
+                VReg idx = chk->src2;
+                VReg len_v = chk->src3;
+
+                if (base < 0 || base >= vreg_cap || modified[base]) continue;
+                if (len_v >= 0 && (len_v >= vreg_cap || modified[len_v])) continue;
+
+                VReg off_v = VREG_NONE;
+                bool idx_ok = (idx == i_vreg);
+                if (!idx_ok && idx >= 0 && idx < vreg_cap && def_count[idx] == 1) {
+                    for (int q = k - 1; q >= ip + 3; q--) {
+                        const IRInstruction* qi = &ir->instrs[q];
+                        if (qi->dest == idx && qi->op == IR_ADD && qi->type == TYPE_I64 &&
+                            qi->src1 >= 0 && qi->src2 >= 0) {
+                            if (qi->src1 == i_vreg && qi->src2 < vreg_cap && !modified[qi->src2]) {
+                                off_v = qi->src2;
+                                idx_ok = true;
+                            } else if (qi->src2 == i_vreg && qi->src1 < vreg_cap && !modified[qi->src1]) {
+                                off_v = qi->src1;
+                                idx_ok = true;
+                            }
+                            break;
                         }
                     }
                 }
-                if (!valid_ind || ind_writes != 1) continue;
+                if (!idx_ok) continue;
 
-                /* Determine pre-loop starting value of i_vreg */
-                VReg start_vreg = VREG_NONE;
-                for (int pre = ip - 1; pre >= 0; pre--) {
-                    if (ir->instrs[pre].dest == i_vreg) {
-                        if (ir->instrs[pre].op == IR_MOV) {
-                            start_vreg = ir->instrs[pre].src1;
-                        } else {
-                            start_vreg = i_vreg;
-                        }
-                        break;
-                    }
-                }
-                if (start_vreg == VREG_NONE) continue;
-
-                memset(modified, 0, (size_t)n_vregs * sizeof(bool));
-                for (int k = ip + 1; k < ip_jmp; k++) {
-                    if (ir->instrs[k].dest >= 0 && ir->instrs[k].dest < n_vregs) {
-                        modified[ir->instrs[k].dest] = true;
-                    }
-                }
-
-                /* Hoist or eliminate checks inside loop body */
-                for (int k = ip + 3; k < ip_jmp; k++) {
-                    IRInstruction* chk = &ir->instrs[k];
-                    if (chk->op == IR_PTR_CHECK) {
-                        if (chk->src1 >= 0 && !modified[chk->src1]) {
-                            chk->op = IR_NOP;
-                        }
-                        continue;
-                    }
-                    if (chk->op != IR_BOUNDS_CHECK) continue;
-                    VReg base = chk->src1;
-                    VReg idx = chk->src2;
-                    VReg len_v = chk->src3;
-
-                    if (base < 0 || modified[base]) continue;
-                    if (len_v >= 0 && modified[len_v]) continue;
-
-                    bool idx_is_ind = (idx == i_vreg);
-                    if (!idx_is_ind) continue;
-
-                    bool start_nonneg = (has_const[start_vreg] && const_val[start_vreg] >= 0);
+                if (off_v == VREG_NONE) {
+                    bool start_nonneg = (start_vreg >= 0 && start_vreg < vreg_cap &&
+                                         has_const[start_vreg] && const_val[start_vreg] >= 0);
                     bool lim_fits_len = false;
                     if (len_v >= 0 && equiv[lim_vreg] == equiv[len_v]) {
                         lim_fits_len = true;
@@ -728,7 +840,7 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
                         if (lenc >= 0 && lc <= lenc) lim_fits_len = true;
                     }
 
-                    if (start_nonneg && lim_fits_len) {
+                    if (g_compile_mode == VORTEX_MODE_RELEASE && start_nonneg && lim_fits_len) {
                         chk->op = IR_NOP;
                     } else if (len_v >= 0 || chk->known_len >= 0) {
                         IRInstruction hoisted = *chk;
@@ -743,19 +855,128 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
                         ip_jmp++;
                         k++;
                     }
+                } else if ((len_v >= 0 || chk->known_len >= 0) && ir->vreg_count + 2 < vreg_cap &&
+                           ir->count + 4 < MAX_IR_INSTRS) {
+                    /* Snapshot chk and clear its original slot before ir_insert_before shifts ir->instrs. */
+                    IRInstruction orig_chk = *chk;
+                    chk->op = IR_NOP;
+                    VReg start_r = off_v;
+                    bool zero_start = (start_vreg >= 0 && start_vreg < vreg_cap &&
+                                       has_const[start_vreg] && const_val[start_vreg] == 0);
+                    if (!zero_start) {
+                        start_r = ir_new_vreg(ir, TYPE_I64);
+                        equiv[start_r] = start_r;
+                        IRInstruction add_s = {0};
+                        add_s.op = IR_ADD;
+                        add_s.type = TYPE_I64;
+                        add_s.dest = start_r;
+                        add_s.src1 = off_v;
+                        add_s.src2 = start_vreg;
+                        add_s.src3 = VREG_NONE;
+                        add_s.src4 = VREG_NONE;
+                        add_s.known_len = -1;
+                        add_s.line = orig_chk.line;
+                        add_s.file = orig_chk.file;
+                        ir_insert_before(ir, ip, &add_s);
+                        ip++;
+                        ip_jmp++;
+                        k++;
+                    }
+                    VReg lim_r = ir_new_vreg(ir, TYPE_I64);
+                    equiv[lim_r] = lim_r;
+                    IRInstruction add_l = {0};
+                    add_l.op = IR_ADD;
+                    add_l.type = TYPE_I64;
+                    add_l.dest = lim_r;
+                    add_l.src1 = off_v;
+                    add_l.src2 = lim_vreg;
+                    add_l.src3 = VREG_NONE;
+                    add_l.src4 = VREG_NONE;
+                    add_l.known_len = -1;
+                    add_l.line = orig_chk.line;
+                    add_l.file = orig_chk.file;
+                    ir_insert_before(ir, ip, &add_l);
+                    ip++;
+                    ip_jmp++;
+                    k++;
+
+                    IRInstruction hoisted = orig_chk;
+                    hoisted.op = IR_RANGE_CHECK;
+                    hoisted.src1 = base;
+                    hoisted.src2 = start_r;
+                    hoisted.src3 = lim_r;
+                    hoisted.src4 = len_v;
+                    ir_insert_before(ir, ip, &hoisted);
+                    ip++;
+                    ip_jmp++;
+                    k++;
                 }
             }
-            free(modified);
         }
+    }
 
+    /* Pass 2B (--safe mode, x86-64): Fast inline cold-trap bounds checks inside proven-live call-free loops */
+    if (g_compile_mode != VORTEX_MODE_RELEASE && g_target_arch == VORTEX_ARCH_X86_64 && modified) {
+        ir_compact_nops(ir);
+        ir_compute_def_use(ir, def_count, use_count);
+        for (int ip = 0; ip < ir->count; ip++) {
+            if (ir->instrs[ip].op != IR_LABEL) continue;
+            int lbl_start = (int)ir->instrs[ip].imm;
+            int ip_jmp = -1;
+            for (int j = ip + 1; j < ir->count; j++) {
+                if (ir->instrs[j].op == IR_JMP && (int)ir->instrs[j].imm == lbl_start) {
+                    ip_jmp = j;
+                    break;
+                }
+            }
+            if (ip_jmp < 0) continue;
+
+            bool call_free = true;
+            for (int k = ip + 1; k < ip_jmp; k++) {
+                IROpcode kop = ir->instrs[k].op;
+                if (kop == IR_CALL_USER || kop == IR_CALL_FFI ||
+                    (kop == IR_CALL && !ir_is_inline_math_intrinsic(&ir->instrs[k]))) {
+                    call_free = false;
+                    break;
+                }
+            }
+            if (!call_free) continue;
+
+            memset(modified, 0, (size_t)vreg_cap * sizeof(bool));
+            for (int k = ip + 1; k < ip_jmp; k++) {
+                if (ir->instrs[k].dest >= 0 && ir->instrs[k].dest < vreg_cap) {
+                    modified[ir->instrs[k].dest] = true;
+                }
+            }
+
+            for (int k = ip + 1; k < ip_jmp; k++) {
+                IRInstruction* chk = &ir->instrs[k];
+                if (chk->op != IR_BOUNDS_CHECK) continue;
+                VReg base = chk->src1;
+                VReg len_v = chk->src3;
+                if (base < 0 || base >= vreg_cap || modified[base]) continue;
+                if (len_v >= 0 && (len_v >= vreg_cap || modified[len_v])) continue;
+                if (len_v < 0 && chk->known_len < 0) continue;
+
+                if (ir_safe_ptr_proven_alive(ir, ip, ip_jmp, base, equiv, vreg_cap, def_count)) {
+                    chk->fast_inline_safe = true;
+                }
+            }
+        }
+    }
+    free(modified);
+
+    if (g_compile_mode == VORTEX_MODE_RELEASE) {
         /* Pass 3: Strip remaining IR_PTR_CHECK / IR_FFI_CHECK in --release mode */
         for (int ip = 0; ip < ir->count; ip++) {
             if (ir->instrs[ip].op == IR_PTR_CHECK || ir->instrs[ip].op == IR_FFI_CHECK) {
                 ir->instrs[ip].op = IR_NOP;
             }
         }
-        ir_compact_nops(ir);
     }
+    ir_compact_nops(ir);
+    n_vregs = ir->vreg_count;
+    if (n_vregs > vreg_cap) vreg_cap = n_vregs + 32;
 
     /* Pass 4 (Pillar #5): Constant folding on 2 constants & Copy propagation / Coalescing */
     bool* is_f32_const = (bool*)calloc((size_t)n_vregs, sizeof(bool));
@@ -939,7 +1160,8 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
                             if (qi->args[a] == old_v) qi->args[a] = new_v;
                         }
                         if (qi->op == IR_RAW_RIEMANN || qi->op == IR_VEC_LOOP ||
-                            qi->op == IR_VEC_ARR_OP || qi->op == IR_VEC_GRID_MOD || qi->op == IR_VEC_MOD_FILL) {
+                            qi->op == IR_VEC_ARR_OP || qi->op == IR_VEC_GRID_MOD ||
+                            qi->op == IR_VEC_MOD_FILL || qi->op == IR_VEC_F64_AXPY) {
                             if (qi->lim_vreg == old_v) qi->lim_vreg = new_v;
                             if (qi->step_vreg == old_v) qi->step_vreg = new_v;
                             for (int b = 0; b < qi->body_op_count; b++) {
@@ -966,13 +1188,13 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
                 VReg orig = ins->src1;
                 if (nxt->op != IR_NOP && nxt->op != IR_LABEL &&
                     (nxt->src1 == tmp || nxt->src2 == tmp || nxt->src3 == tmp || nxt->src4 == tmp ||
-                     ((nxt->op == IR_RAW_RIEMANN || nxt->op == IR_VEC_LOOP || nxt->op == IR_VEC_ARR_OP || nxt->op == IR_VEC_GRID_MOD || nxt->op == IR_VEC_MOD_FILL) &&
+                     ((nxt->op == IR_RAW_RIEMANN || nxt->op == IR_VEC_LOOP || nxt->op == IR_VEC_ARR_OP || nxt->op == IR_VEC_GRID_MOD || nxt->op == IR_VEC_MOD_FILL || nxt->op == IR_VEC_F64_AXPY) &&
                       (nxt->lim_vreg == tmp || nxt->step_vreg == tmp)))) {
                     if (nxt->src1 == tmp) nxt->src1 = orig;
                     if (nxt->src2 == tmp) nxt->src2 = orig;
                     if (nxt->src3 == tmp) nxt->src3 = orig;
                     if (nxt->src4 == tmp) nxt->src4 = orig;
-                    if (nxt->op == IR_RAW_RIEMANN || nxt->op == IR_VEC_LOOP || nxt->op == IR_VEC_ARR_OP || nxt->op == IR_VEC_GRID_MOD || nxt->op == IR_VEC_MOD_FILL) {
+                    if (nxt->op == IR_RAW_RIEMANN || nxt->op == IR_VEC_LOOP || nxt->op == IR_VEC_ARR_OP || nxt->op == IR_VEC_GRID_MOD || nxt->op == IR_VEC_MOD_FILL || nxt->op == IR_VEC_F64_AXPY) {
                         if (nxt->lim_vreg == tmp) nxt->lim_vreg = orig;
                         if (nxt->step_vreg == tmp) nxt->step_vreg = orig;
                     }
@@ -984,7 +1206,7 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
             /* Tail move coalescing: tmp = PURE_OP ...; dst = MOV tmp (tmp single-def & single-use) */
             if (ip + 1 < ir->count && ir->instrs[ip + 1].op == IR_MOV &&
                 ins->dest >= 0 && !ir_has_side_effect(ins->op) &&
-                ins->op != IR_RAW_RIEMANN && ins->op != IR_VEC_LOOP && ins->op != IR_VEC_ARR_OP && ins->op != IR_VEC_GRID_MOD && ins->op != IR_VEC_MOD_FILL) {
+                ins->op != IR_RAW_RIEMANN && ins->op != IR_VEC_LOOP && ins->op != IR_VEC_ARR_OP && ins->op != IR_VEC_GRID_MOD && ins->op != IR_VEC_MOD_FILL && ins->op != IR_VEC_F64_AXPY) {
                 IRInstruction* mv = &ir->instrs[ip + 1];
                 VReg tmp = ins->dest;
                 VReg dst = mv->dest;

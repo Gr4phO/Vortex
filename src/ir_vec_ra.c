@@ -37,7 +37,8 @@ void ir_liveness_analysis(IRBuffer* ir) {
             ir_record_use(ir, ins->args[a], ip);
         }
         if (ins->op == IR_RAW_RIEMANN || ins->op == IR_VEC_LOOP ||
-            ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD || ins->op == IR_VEC_MOD_FILL) {
+            ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD ||
+            ins->op == IR_VEC_MOD_FILL || ins->op == IR_VEC_F64_AXPY) {
             ir_record_use(ir, ins->i_vreg, ip);
             ir_record_use(ir, ins->lim_vreg, ip);
             ir_record_use(ir, ins->acc_vreg, ip);
@@ -79,20 +80,24 @@ void ir_liveness_analysis(IRBuffer* ir) {
         }
     }
 
-    /* Call crossing detection (including runtime check traps) */
+    /* Call crossing detection (skip inline hardware math & inline cold-trap bounds checks) */
     for (int ip = 0; ip < ir->count; ip++) {
         IRInstruction* ins = &ir->instrs[ip];
-        if (ins->op == IR_CALL || ins->op == IR_CALL_USER || ins->op == IR_CALL_FFI ||
-            ins->op == IR_BOUNDS_CHECK || ins->op == IR_RANGE_CHECK ||
-            ins->op == IR_PTR_CHECK || ins->op == IR_FFI_CHECK || ins->op == IR_DIV_CHECK) {
-            for (int v = 0; v < ir->vreg_count; v++) {
-                VRegInfo* vi = &ir->vregs[v];
-                if (vi->start_ip != -1 && vi->start_ip < ip && vi->end_ip > ip) {
-                    vi->crosses_call = true;
-                }
-            }
-        } else if (ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD ||
-                   ins->op == IR_VEC_LOOP || ins->op == IR_RAW_RIEMANN || ins->op == IR_VEC_MOD_FILL) {
+        bool is_call = false;
+        if (ins->op == IR_CALL) {
+            is_call = !ir_is_inline_math_intrinsic(ins);
+        } else if (ins->op == IR_BOUNDS_CHECK) {
+            is_call = !(g_target_arch == VORTEX_ARCH_X86_64 &&
+                        (g_compile_mode == VORTEX_MODE_RELEASE || ins->fast_inline_safe));
+        } else if (ins->op == IR_CALL_USER || ins->op == IR_CALL_FFI ||
+                   ins->op == IR_RANGE_CHECK || ins->op == IR_PTR_CHECK ||
+                   ins->op == IR_FFI_CHECK || ins->op == IR_DIV_CHECK ||
+                   ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD ||
+                   ins->op == IR_VEC_LOOP || ins->op == IR_RAW_RIEMANN ||
+                   ins->op == IR_VEC_MOD_FILL || ins->op == IR_VEC_F64_AXPY) {
+            is_call = true;
+        }
+        if (is_call) {
             for (int v = 0; v < ir->vreg_count; v++) {
                 VRegInfo* vi = &ir->vregs[v];
                 if (vi->start_ip != -1 && vi->start_ip < ip && vi->end_ip > ip) {
@@ -124,7 +129,8 @@ static bool vreg_is_used_outside_range(const IRBuffer* ir, VReg v, int range_lo,
             if (ins->args[a] == v) return true;
         }
         if (ins->op == IR_RAW_RIEMANN || ins->op == IR_VEC_LOOP ||
-            ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD || ins->op == IR_VEC_MOD_FILL) {
+            ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD ||
+            ins->op == IR_VEC_MOD_FILL || ins->op == IR_VEC_F64_AXPY) {
             if (ins->i_vreg == v || ins->lim_vreg == v || ins->acc_vreg == v ||
                 ins->x_vreg == v || ins->step_vreg == v) return true;
         }
@@ -141,6 +147,29 @@ static bool preg_in_list(int preg, const int* list, int count) {
 
 void ir_loop_vectorize(IRBuffer* ir) {
     if (!ir || ir->count < 8 || ir->vreg_count <= 0) return;
+
+    /* Neutralize unreferenced loop-step labels so straight-line for loops can vectorize. */
+    if (ir->next_label > 0) {
+        bool* lbl_used = (bool*)calloc((size_t)ir->next_label, sizeof(bool));
+        if (lbl_used) {
+            for (int p = 0; p < ir->count; p++) {
+                IROpcode op = ir->instrs[p].op;
+                if (op == IR_JMP || op == IR_JZ || op == IR_JNZ) {
+                    int tgt = (int)ir->instrs[p].imm;
+                    if (tgt >= 0 && tgt < ir->next_label) lbl_used[tgt] = true;
+                }
+            }
+            for (int p = 0; p < ir->count; p++) {
+                if (ir->instrs[p].op == IR_LABEL) {
+                    int id = (int)ir->instrs[p].imm;
+                    if (id >= 0 && id < ir->next_label && !lbl_used[id]) {
+                        ir->instrs[p].op = IR_NOP;
+                    }
+                }
+            }
+            free(lbl_used);
+        }
+    }
 
     int nv = ir->vreg_count;
     bool* has_ic = (bool*)calloc((size_t)nv, sizeof(bool));
@@ -791,9 +820,177 @@ void ir_loop_vectorize(IRBuffer* ir) {
                                 ir->instrs[m] = ir->instrs[m + remove_count];
                             }
                             ir->count -= remove_count;
+                            continue;
                         }
                     }
                 }
+            }
+
+            /* Path E: Strict IEEE-754 AVX2 f64 AXPY (C[coff + j] += aik * B[boff + j]) */
+            if (g_target_arch == VORTEX_ARCH_X86_64 && ins_cmp->op == IR_LT &&
+                i_vreg != VREG_NONE && lim_vreg != VREG_NONE &&
+                !ir->vregs[i_vreg].is_float && !ir->vregs[lim_vreg].is_float) {
+                int* alias_e = (int*)malloc((size_t)nv * sizeof(int));
+                bool* has_joff = (bool*)calloc((size_t)nv, sizeof(bool));
+                VReg* joff_base = (VReg*)malloc((size_t)nv * sizeof(VReg));
+                bool* written = (bool*)calloc((size_t)nv, sizeof(bool));
+                if (alias_e && has_joff && joff_base && written) {
+                    for (int v = 0; v < nv; v++) { alias_e[v] = v; joff_base[v] = VREG_NONE; }
+                    for (int k = ip_start + 3; k < ip_jmp; k++) {
+                        IRInstruction* ki = &ir->instrs[k];
+                        if (ki->dest >= 0 && ki->dest < nv) written[ki->dest] = true;
+                    }
+                    VReg ld_arr[2] = {VREG_NONE, VREG_NONE};
+                    VReg ld_off[2] = {VREG_NONE, VREG_NONE};
+                    VReg ld_dst[2] = {VREG_NONE, VREG_NONE};
+                    int ld_cnt = 0, b_idx = -1, c_idx = -1;
+                    VReg aik_v = VREG_NONE, mul_v = VREG_NONE, sum_v = VREG_NONE;
+                    bool got_mul = false, got_add = false, got_st = false, got_inc = false;
+                    bool ok_e = true;
+
+                    for (int k = ip_start + 3; k < ip_jmp; k++) {
+                        IRInstruction* ki = &ir->instrs[k];
+                        if (ki->op == IR_NOP || ki->op == IR_CONST_I64) continue;
+                        if (ki->op == IR_MOV) {
+                            if (ki->dest >= 0 && ki->dest < nv && ki->src1 >= 0 && ki->src1 < nv) {
+                                int src_a = alias_e[ki->src1];
+                                alias_e[ki->dest] = src_a;
+                                if (has_joff[ki->src1]) {
+                                    has_joff[ki->dest] = true;
+                                    joff_base[ki->dest] = joff_base[ki->src1];
+                                }
+                            }
+                            continue;
+                        }
+                        if (ki->op == IR_ADD && ki->type == TYPE_I64 && ki->dest >= 0 && ki->dest < nv) {
+                            VReg d = ki->dest;
+                            bool is_inc = false;
+                            if (d == i_vreg && ki->src1 == i_vreg) is_inc = true;
+                            else if (k + 1 < ip_jmp && ir->instrs[k + 1].op == IR_MOV &&
+                                     ir->instrs[k + 1].src1 == d && ir->instrs[k + 1].dest == i_vreg && ki->src1 == i_vreg) {
+                                is_inc = true;
+                                k++;
+                            }
+                            if (is_inc) {
+                                int64_t inc_v = (ki->src2 == VREG_NONE) ? ki->imm
+                                              : ((ki->src2 >= 0 && ki->src2 < nv && has_ic[ki->src2]) ? ic_val[ki->src2] : 0);
+                                if (inc_v == 1 && !got_inc) { got_inc = true; continue; }
+                                ok_e = false; break;
+                            }
+                            if (ki->src1 >= 0 && ki->src1 < nv && alias_e[ki->src1] == i_vreg &&
+                                ki->src2 >= 0 && ki->src2 < nv && !written[ki->src2]) {
+                                has_joff[d] = true;
+                                joff_base[d] = alias_e[ki->src2];
+                                continue;
+                            }
+                            if (ki->src2 >= 0 && ki->src2 < nv && alias_e[ki->src2] == i_vreg &&
+                                ki->src1 >= 0 && ki->src1 < nv && !written[ki->src1]) {
+                                has_joff[d] = true;
+                                joff_base[d] = alias_e[ki->src1];
+                                continue;
+                            }
+                            if (ki->src1 == i_vreg && ki->src2 == VREG_NONE && ki->imm == 0) {
+                                alias_e[d] = i_vreg;
+                                continue;
+                            }
+                            ok_e = false; break;
+                        }
+                        if (ki->op == IR_LOAD_ARRAY && ki->type == TYPE_F64 && ki->src1 >= 0 && ki->src1 < nv && ki->src2 >= 0 && ki->src2 < nv) {
+                            VReg base = alias_e[ki->src1];
+                            if (written[base]) { ok_e = false; break; }
+                            VReg idx = ki->src2;
+                            VReg joff = VREG_NONE;
+                            if (alias_e[idx] == i_vreg) joff = VREG_NONE;
+                            else if (has_joff[idx]) joff = joff_base[idx];
+                            else { ok_e = false; break; }
+
+                            if (ld_cnt < 2) {
+                                ld_arr[ld_cnt] = base;
+                                ld_off[ld_cnt] = joff;
+                                ld_dst[ld_cnt] = ki->dest;
+                                ld_cnt++;
+                                continue;
+                            }
+                            ok_e = false; break;
+                        }
+                        if (ki->op == IR_FMUL && ki->type == TYPE_F64 && ld_cnt >= 1 && !got_mul &&
+                            ki->src1 >= 0 && ki->src1 < nv && ki->src2 >= 0 && ki->src2 < nv) {
+                            VReg s1 = alias_e[ki->src1], s2 = alias_e[ki->src2];
+                            bool s1_is_ld = (s1 == ld_dst[0] || (ld_cnt > 1 && s1 == ld_dst[1]));
+                            bool s2_is_ld = (s2 == ld_dst[0] || (ld_cnt > 1 && s2 == ld_dst[1]));
+                            for (int idx = 0; idx < ld_cnt; idx++) {
+                                if (s1 == ld_dst[idx] && !written[s2] && !s2_is_ld) {
+                                    b_idx = idx; aik_v = s2; mul_v = ki->dest; got_mul = true; break;
+                                } else if (s2 == ld_dst[idx] && !written[s1] && !s1_is_ld) {
+                                    b_idx = idx; aik_v = s1; mul_v = ki->dest; got_mul = true; break;
+                                }
+                            }
+                            if (got_mul) continue;
+                            ok_e = false; break;
+                        }
+                        if (ki->op == IR_FADD && ki->type == TYPE_F64 && got_mul && !got_add &&
+                            ld_cnt == 2 && b_idx >= 0 &&
+                            ki->src1 >= 0 && ki->src1 < nv && ki->src2 >= 0 && ki->src2 < nv) {
+                            VReg s1 = alias_e[ki->src1], s2 = alias_e[ki->src2];
+                            int other_idx = 1 - b_idx;
+                            VReg vc_v = ld_dst[other_idx];
+                            if ((s1 == vc_v && s2 == mul_v) || (s1 == mul_v && s2 == vc_v)) {
+                                c_idx = other_idx; sum_v = ki->dest; got_add = true; continue;
+                            }
+                            ok_e = false; break;
+                        }
+                        if (ki->op == IR_STORE_ARRAY && ki->type == TYPE_F64 && got_add && !got_st &&
+                            c_idx >= 0 &&
+                            ki->src1 >= 0 && ki->src1 < nv && ki->src2 >= 0 && ki->src2 < nv && ki->src3 >= 0 && ki->src3 < nv) {
+                            VReg base = alias_e[ki->src1];
+                            VReg sval = alias_e[ki->src3];
+                            VReg idx = ki->src2;
+                            VReg joff = (alias_e[idx] == i_vreg) ? VREG_NONE : (has_joff[idx] ? joff_base[idx] : -2);
+                            if (base == ld_arr[c_idx] && sval == sum_v && joff == ld_off[c_idx]) {
+                                got_st = true; continue;
+                            }
+                            ok_e = false; break;
+                        }
+                        ok_e = false; break;
+                    }
+
+                    if (ok_e && ld_cnt == 2 && b_idx >= 0 && c_idx >= 0 && got_mul && got_add && got_st && got_inc &&
+                        ld_arr[c_idx] != VREG_NONE && ld_arr[b_idx] != VREG_NONE && aik_v != VREG_NONE && !written[lim_vreg]) {
+                        for (int k = ip_start + 3; k < ip_jmp; k++) {
+                            VReg dv = ir->instrs[k].dest;
+                            if (dv != VREG_NONE && dv != i_vreg &&
+                                vreg_is_used_outside_range(ir, dv, ip_start + 1, ip_jmp)) {
+                                ok_e = false; break;
+                            }
+                        }
+                        if (ok_e) {
+                            IRInstruction* vec_ins = &ir->instrs[ip_start];
+                            memset(vec_ins, 0, sizeof(*vec_ins));
+                            vec_ins->op = IR_VEC_F64_AXPY;
+                            vec_ins->type = TYPE_F64;
+                            vec_ins->dest = VREG_NONE;
+                            vec_ins->src1 = ld_arr[c_idx];
+                            vec_ins->src2 = ld_arr[b_idx];
+                            vec_ins->src3 = ld_off[c_idx];
+                            vec_ins->src4 = ld_off[b_idx];
+                            vec_ins->i_vreg = i_vreg;
+                            vec_ins->lim_vreg = lim_vreg;
+                            vec_ins->acc_vreg = VREG_NONE;
+                            vec_ins->x_vreg = aik_v;
+                            vec_ins->step_vreg = VREG_NONE;
+                            vec_ins->term_vreg = VREG_NONE;
+
+                            int remove_count = (ip_jmp + 1) - ip_start;
+                            for (int m = ip_start + 1; m + remove_count <= ir->count; m++) {
+                                ir->instrs[m] = ir->instrs[m + remove_count];
+                            }
+                            ir->count -= remove_count;
+                            free(alias_e); free(has_joff); free(joff_base); free(written);
+                            continue;
+                        }
+                    }
+                }
+                free(alias_e); free(has_joff); free(joff_base); free(written);
             }
         }
     }
@@ -828,12 +1025,21 @@ void ir_linear_scan_allocate(IRBuffer* ir) {
                 if (lbl >= 0 && lbl < lbl_cap) lbl_ips[lbl] = p;
             }
             if (ins->op == IR_RAW_RIEMANN || ins->op == IR_VEC_LOOP ||
-                ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD || ins->op == IR_VEC_MOD_FILL) {
+                ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD ||
+                ins->op == IR_VEC_MOD_FILL || ins->op == IR_VEC_F64_AXPY) {
                 ir->uses_avx = true;
             }
-            if (ins->op == IR_CALL || ins->op == IR_CALL_USER || ins->op == IR_CALL_FFI ||
-                ins->op == IR_BOUNDS_CHECK || ins->op == IR_RANGE_CHECK ||
-                ins->op == IR_PTR_CHECK || ins->op == IR_FFI_CHECK) {
+            bool counts_as_call = false;
+            if (ins->op == IR_CALL) {
+                counts_as_call = !ir_is_inline_math_intrinsic(ins);
+            } else if (ins->op == IR_BOUNDS_CHECK) {
+                counts_as_call = !(g_target_arch == VORTEX_ARCH_X86_64 &&
+                                   (g_compile_mode == VORTEX_MODE_RELEASE || ins->fast_inline_safe));
+            } else if (ins->op == IR_CALL_USER || ins->op == IR_CALL_FFI ||
+                       ins->op == IR_RANGE_CHECK || ins->op == IR_PTR_CHECK || ins->op == IR_FFI_CHECK) {
+                counts_as_call = true;
+            }
+            if (counts_as_call) {
                 ir->has_calls = true;
                 if (ins->arg_count > ir->max_call_args) ir->max_call_args = ins->arg_count;
             }
@@ -864,7 +1070,8 @@ void ir_linear_scan_allocate(IRBuffer* ir) {
                 if (av >= 0 && av < ir->vreg_count) weight[av] += w;
             }
             if (ins->op == IR_RAW_RIEMANN || ins->op == IR_VEC_LOOP ||
-                ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD || ins->op == IR_VEC_MOD_FILL) {
+                ins->op == IR_VEC_ARR_OP || ins->op == IR_VEC_GRID_MOD ||
+                ins->op == IR_VEC_MOD_FILL || ins->op == IR_VEC_F64_AXPY) {
                 if (ins->i_vreg >= 0 && ins->i_vreg < ir->vreg_count) weight[ins->i_vreg] += w * 8;
                 if (ins->lim_vreg >= 0 && ins->lim_vreg < ir->vreg_count) weight[ins->lim_vreg] += w * 8;
                 if (ins->acc_vreg >= 0 && ins->acc_vreg < ir->vreg_count) weight[ins->acc_vreg] += w * 8;

@@ -5,6 +5,13 @@
 
 #include "jit_x64_internal.h"
 
+static const uint64_t g_f64_abs_mask[2] __attribute__((aligned(16))) = {
+    0x7FFFFFFFFFFFFFFFULL, 0x7FFFFFFFFFFFFFFFULL
+};
+static const uint32_t g_f32_abs_mask[4] __attribute__((aligned(16))) = {
+    0x7FFFFFFFU, 0x7FFFFFFFU, 0x7FFFFFFFU, 0x7FFFFFFFU
+};
+
 /* ========================================================================= */
 /* LOW-LEVEL X86-64 / AVX2 EMITTER                                           */
 /* ========================================================================= */
@@ -1942,8 +1949,8 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
             }
 
             case IR_BOUNDS_CHECK: {
-                if (g_compile_mode == VORTEX_MODE_RELEASE) {
-                    int rb = get_vreg_int_reg(ir, ins->src1, PREG_RAX, j);
+                if (g_compile_mode == VORTEX_MODE_RELEASE || ins->fast_inline_safe) {
+                    int rb = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
                     emit_test_rr(j, rb, rb);
                     emit_u8(j, 0x0F); emit_u8(j, 0x84); /* jz rel32 -> cold trap */
                     size_t jz_patch = j->size;
@@ -2083,6 +2090,33 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
             }
 
             case IR_CALL: {
+                if (ins->func_ptr == (void*)vortex_math_sqrt_f64 ||
+                    ins->func_ptr == (void*)vortex_math_sqrtf) {
+                    int xs = get_vreg_float_reg(ir, ins->args[0], 0, j);
+                    int rd = ir->vregs[ins->dest].is_spilled ? 0 : ir->vregs[ins->dest].preg;
+                    emit_u8(j, (ins->func_ptr == (void*)vortex_math_sqrt_f64) ? 0xF2 : 0xF3);
+                    if (rd >= 8 || xs >= 8) {
+                        emit_u8(j, (uint8_t)(0x40 | (rd >= 8 ? 4 : 0) | (xs >= 8 ? 1 : 0)));
+                    }
+                    emit_u8(j, 0x0F); emit_u8(j, 0x51);
+                    emit_u8(j, (uint8_t)(0xC0 | ((rd & 7) << 3) | (xs & 7)));
+                    commit_vreg_float_reg(ir, ins->dest, rd, j);
+                    break;
+                }
+                if (ins->func_ptr == (void*)vortex_math_fabs_f64 ||
+                    ins->func_ptr == (void*)vortex_math_fabsf) {
+                    bool is_f64 = (ins->func_ptr == (void*)vortex_math_fabs_f64);
+                    int xs = get_vreg_float_reg(ir, ins->args[0], 0, j);
+                    int rd = ir->vregs[ins->dest].is_spilled ? 0 : ir->vregs[ins->dest].preg;
+                    if (rd != xs) emit_movaps_xx(j, rd, xs);
+                    emit_mov_ri64(j, PREG_R10, (int64_t)(uintptr_t)(is_f64 ? (const void*)g_f64_abs_mask : (const void*)g_f32_abs_mask));
+                    if (is_f64) emit_u8(j, 0x66);
+                    emit_u8(j, (uint8_t)(0x41 | (rd >= 8 ? 4 : 0)));
+                    emit_u8(j, 0x0F); emit_u8(j, 0x54);
+                    emit_u8(j, (uint8_t)(0x02 | ((rd & 7) << 3)));
+                    commit_vreg_float_reg(ir, ins->dest, rd, j);
+                    break;
+                }
                 if (ir->uses_avx) emit_vzeroupper(j);
                 if (ins->func_ptr == (void*)helper_print_f32 ||
                     ins->func_ptr == (void*)helper_print_f64 ||
@@ -2526,6 +2560,11 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
 
             case IR_VEC_MOD_FILL: {
                 emit_avx2_i64_mod_fill_loop(j, ir, ins);
+                break;
+            }
+
+            case IR_VEC_F64_AXPY: {
+                emit_avx2_f64_axpy_loop(j, ir, ins);
                 break;
             }
         }

@@ -1355,6 +1355,24 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
             }
 
             case IR_CALL: {
+                if (ins->func_ptr == (void*)vortex_math_sqrt_f64 ||
+                    ins->func_ptr == (void*)vortex_math_fabs_f64) {
+                    int dn = a64_get_float_reg(ir, ins->args[0], 0, j);
+                    int dd = ir->vregs[ins->dest].is_spilled ? 0 : ir->vregs[ins->dest].preg;
+                    uint32_t opc = (ins->func_ptr == (void*)vortex_math_sqrt_f64) ? 0x1E61C000U : 0x1E60C000U;
+                    a64_emit32(j, opc | ((uint32_t)(dn & 31) << 5) | (uint32_t)(dd & 31));
+                    a64_commit_float_reg(ir, ins->dest, dd, j);
+                    break;
+                }
+                if (ins->func_ptr == (void*)vortex_math_sqrtf ||
+                    ins->func_ptr == (void*)vortex_math_fabsf) {
+                    int sn = a64_get_float_reg(ir, ins->args[0], 0, j);
+                    int sd = ir->vregs[ins->dest].is_spilled ? 0 : ir->vregs[ins->dest].preg;
+                    uint32_t opc = (ins->func_ptr == (void*)vortex_math_sqrtf) ? 0x1E21C000U : 0x1E20C000U;
+                    a64_emit32(j, opc | ((uint32_t)(sn & 31) << 5) | (uint32_t)(sd & 31));
+                    a64_commit_float_reg(ir, ins->dest, sd, j);
+                    break;
+                }
                 if (ins->func_ptr == (void*)helper_print_f32 ||
                     ins->func_ptr == (void*)vortex_math_sinf ||
                     ins->func_ptr == (void*)vortex_math_cosf ||
@@ -1556,6 +1574,7 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
             case IR_VEC_ARR_OP:
             case IR_VEC_GRID_MOD:
             case IR_VEC_MOD_FILL:
+            case IR_VEC_F64_AXPY:
                 break;
         }
         if (ins->line > 0 && j->size > ins_start_off) {

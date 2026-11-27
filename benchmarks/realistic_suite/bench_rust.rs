@@ -122,8 +122,8 @@ fn main() {
         for k in 0..n3 {
             let aik = a3[i * n3 + k];
             let brow = &b3[k * n3..(k + 1) * n3];
-            for j in 0..n3 {
-                crow[j] += aik * brow[j];
+            for (c, &b) in crow.iter_mut().zip(brow.iter()) {
+                *c += aik * b;
             }
         }
     }

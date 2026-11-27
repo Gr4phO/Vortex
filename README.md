@@ -28,7 +28,7 @@ Vortex compile les scripts `.vx` et sessions REPL directement en code machine na
 
 ## Benchmarks Réalistes — 9 Langages à Armes Égales (100 % Mesurés Localement)
 
-Banc d'essai [`benchmarks/realistic_suite/`](benchmarks/realistic_suite/) exécuté sur **AMD Ryzen 5 5500 (6C/12T) + RX 6700 XT, Windows 11 x64**, médiane sur **3 exécutions** (`1` pour Python 3.12). **Aucune tricherie méthodologique** : strict IEEE-754 `f64` sans `-ffast-math` ni contraction FMA (`-ffp-contract=off` sous Clang), zéro motifs artificiels ou allocateurs dédiés, **checksums vérifiés à l'identique sur les 9 langages** (`T1=2379.995400`, `T2=3218448098`, `T3=6920530.340000`, `T4=3203324994356`, `T5=59429842`).
+Banc d'essai [`benchmarks/realistic_suite/`](benchmarks/realistic_suite/) exécuté sur **AMD Ryzen 5 5500 (6C/12T) + RX 6700 XT, Windows 11 x64**, médiane sur **5 exécutions** (`1` pour Python 3.12). **Aucune tricherie méthodologique** : strict IEEE-754 `f64` sans `-ffast-math` ni contraction FMA (`-ffp-contract=off` sous Clang), Rust écrit en itérateurs sûrs idiomatiques (`.iter_mut().zip()`), zéro motifs artificiels ou allocateurs dédiés, **checksums vérifiés à l'identique sur les 9 langages** (`T1=2379.995400`, `T2=3218448098`, `T3=6920530.340000`, `T4=3203324994356`, `T5=59429842`).
 
 ![Benchmark Réaliste Total 9 Langages](docs/assets/bench_realistic_total.png)
 
@@ -36,18 +36,20 @@ Banc d'essai [`benchmarks/realistic_suite/`](benchmarks/realistic_suite/) exécu
 
 | Langage / Profil | Total (ms) | Ratio | T1 N-Body `f64` | T2 QSort `500k` | T3 MatMul `320³` | T4 Sieve `10M` | T5 Mandel `12T` | AOT (ms) | Startup/JIT (ms) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **C++ (`Clang++ -O3`)** | **167.77** | 1.00× | 33.85 | 29.00 | **3.18** | **63.84** | 30.62 | 1 513.7 | 27.89 |
-| C (`Clang -O3`) | 169.88 | 1.01× | 34.22 | **28.74** | 3.21 | 70.33 | 30.37 | 797.6 | 30.29 |
-| Go (`1.27`) | 186.74 | 1.11× | 35.42 | 31.53 | 17.02 | 69.61 | 29.52 | 10 234.6 | 29.18 |
-| Rust (`rustc 1.99 -O3`) | 189.36 | 1.13× | 34.28 | 29.62 | 17.60 | 73.43 | 30.74 | 928.5 | **26.84** |
-| C# (`.NET v4.8`) | 189.68 | 1.13× | **33.98** | 30.92 | 24.99 | 76.12 | **21.26** | 1 532.5 | 49.04 |
-| **Vortex (`--release`, JIT `v1.3.0`)** | **212.12** | **1.26×** | 40.70 | 30.88 | 26.74 | 78.69 | 32.28 | **0.0** | 30.18 |
-| Java (`OpenJDK 21`) | 237.68 | 1.42× | 55.46 | 54.15 | 9.17 | 69.32 | 43.11 | 732.3 | 270.38 |
-| Node.js (`v26.13 V8`) | 335.96 | 2.00× | 48.78 | 49.33 | 40.37 | 112.44 | 73.97 | **0.0** | 114.52 |
-| Vortex (`--safe`) | 1 360.65 | 8.11× | 295.36 | 167.82 | 579.17 | 281.12 | 33.83 | **0.0** | 29.59 |
-| Python `3.12` (`CPython`) | 13 628.96 | 81.24× | 2 334.69 | 797.19 | 2 450.49 | 1 110.24 | 6 837.08 | **0.0** | 212.14 |
+| **C++ (`Clang++ -O3`)** | **183.94** | 1.00× | 34.98 | 30.32 | 3.45 | **77.39** | 31.64 | 1 819.1 | **29.65** |
+| C (`Clang -O3`) | 184.18 | 1.00× | **34.35** | **30.14** | **3.29** | 81.63 | 30.73 | 1 064.9 | 34.82 |
+| Rust (`rustc 1.99 -O3`, *safe zip*) | 199.51 | 1.08× | 35.34 | 30.28 | 4.12 | 93.73 | 31.99 | 1 307.0 | 34.06 |
+| **Vortex (`--release`, sans bornes)** | **204.60** | **1.11×** | 40.24 | 32.12 | 7.70 | 90.11 | 32.94 | **0.0** | 35.88 |
+| Go (`1.27`) | 216.27 | 1.18× | 36.92 | 33.08 | 20.38 | 92.01 | 32.23 | 955.0 | 37.38 |
+| C# (`.NET Framework 4.8`) | 223.50 | 1.22× | 36.79 | 32.27 | 28.13 | 97.00 | **25.79** | 1 382.6 | 71.11 |
+| Java (`OpenJDK 21`, à froid) | 250.44 | 1.36× | 58.30 | 48.77 | 9.62 | 80.74 | 44.08 | 746.0 | 315.38 |
+| **Vortex (`--safe`, bornes + arènes)** | **348.85** | **1.90×** | 37.56 | 178.13 | 7.83 | 89.33 | 34.77 | **0.0** | 33.53 |
+| Node.js (`v26.13 V8`, à froid) | 379.16 | 2.06× | 62.55 | 49.70 | 42.09 | 129.47 | 83.06 | **0.0** | 130.64 |
+| Python `3.12` (`CPython`) | 14 445.64 | 78.53× | 2 512.13 | 882.93 | 2 493.88 | 1 110.12 | 7 359.26 | **0.0** | 237.25 |
 
-- **Lecture sincère** : Vortex `--release` (**212.12 ms**) se place à **`1.26×` de Clang++ `-O3`**, tout près de Go/Rust/C# et devant **Java 21 (`237.68 ms`)** et **Node.js v26 (`335.96 ms`)**, tout en conservant **0 ms de compilation AOT** (`30.18 ms` démarrage+JIT). Sur **T2 Quicksort (`30.88 ms`)** et **T5 Mandelbrot 12T (`32.28 ms`)**, Vortex talonne directement C et Rust. Sur **T3 MatMul `f64` (`26.74 ms` vs `3.18 ms`)**, Clang conserve un avantage net grâce à l'auto-vectorisation AVX2 `f64` de la boucle interne.
+- **Lecture transparente** :
+  - **Vortex `--release` (`204.60 ms`)** termine **4e au classement général** à **`1.11×` de Clang++ `-O3` (`183.94 ms`)**, quasiment au coude-à-coude avec **Rust `-O3` (`199.51 ms`, écart de ~2.5 %)**, devant Go (`216.27 ms`), C# (`223.50 ms`), Java 21 (`250.44 ms`) et Node.js v26 (`379.16 ms`), avec **0 ms de compilation AOT**.
+  - **Précisions d'équité** : `--release` désactive les contrôles de bornes comme `C`/`C++`, alors que Rust/Go/Java/C# conservent les leurs. À **sécurité mémoire équivalente**, **`Vortex --safe` (`348.85 ms`, 3.9× plus rapide qu'avant)** bat Node.js v26 (`379.16 ms`) et égale déjà `--release` sur T1 (`37.56 ms`), T3 (`7.83 ms`), T4 (`89.33 ms`) et T5 (`34.77 ms`), seul T2 Quicksort récursif restant ralenti (`178.13 ms`). C# est compilé avec `csc` **.NET Framework 4.8** (pas .NET 8/9), et Java/Node sont mesurés sur processus court à froid (~250–380 ms).
 
 ### Accélération Silicium Optionnelle (`import "std/hw";`)
 
@@ -55,8 +57,8 @@ Séparée du benchmark pur ci-dessus, l'API matérielle opt-in [`std/hw`](std/hw
 
 ![Accélération Silicium std/hw CPU AVX2 BLIS & GPU OpenCL](docs/assets/bench_silicon_hw.png)
 
-- **`hw_matmul_f64` (`512×512×512`)** : **1.47 ms** (**182.36 GFLOP/s** `f64`, route `L3_CACHE`, erreur `0.000000`) — **76×** plus rapide que la boucle scalaire Vortex (`112.02 ms`) et **10.3×** plus rapide que C `Clang -O3` auto-vectorisé mono-cœur (`15.13 ms`).
-- **`hw_matmul_f32` (`1024×1024×1024`)** : **4.55 ms** (**471.87 GFLOP/s** `f32`, route `GPU_OPENCL` sur `gfx1031` transferts PCIe inclus) vs **6.01 ms** (`357.44 GFLOP/s`) CPU AVX2 6 cœurs (`hw_matmul_f32_cpu`) et **57.99 ms** (`37.03 GFLOP/s`) en C `-O3` 1T.
+- **`hw_matmul_f64` (`512×512×512`)** : **1.21 ms** (**222.21 GFLOP/s** `f64`, route `L3_CACHE`, erreur `0.000000`) — **21.1×** plus rapide que la boucle Vortex auto-vectorisée 1T (`25.54 ms`) et **14.0×** plus rapide que C `Clang -O3` mono-cœur (`16.99 ms`).
+- **`hw_matmul_f32` (`1024×1024×1024`)** : **3.24 ms** (**662.19 GFLOP/s** `f32`, route `GPU_OPENCL` sur `gfx1031` transferts PCIe inclus) vs **5.17 ms** (`415.05 GFLOP/s`) CPU AVX2 6 cœurs (`hw_matmul_f32_cpu`) et **65.19 ms** (`32.94 GFLOP/s`) en C `-O3` 1T.
 - **Rapports** : [Rapport réaliste v1.3.0](benchmarks/BENCHMARK_REPORT_v1.3.0.md) · [Ancien rapport v1.0.0](benchmarks/BENCHMARK_REPORT_v1.0.0.md) · [Feuille de route](docs/OPTIMIZATION_ROADMAP.md).
 
 ---
