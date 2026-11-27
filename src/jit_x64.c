@@ -1816,9 +1816,34 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                 if (ins->func_ptr == (void*)helper_print_f32 ||
                     ins->func_ptr == (void*)vortex_math_sinf ||
                     ins->func_ptr == (void*)vortex_math_cosf ||
-                    ins->func_ptr == (void*)vortex_math_sqrtf) {
+                    ins->func_ptr == (void*)vortex_math_sqrtf ||
+                    ins->func_ptr == (void*)vortex_math_tanf ||
+                    ins->func_ptr == (void*)vortex_math_floorf ||
+                    ins->func_ptr == (void*)vortex_math_ceilf ||
+                    ins->func_ptr == (void*)vortex_math_fabsf ||
+                    ins->func_ptr == (void*)vortex_math_expf ||
+                    ins->func_ptr == (void*)vortex_math_logf) {
                     int x = get_vreg_float_reg(ir, ins->args[0], 0, j);
                     if (x != 0) emit_movaps_xx(j, 0, x);
+                    emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xEC); emit_u8(j, 0x20);
+                    emit_u8(j, 0x48); emit_u8(j, 0xB8); emit_u64(j, (uint64_t)ins->func_ptr);
+                    emit_u8(j, 0xFF); emit_u8(j, 0xD0);
+                    emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xC4); emit_u8(j, 0x20);
+                } else if (ins->func_ptr == (void*)vortex_math_powf ||
+                           ins->func_ptr == (void*)vortex_math_atan2f) {
+                    int x0 = get_vreg_float_reg(ir, ins->args[0], 0, j);
+                    int x1 = get_vreg_float_reg(ir, ins->args[1], 1, j);
+                    if (x0 == 1 && x1 == 0) {
+                        emit_movaps_xx(j, 2, 1);
+                        emit_movaps_xx(j, 1, 0);
+                        emit_movaps_xx(j, 0, 2);
+                    } else if (x1 == 0) {
+                        emit_movaps_xx(j, 1, 0);
+                        if (x0 != 0) emit_movaps_xx(j, 0, x0);
+                    } else {
+                        if (x0 != 0) emit_movaps_xx(j, 0, x0);
+                        if (x1 != 1) emit_movaps_xx(j, 1, x1);
+                    }
                     emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xEC); emit_u8(j, 0x20);
                     emit_u8(j, 0x48); emit_u8(j, 0xB8); emit_u64(j, (uint64_t)ins->func_ptr);
                     emit_u8(j, 0xFF); emit_u8(j, 0xD0);

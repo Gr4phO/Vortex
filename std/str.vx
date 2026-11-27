@@ -1,0 +1,155 @@
+// Vortex Standard Library: std/str
+// Arena-backed high-level string helpers (O(N) via str_join and str_find)
+
+fn str_starts_with(s: str, prefix: str) -> i64 {
+    let plen = str_len(prefix);
+    if plen == 0 { return 1; }
+    let slen = str_len(s);
+    if plen > slen { return 0; }
+    return str_eq(str_sub(s, 0, plen), prefix);
+}
+
+fn str_ends_with(s: str, suffix: str) -> i64 {
+    let xlen = str_len(suffix);
+    if xlen == 0 { return 1; }
+    let slen = str_len(s);
+    if xlen > slen { return 0; }
+    return str_eq(str_sub(s, slen - xlen, xlen), suffix);
+}
+
+fn str_contains(s: str, sub: str) -> i64 {
+    if str_len(sub) == 0 { return 1; }
+    return str_find(s, sub, 0) >= 0 ? 1 : 0;
+}
+
+fn str_is_ws_byte(b: i64) -> i64 {
+    if b == 32 || b == 9 || b == 10 || b == 13 {
+        return 1;
+    }
+    return 0;
+}
+
+fn str_trim(s: str) -> str {
+    let n = str_len(s);
+    if n == 0 { return ""; }
+    let mut start = 0;
+    while start < n && str_is_ws_byte(str_byte(s, start)) == 1 {
+        start += 1;
+    }
+    let mut end = n;
+    while end > start && str_is_ws_byte(str_byte(s, end - 1)) == 1 {
+        end -= 1;
+    }
+    return str_sub(s, start, end - start);
+}
+
+fn str_to_upper(s: str) -> str {
+    let n = str_len(s);
+    if n == 0 { return ""; }
+    let parts = vec_new();
+    let mut seg = 0;
+    let mut i = 0;
+    while i < n {
+        let b = str_byte(s, i);
+        if b >= 97 && b <= 122 {
+            if i > seg {
+                let chunk = str_sub(s, seg, i - seg);
+                unsafe { vec_push(parts, chunk as i64); }
+            }
+            let up = str_from_byte(b - 32);
+            unsafe { vec_push(parts, up as i64); }
+            seg = i + 1;
+        }
+        i += 1;
+    }
+    if seg == 0 { return s; }
+    if n > seg {
+        let tail = str_sub(s, seg, n - seg);
+        unsafe { vec_push(parts, tail as i64); }
+    }
+    return str_join(parts, "");
+}
+
+fn str_to_lower(s: str) -> str {
+    let n = str_len(s);
+    if n == 0 { return ""; }
+    let parts = vec_new();
+    let mut seg = 0;
+    let mut i = 0;
+    while i < n {
+        let b = str_byte(s, i);
+        if b >= 65 && b <= 90 {
+            if i > seg {
+                let chunk = str_sub(s, seg, i - seg);
+                unsafe { vec_push(parts, chunk as i64); }
+            }
+            let lo = str_from_byte(b + 32);
+            unsafe { vec_push(parts, lo as i64); }
+            seg = i + 1;
+        }
+        i += 1;
+    }
+    if seg == 0 { return s; }
+    if n > seg {
+        let tail = str_sub(s, seg, n - seg);
+        unsafe { vec_push(parts, tail as i64); }
+    }
+    return str_join(parts, "");
+}
+
+fn str_replace(s: str, from: str, to: str) -> str {
+    let flen = str_len(from);
+    if flen == 0 { return s; }
+    let slen = str_len(s);
+    let mut cur = 0;
+    let first = str_find(s, from, 0);
+    if first < 0 { return s; }
+    let parts = vec_new();
+    let mut hit = first;
+    while hit >= 0 {
+        if hit > cur {
+            let chunk = str_sub(s, cur, hit - cur);
+            unsafe { vec_push(parts, chunk as i64); }
+        }
+        unsafe { vec_push(parts, to as i64); }
+        cur = hit + flen;
+        hit = cur <= slen ? str_find(s, from, cur) : -1;
+    }
+    if cur < slen {
+        let tail = str_sub(s, cur, slen - cur);
+        unsafe { vec_push(parts, tail as i64); }
+    }
+    return str_join(parts, "");
+}
+
+fn str_split(s: str, delim: str) -> ptr {
+    let out = vec_new();
+    let dlen = str_len(delim);
+    let slen = str_len(s);
+    if dlen == 0 {
+        unsafe { vec_push(out, s as i64); }
+        return out;
+    }
+    let mut cur = 0;
+    let mut hit = str_find(s, delim, 0);
+    while hit >= 0 {
+        let part = str_sub(s, cur, hit - cur);
+        unsafe { vec_push(out, part as i64); }
+        cur = hit + dlen;
+        hit = cur <= slen ? str_find(s, delim, cur) : -1;
+    }
+    let tail = cur <= slen ? str_sub(s, cur, slen - cur) : "";
+    unsafe { vec_push(out, tail as i64); }
+    return out;
+}
+
+fn str_repeat(s: str, count: i64) -> str {
+    if count <= 0 || str_len(s) == 0 { return ""; }
+    let parts = vec_new();
+    let mut i = 0;
+    while i < count {
+        unsafe { vec_push(parts, s as i64); }
+        i += 1;
+    }
+    return str_join(parts, "");
+}

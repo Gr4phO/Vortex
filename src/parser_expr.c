@@ -927,13 +927,18 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                 } else if (strcmp(name, "str_concat") == 0 || strcmp(name, "str_sub") == 0 ||
                            strcmp(name, "str_from_i64") == 0 || strcmp(name, "str_from_f32") == 0 ||
                            strcmp(name, "str_from_byte") == 0 || strcmp(name, "ptr_to_str") == 0 ||
-                           strcmp(name, "str_join") == 0) {
+                           strcmp(name, "str_join") == 0 || strcmp(name, "fs_read") == 0 ||
+                           strcmp(name, "env_get") == 0 || strcmp(name, "args_get") == 0) {
                     ret_t = TYPE_STR; is_alloc_ref = true;
                 } else if (strcmp(name, "ffi_load") == 0 || strcmp(name, "ffi_symbol") == 0 ||
                            strcmp(name, "gui_window") == 0) {
                     ret_t = TYPE_PTR;
                 } else if (strcmp(name, "sinf_rad") == 0 || strcmp(name, "cosf_rad") == 0 ||
-                           strcmp(name, "sqrtf_val") == 0) {
+                           strcmp(name, "sqrtf_val") == 0 || strcmp(name, "tanf_rad") == 0 ||
+                           strcmp(name, "floorf_val") == 0 || strcmp(name, "ceilf_val") == 0 ||
+                           strcmp(name, "fabsf_val") == 0 || strcmp(name, "expf_val") == 0 ||
+                           strcmp(name, "logf_val") == 0 || strcmp(name, "powf_val") == 0 ||
+                           strcmp(name, "atan2f_rad") == 0) {
                     ret_t = TYPE_F32;
                 }
 

@@ -1,0 +1,58 @@
+// Vortex Standard Library: std/fs
+// Safe file read/write/append/exists/delete/lines built on Vortex file builtins
+
+fn fs_read_text(path: str) -> str {
+    return fs_read(path);
+}
+
+fn fs_write_text(path: str, content: str) -> i64 {
+    return fs_write(path, content);
+}
+
+fn fs_append_text(path: str, content: str) -> i64 {
+    return fs_append(path, content);
+}
+
+fn fs_file_exists(path: str) -> i64 {
+    return fs_exists(path);
+}
+
+fn fs_delete(path: str) -> i64 {
+    return fs_remove(path);
+}
+
+fn fs_read_lines(path: str) -> ptr {
+    let raw = fs_read(path);
+    let out = vec_new();
+    let n = str_len(raw);
+    if n == 0 {
+        return out;
+    }
+    let mut start = 0;
+    let mut i = 0;
+    while i < n {
+        if str_byte(raw, i) == 10 {
+            let mut end = i;
+            if end > start && str_byte(raw, end - 1) == 13 {
+                end -= 1;
+            }
+            let line = str_sub(raw, start, end - start);
+            unsafe {
+                vec_push(out, line as i64);
+            }
+            start = i + 1;
+        }
+        i += 1;
+    }
+    if start < n {
+        let mut tail_end = n;
+        if tail_end > start && str_byte(raw, tail_end - 1) == 13 {
+            tail_end -= 1;
+        }
+        let tail = str_sub(raw, start, tail_end - start);
+        unsafe {
+            vec_push(out, tail as i64);
+        }
+    }
+    return out;
+}

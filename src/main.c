@@ -421,6 +421,7 @@ static void vortex_repl(void) {
 
 int main(int argc, char** argv) {
     g_pkg_import_hook = pkg_resolve_import;
+    vortex_set_program_args(argc, argv);
     if (check_and_run_embedded_payload(argc, argv)) {
         return 0;
     }
@@ -497,6 +498,7 @@ int main(int argc, char** argv) {
         }
     }
     filtered_argv[filtered_argc] = NULL;
+    vortex_set_program_args(filtered_argc, filtered_argv);
 
     if (filtered_argc == 1) {
         vortex_repl();

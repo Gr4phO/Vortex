@@ -845,6 +845,174 @@ float vortex_math_sqrtf(float x) {
     return x > 0.0f ? sqrtf(x) : 0.0f;
 }
 
+float vortex_math_tanf(float rad) {
+    return tanf(rad);
+}
+
+float vortex_math_floorf(float x) {
+    return floorf(x);
+}
+
+float vortex_math_ceilf(float x) {
+    return ceilf(x);
+}
+
+float vortex_math_fabsf(float x) {
+    return fabsf(x);
+}
+
+float vortex_math_expf(float x) {
+    return expf(x);
+}
+
+float vortex_math_logf(float x) {
+    return logf(x);
+}
+
+float vortex_math_powf(float base, float exp) {
+    return powf(base, exp);
+}
+
+float vortex_math_atan2f(float y, float x) {
+    return atan2f(y, x);
+}
+
+static int g_program_argc = 0;
+static char** g_program_argv = NULL;
+
+void vortex_set_program_args(int argc, char** argv) {
+    g_program_argc = (argc > 0) ? argc : 0;
+    g_program_argv = argv;
+}
+
+static int64_t vortex_arena_dup_cstr(const char* s) {
+    if (!s || !s[0]) return (int64_t)"";
+    size_t len = strlen(s);
+    char* res = (char*)arena_alloc_compact(len + 1);
+    if (!res) return (int64_t)"";
+    memcpy(res, s, len + 1);
+    return (int64_t)res;
+}
+
+int64_t vortex_args_count(void) {
+    return (int64_t)g_program_argc;
+}
+
+int64_t vortex_args_get(int64_t idx) {
+    if (!g_program_argv || idx < 0 || idx >= (int64_t)g_program_argc) {
+        return (int64_t)"";
+    }
+    return vortex_arena_dup_cstr(g_program_argv[(int)idx]);
+}
+
+int64_t vortex_env_get(int64_t name_ptr) {
+    const char* name = (const char*)name_ptr;
+    if (!name || !name[0]) return (int64_t)"";
+    const char* val = getenv(name);
+    return vortex_arena_dup_cstr(val);
+}
+
+int64_t vortex_env_has(int64_t name_ptr) {
+    const char* name = (const char*)name_ptr;
+    if (!name || !name[0]) return 0;
+    return getenv(name) != NULL ? 1 : 0;
+}
+
+int64_t vortex_fs_read(int64_t path_ptr) {
+    const char* path = (const char*)path_ptr;
+    if (!path || !path[0]) return (int64_t)"";
+    FILE* f = fopen(path, "rb");
+    if (!f) return (int64_t)"";
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return (int64_t)"";
+    }
+    long sz = ftell(f);
+    if (sz <= 0) {
+        fclose(f);
+        return (int64_t)"";
+    }
+    fseek(f, 0, SEEK_SET);
+    char* buf = (char*)arena_alloc_compact((size_t)sz + 1);
+    if (!buf) {
+        fclose(f);
+        return (int64_t)"";
+    }
+    size_t n = fread(buf, 1, (size_t)sz, f);
+    buf[n] = '\0';
+    fclose(f);
+    return (int64_t)buf;
+}
+
+int64_t vortex_fs_write(int64_t path_ptr, int64_t content_ptr) {
+    const char* path = (const char*)path_ptr;
+    const char* content = (const char*)content_ptr;
+    if (!path || !path[0]) return 0;
+    if (!content) content = "";
+    FILE* f = fopen(path, "wb");
+    if (!f) return 0;
+    size_t len = strlen(content);
+    size_t written = (len > 0) ? fwrite(content, 1, len, f) : 0;
+    int cerr = ferror(f);
+    fclose(f);
+    return (written == len && cerr == 0) ? 1 : 0;
+}
+
+int64_t vortex_fs_append(int64_t path_ptr, int64_t content_ptr) {
+    const char* path = (const char*)path_ptr;
+    const char* content = (const char*)content_ptr;
+    if (!path || !path[0]) return 0;
+    if (!content) content = "";
+    FILE* f = fopen(path, "ab");
+    if (!f) return 0;
+    size_t len = strlen(content);
+    size_t written = (len > 0) ? fwrite(content, 1, len, f) : 0;
+    int cerr = ferror(f);
+    fclose(f);
+    return (written == len && cerr == 0) ? 1 : 0;
+}
+
+int64_t vortex_fs_exists(int64_t path_ptr) {
+    const char* path = (const char*)path_ptr;
+    if (!path || !path[0]) return 0;
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    fclose(f);
+    return 1;
+}
+
+int64_t vortex_fs_remove(int64_t path_ptr) {
+    const char* path = (const char*)path_ptr;
+    if (!path || !path[0]) return 0;
+    return (remove(path) == 0) ? 1 : 0;
+}
+
+int64_t vortex_sleep_ms(int64_t ms) {
+    if (ms <= 0) return 0;
+#ifdef _WIN32
+    Sleep((DWORD)ms);
+#else
+    struct timespec ts;
+    ts.tv_sec = (time_t)(ms / 1000);
+    ts.tv_nsec = (long)((ms % 1000) * 1000000LL);
+    nanosleep(&ts, NULL);
+#endif
+    return 0;
+}
+
+int64_t vortex_unix_now_ms(void) {
+#ifdef _WIN32
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    uint64_t ticks = ((uint64_t)ft.dwHighDateTime << 32) | (uint64_t)ft.dwLowDateTime;
+    return (int64_t)((ticks - 116444736000000000ULL) / 10000ULL);
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000LL);
+#endif
+}
+
 int64_t helper_exit(int64_t code) {
     exit((int)code);
     return 0;
@@ -1095,6 +1263,25 @@ static BuiltinFunc g_builtins[] = {
     {"sinf_rad",       (void*)vortex_math_sinf,      1},
     {"cosf_rad",       (void*)vortex_math_cosf,      1},
     {"sqrtf_val",      (void*)vortex_math_sqrtf,     1},
+    {"tanf_rad",       (void*)vortex_math_tanf,      1},
+    {"floorf_val",     (void*)vortex_math_floorf,    1},
+    {"ceilf_val",      (void*)vortex_math_ceilf,     1},
+    {"fabsf_val",      (void*)vortex_math_fabsf,     1},
+    {"expf_val",       (void*)vortex_math_expf,      1},
+    {"logf_val",       (void*)vortex_math_logf,      1},
+    {"powf_val",       (void*)vortex_math_powf,      2},
+    {"atan2f_rad",     (void*)vortex_math_atan2f,    2},
+    {"args_count",     (void*)vortex_args_count,     0},
+    {"args_get",       (void*)vortex_args_get,       1},
+    {"env_get",        (void*)vortex_env_get,        1},
+    {"env_has",        (void*)vortex_env_has,        1},
+    {"fs_read",        (void*)vortex_fs_read,        1},
+    {"fs_write",       (void*)vortex_fs_write,       2},
+    {"fs_append",      (void*)vortex_fs_append,      2},
+    {"fs_exists",      (void*)vortex_fs_exists,      1},
+    {"fs_remove",      (void*)vortex_fs_remove,      1},
+    {"sleep_ms",       (void*)vortex_sleep_ms,       1},
+    {"unix_now_ms",    (void*)vortex_unix_now_ms,    0},
     {"struct_size",    (void*)vortex_builtin_struct_size, 1},
     {"struct_align",   (void*)vortex_builtin_struct_align, 1},
     {"assert",         (void*)vortex_assert,              1},
