@@ -1,0 +1,111 @@
+import "std/math";
+
+const CONST_PI_HALF: f64 = 1.5707963267948966;
+
+struct Vec2F64 {
+    x: f64,
+    y: f64,
+    buf: [f64]
+}
+
+fn sq_diff_f64(a: f64, b: f64) -> f64 {
+    let d: f64 = a - b;
+    return d * d;
+}
+
+fn pass_to_f64(v: f64) -> f64 {
+    return v * 2.0;
+}
+
+fn match_f64(v: f64) -> i64 {
+    let mut res: i64 = 0;
+    match v {
+        1.5 => res = 10,
+        2.5 => res = 20,
+        _ => res = 99,
+    }
+    return res;
+}
+
+fn test_f64_suite() -> i64 {
+    // 1. 53-bit precision: (1.0 as f64) / 3.0 differs cleanly from f32 beyond 7 digits
+    let third: f64 = (1.0 as f64) / 3.0;
+    let scaled: i64 = (third * (1000000000000.0 as f64)) as i64;
+    assert(scaled > 333333330000);
+    assert(scaled < 333333340000);
+
+    // 2. Unary minus high-precision literal & const f64
+    let neg_pi: f64 = -3.141592653589793;
+    assert(neg_pi < (-3.1415926535897 as f64));
+    assert(neg_pi > (-3.1415926535899 as f64));
+    let pi_back: f64 = CONST_PI_HALF * 2.0;
+    assert(fabs_f64(pi_back + neg_pi) < (1.0e-14 as f64));
+
+    // 3. Compound assignment, comparisons, ternary & user function promotion
+    let mut acc: f64 = 10.5;
+    acc += 2.25;
+    acc -= 0.75;
+    acc *= 2.0;
+    acc /= 3.0;
+    assert(fabs_f64(acc - 8.0) < (1.0e-12 as f64));
+
+    assert(fabs_f64(pass_to_f64(1.25) - 2.5) < (1.0e-12 as f64));
+    assert(fabs_f64(sq_diff_f64(5.5, 2.5) - 9.0) < (1.0e-12 as f64));
+
+    let chosen: f64 = (acc > 7.5) ? 4.25 : 1.0;
+    assert(fabs_f64(chosen - 4.25) < (1.0e-12 as f64));
+    assert_eq(match_f64(2.5), 20);
+    assert_eq(match_f64(3.5), 99);
+
+    // 4. slice_f64 & literal [f64] & struct with f64 / [f64]
+    let arr: [f64] = slice_f64(4);
+    assert_eq(slice_len(arr), 4);
+    arr[0] = 1.25;
+    arr[1] = 2.75;
+    arr[2] = arr[0] + arr[1];
+    arr[3] = 0.0;
+    arr[3] += 5.5;
+    assert(fabs_f64(arr[2] - 4.0) < (1.0e-12 as f64));
+    assert(fabs_f64(arr[3] - 5.5) < (1.0e-12 as f64));
+
+    let lit = [1.5 as f64, 2.5, 3.5];
+    assert_eq(slice_len(lit), 3);
+    assert(fabs_f64(lit[0] + lit[1] + lit[2] - 7.5) < (1.0e-12 as f64));
+
+    let v = Vec2F64 { x: 3.0, y: 4.0, buf: slice_f64(2) };
+    v.buf[0] = 6.25;
+    v.buf[1] = 1.75;
+    v.buf[1] += 0.25;
+    let hypot: f64 = sqrt_f64(v.x * v.x + v.y * v.y);
+    assert(fabs_f64(hypot - 5.0) < (1.0e-12 as f64));
+    assert(fabs_f64(v.buf[0] + v.buf[1] - 8.25) < (1.0e-12 as f64));
+
+    // 5. Math f64 builtins + std/math wrappers + f32<->f64<->i64 casts + str_from_f64
+    assert(fabs_f64(sin_f64(MATH_PI_F64 / 2.0) - 1.0) < (1.0e-14 as f64));
+    assert(fabs_f64(cos_f64(0.0) - 1.0) < (1.0e-14 as f64));
+    assert(fabs_f64(pow_f64(2.0, 10.0) - 1024.0) < (1.0e-12 as f64));
+    assert(fabs_f64(exp_f64(log_f64(7.5)) - 7.5) < (1.0e-12 as f64));
+    assert(fabs_f64(round_f64(3.6) - 4.0) < (1.0e-12 as f64));
+    assert(fabs_f64(lerp_f64(10.0, 20.0, 0.25) - 12.5) < (1.0e-12 as f64));
+
+    let f32_v: f32 = 2.5;
+    let promoted: f64 = f32_v as f64;
+    let back_f32: f32 = promoted as f32;
+    assert(back_f32 > 2.4 && back_f32 < 2.6);
+
+    let s: str = str_from_f64(1.25 as f64);
+    assert_eq(str_eq(s, "1.25"), 1);
+
+    // 6. Unsafe raw pointer dereference *ptr f64
+    unsafe {
+        let p: *f64 = slice_f64(1) as *f64;
+        *p = 42.5;
+        let loaded: f64 = *p;
+        assert(fabs_f64(loaded - 42.5) < (1.0e-12 as f64));
+    }
+
+    print_str("[PASS] test_f64_v13 OK\n");
+    return 0;
+}
+
+test_f64_suite();

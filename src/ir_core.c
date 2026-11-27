@@ -208,6 +208,13 @@ void ir_emit_const_f32(IRBuffer* ir, VReg dest, float val) {
     ins->type = TYPE_F32;
 }
 
+void ir_emit_const_f64(IRBuffer* ir, VReg dest, double val) {
+    IRInstruction* ins = ir_emit(ir, IR_CONST_F64);
+    ins->dest = dest;
+    ins->f64_imm = val;
+    ins->type = TYPE_F64;
+}
+
 void ir_emit_mov(IRBuffer* ir, VReg dest, VReg src) {
     IRInstruction* ins = ir_emit(ir, IR_MOV);
     ins->dest = dest;

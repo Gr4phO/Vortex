@@ -71,14 +71,14 @@ static bool ir_has_side_effect(IROpcode op) {
 static void ir_inline_small_functions(IRBuffer* ir) {
     if (!ir || ir->count == 0) return;
     int expansions = 0;
-    for (int ip = 0; ip < ir->count && expansions < 64; ip++) {
+    for (int ip = 0; ip < ir->count && expansions < 256; ip++) {
         IRInstruction* ins = &ir->instrs[ip];
         if (ins->op != IR_CALL_USER) continue;
         UserFunc* uf = user_func_find(ins->func_name);
         if (!uf || !uf->can_inline || !uf->inline_instrs || !uf->inline_vregs) continue;
         if (ins->arg_count != uf->param_count) continue;
         if (uf->inline_vreg_count <= 0 || uf->inline_vreg_count > 256) continue;
-        if (uf->inline_ir_count <= 0 || uf->inline_ir_count > 40) continue;
+        if (uf->inline_ir_count <= 0 || uf->inline_ir_count > 64) continue;
         if (ir->count + uf->inline_ir_count + 4 >= MAX_IR_INSTRS) continue;
 
         const IRInstruction* body = (const IRInstruction*)uf->inline_instrs;
@@ -758,14 +758,28 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
     }
 
     /* Pass 4 (Pillar #5): Constant folding on 2 constants & Copy propagation / Coalescing */
+    bool* is_f32_const = (bool*)calloc((size_t)n_vregs, sizeof(bool));
+    bool* is_f64_const = (bool*)calloc((size_t)n_vregs, sizeof(bool));
+    float* const_f32_val = (float*)calloc((size_t)n_vregs, sizeof(float));
+    double* const_f64_val = (double*)calloc((size_t)n_vregs, sizeof(double));
     for (int pass = 0; pass < 2; pass++) {
         ir_compute_def_use(ir, def_count, use_count);
         memset(has_const, 0, (size_t)n_vregs * sizeof(bool));
+        if (is_f32_const) memset(is_f32_const, 0, (size_t)n_vregs * sizeof(bool));
+        if (is_f64_const) memset(is_f64_const, 0, (size_t)n_vregs * sizeof(bool));
         for (int ip = 0; ip < ir->count; ip++) {
             IRInstruction* ins = &ir->instrs[ip];
-            if (ins->op == IR_CONST_I64 && ins->dest >= 0 && def_count[ins->dest] == 1) {
-                has_const[ins->dest] = true;
-                const_val[ins->dest] = ins->imm;
+            if (ins->dest >= 0 && def_count[ins->dest] == 1) {
+                if (ins->op == IR_CONST_I64) {
+                    has_const[ins->dest] = true;
+                    const_val[ins->dest] = ins->imm;
+                } else if (ins->op == IR_CONST_F32 && is_f32_const) {
+                    is_f32_const[ins->dest] = true;
+                    const_f32_val[ins->dest] = ins->fimm;
+                } else if (ins->op == IR_CONST_F64 && is_f64_const) {
+                    is_f64_const[ins->dest] = true;
+                    const_f64_val[ins->dest] = ins->f64_imm;
+                }
             }
         }
 
@@ -813,10 +827,104 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
                 }
             }
 
+            /* Algebraic integer identities */
+            if (ins->type == TYPE_I64 && ins->dest >= 0 && ins->src1 >= 0 && ins->src2 >= 0) {
+                bool c1 = has_const[ins->src1], c2 = has_const[ins->src2];
+                int64_t v1 = c1 ? const_val[ins->src1] : 0;
+                int64_t v2 = c2 ? const_val[ins->src2] : 0;
+                if ((ins->op == IR_ADD && c2 && v2 == 0) ||
+                    (ins->op == IR_SUB && c2 && v2 == 0) ||
+                    (ins->op == IR_MUL && c2 && v2 == 1) ||
+                    (ins->op == IR_DIV && c2 && v2 == 1) ||
+                    (ins->op == IR_BOR && c2 && v2 == 0) ||
+                    (ins->op == IR_BXOR && c2 && v2 == 0) ||
+                    ((ins->op == IR_SHL || ins->op == IR_SHR) && c2 && v2 == 0)) {
+                    ins->op = IR_MOV;
+                    ins->src2 = VREG_NONE;
+                    continue;
+                }
+                if ((ins->op == IR_ADD || ins->op == IR_BOR || ins->op == IR_BXOR) && c1 && v1 == 0) {
+                    ins->op = IR_MOV;
+                    ins->src1 = ins->src2;
+                    ins->src2 = VREG_NONE;
+                    continue;
+                }
+                if (ins->op == IR_MUL && c1 && v1 == 1) {
+                    ins->op = IR_MOV;
+                    ins->src1 = ins->src2;
+                    ins->src2 = VREG_NONE;
+                    continue;
+                }
+                if (((ins->op == IR_MUL || ins->op == IR_BAND) && ((c2 && v2 == 0) || (c1 && v1 == 0)))) {
+                    ins->op = IR_CONST_I64;
+                    ins->imm = 0;
+                    ins->src1 = VREG_NONE;
+                    ins->src2 = VREG_NONE;
+                    if (def_count[ins->dest] == 1) {
+                        has_const[ins->dest] = true;
+                        const_val[ins->dest] = 0;
+                    }
+                    continue;
+                }
+            }
+
+            /* Fold constant f32 arithmetic */
+            if (ins->type == TYPE_F32 && ins->dest >= 0 &&
+                ins->src1 >= 0 && ins->src2 >= 0 &&
+                is_f32_const && is_f32_const[ins->src1] && is_f32_const[ins->src2]) {
+                float fa = const_f32_val[ins->src1];
+                float fb = const_f32_val[ins->src2];
+                bool folded = true;
+                float fres = 0.0f;
+                if (ins->op == IR_FADD) fres = fa + fb;
+                else if (ins->op == IR_FSUB) fres = fa - fb;
+                else if (ins->op == IR_FMUL) fres = fa * fb;
+                else if (ins->op == IR_FDIV && fb != 0.0f) fres = fa / fb;
+                else folded = false;
+                if (folded) {
+                    ins->op = IR_CONST_F32;
+                    ins->fimm = fres;
+                    ins->src1 = VREG_NONE;
+                    ins->src2 = VREG_NONE;
+                    if (def_count[ins->dest] == 1) {
+                        is_f32_const[ins->dest] = true;
+                        const_f32_val[ins->dest] = fres;
+                    }
+                    continue;
+                }
+            }
+
+            /* Fold constant f64 arithmetic */
+            if (ins->type == TYPE_F64 && ins->dest >= 0 &&
+                ins->src1 >= 0 && ins->src2 >= 0 &&
+                is_f64_const && is_f64_const[ins->src1] && is_f64_const[ins->src2]) {
+                double da = const_f64_val[ins->src1];
+                double db = const_f64_val[ins->src2];
+                bool folded = true;
+                double dres = 0.0;
+                if (ins->op == IR_FADD) dres = da + db;
+                else if (ins->op == IR_FSUB) dres = da - db;
+                else if (ins->op == IR_FMUL) dres = da * db;
+                else if (ins->op == IR_FDIV && db != 0.0) dres = da / db;
+                else folded = false;
+                if (folded) {
+                    ins->op = IR_CONST_F64;
+                    ins->f64_imm = dres;
+                    ins->src1 = VREG_NONE;
+                    ins->src2 = VREG_NONE;
+                    if (def_count[ins->dest] == 1) {
+                        is_f64_const[ins->dest] = true;
+                        const_f64_val[ins->dest] = dres;
+                    }
+                    continue;
+                }
+            }
+
             /* Propagate single-def immutable copies: d = MOV s (where s is single-def) */
             if (ins->op == IR_MOV && ins->dest >= 0 && ins->src1 >= 0 &&
                 def_count[ins->dest] == 1 && def_count[ins->src1] == 1 &&
-                ir->vregs[ins->dest].is_float == ir->vregs[ins->src1].is_float) {
+                ir->vregs[ins->dest].is_float == ir->vregs[ins->src1].is_float &&
+                (!ir->vregs[ins->dest].is_float || ir->vregs[ins->dest].type == ir->vregs[ins->src1].type)) {
                 VReg old_v = ins->dest;
                 VReg new_v = ins->src1;
                 if (old_v != new_v) {
@@ -851,6 +959,7 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
             if (ins->op == IR_MOV && ins->dest >= 0 && ins->src1 >= 0 &&
                 def_count[ins->dest] == 1 && use_count[ins->dest] == 1 &&
                 ir->vregs[ins->dest].is_float == ir->vregs[ins->src1].is_float &&
+                (!ir->vregs[ins->dest].is_float || ir->vregs[ins->dest].type == ir->vregs[ins->src1].type) &&
                 ip + 1 < ir->count) {
                 IRInstruction* nxt = &ir->instrs[ip + 1];
                 VReg tmp = ins->dest;
@@ -881,7 +990,8 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
                 VReg dst = mv->dest;
                 if (mv->src1 == tmp && dst >= 0 &&
                     def_count[tmp] == 1 && use_count[tmp] == 1 &&
-                    ir->vregs[tmp].is_float == ir->vregs[dst].is_float) {
+                    ir->vregs[tmp].is_float == ir->vregs[dst].is_float &&
+                    (!ir->vregs[tmp].is_float || ir->vregs[tmp].type == ir->vregs[dst].type)) {
                     ins->dest = dst;
                     mv->op = IR_NOP;
                 }
@@ -975,6 +1085,59 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
             }
         }
         ir_compact_nops(ir);
+
+        /* Fuse adjacent ADD(x, step_const) + IR_SUB_MOD_IMM(x, M) -> IR_ADD_SUB_MOD_IMM */
+        ir_compute_def_use(ir, def_count, use_count);
+        memset(has_const, 0, (size_t)n_vregs * sizeof(bool));
+        for (int ip = 0; ip < ir->count; ip++) {
+            IRInstruction* ins = &ir->instrs[ip];
+            if (ins->op == IR_CONST_I64 && ins->dest >= 0 && def_count[ins->dest] == 1) {
+                has_const[ins->dest] = true;
+                const_val[ins->dest] = ins->imm;
+            }
+        }
+        bool fused_add_sub = false;
+        for (int ip = 1; ip < ir->count; ip++) {
+            IRInstruction* sub_ins = &ir->instrs[ip];
+            if (sub_ins->op != IR_SUB_MOD_IMM || sub_ins->src1 < 0) continue;
+            int64_t mod_m = sub_ins->imm;
+            if (mod_m <= 0 || mod_m > 2147483647LL) continue;
+
+            int add_ip = -1;
+            for (int p = ip - 1; p >= 0 && p >= ip - 4; p--) {
+                IRInstruction* pi = &ir->instrs[p];
+                if (pi->op == IR_CONST_I64 || pi->op == IR_NOP) {
+                    if (pi->dest == sub_ins->src1) break;
+                    continue;
+                }
+                if (pi->op == IR_ADD && pi->type == TYPE_I64 && pi->dest == sub_ins->src1) {
+                    add_ip = p;
+                }
+                break;
+            }
+            if (add_ip < 0) continue;
+            IRInstruction* add_ins = &ir->instrs[add_ip];
+            if (sub_ins->dest != add_ins->dest && use_count[add_ins->dest] != 1) continue;
+
+            VReg base_v = VREG_NONE;
+            int64_t step_c = 0;
+            if (add_ins->src2 >= 0 && has_const[add_ins->src2] && add_ins->src1 >= 0) {
+                base_v = add_ins->src1;
+                step_c = const_val[add_ins->src2];
+            } else if (add_ins->src1 >= 0 && has_const[add_ins->src1] && add_ins->src2 >= 0) {
+                base_v = add_ins->src2;
+                step_c = const_val[add_ins->src1];
+            }
+            if (base_v < 0 || step_c < 0 || step_c > mod_m) continue;
+
+            sub_ins->op = IR_ADD_SUB_MOD_IMM;
+            sub_ins->src1 = base_v;
+            sub_ins->src2 = VREG_NONE;
+            sub_ins->offset = (int)step_c;
+            add_ins->op = IR_NOP;
+            fused_add_sub = true;
+        }
+        if (fused_add_sub) ir_compact_nops(ir);
     }
 
     /* Pass 6 (Pillar #4): General Constant LICM from innermost to outermost loop */
@@ -993,7 +1156,7 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
         ir_compute_def_use(ir, def_count, use_count);
         for (int k = ip + 1; k < ip_jmp; k++) {
             IROpcode op = ir->instrs[k].op;
-            if (op != IR_CONST_I64 && op != IR_CONST_F32) continue;
+            if (op != IR_CONST_I64 && op != IR_CONST_F32 && op != IR_CONST_F64) continue;
             VReg dv = ir->instrs[k].dest;
             if (dv >= 0 && dv < n_vregs && def_count[dv] == 1) {
                 IRInstruction cpy = ir->instrs[k];
@@ -1073,6 +1236,10 @@ void ir_optimize_bounds_and_licm(IRBuffer* ir) {
         if (dce_changed) ir_compact_nops(ir);
     }
 
+    free(is_f32_const);
+    free(is_f64_const);
+    free(const_f32_val);
+    free(const_f64_val);
     free(has_const);
     free(const_val);
     free(def_count);

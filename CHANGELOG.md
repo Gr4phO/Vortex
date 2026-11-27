@@ -4,6 +4,19 @@ Toutes les modifications notables du projet sont listées ci-dessous **dans l'or
 
 ---
 
+## `v1.3.0` — 2026-11-27
+
+- **Support natif `f64` (IEEE-754 double précision 53 bits)** : type `f64`, slices `[f64]` (`slice_f64`), pointeurs `*f64`, promotion de littéraux vers `f64`, champs `struct`, `const f64`, ternaire, `match`, casts `f32 <-> f64 <-> i64`, émission SSE2 `sd` (`jit_x64.c`) et AArch64 `D`-registers (`jit_arm64.c`), 11 builtins `sin_f64`..`atan2_f64` + `str_from_f64` et helpers dans `std/math.vx`.
+- **Gains de performance brute JIT & Thread Pool** :
+  - Pool de threads hybride spin-barrier (`4000 × YieldProcessor()` avant attente noyau Windows) + affinité par cœur (`vortex_hw_set_worker_pinning`).
+  - `jit_x64_simd.c` : réduction modulo `vpaddd + vpsubd + vpminud` avec dépliage interne `2x`, remplissage `16 × i64` avec écritures non-temporelles alignées `vmovntdq + sfence` (> 262k éléments), et double prefetch `+512/+576`.
+  - `ir_opt.c` & `jit_x64.c` : inlining relevé à `64` IR instrs / `256` expansions, constant folding `f32`/`f64`, identités algébriques `i64` et fusion `IR_ADD_SUB_MOD_IMM` (`lea + cmp + lea + cmovge`).
+- **Module Silicium `std/hw` (`src/hw.c`, `std/hw.vx`)** : détection matérielle `CPUID` + `GetLogicalProcessorInformationEx` (caches L1D/L1I/L2/L3, cœurs physiques/logiques, AVX2/FMA3/AVX-512, RAM) et sonde OpenCL dynamique (`OpenCL.dll` / `libOpenCL.so`), cartographie `hw_print_map()`, planificateur de routes (`L1`/`L2`/`L3`/`RAM_STREAM`/`GPU_OPENCL`), noyaux BLIS `AVX2+FMA3` multi-cœur (`hw_matmul_f64` jusqu'à `182.36 GFLOP/s` sur Ryzen 5 5500, `hw_dot_f64`, `hw_axpy_f64`) et GEMM OpenCL GPU tuilé LDS (`hw_matmul_f32` à `471.87 GFLOP/s` sur RX 6700 XT transferts PCIe inclus).
+- **Suite de Benchmarks Réalistes 9 Langages & Graphiques RGBA Transparent** : ajout de `benchmarks/realistic_suite/` (N-Body `f64`, Quicksort 500k, MatMul `f64` `320³`, Crible `10M`, Mandelbrot 12T — tous checksums vérifiés à l'identique sous strict IEEE-754 sans `-ffast-math`), rapport `benchmarks/BENCHMARK_REPORT_v1.3.0.md`, et 3 graphiques PNG haute définition à fond transparent (canal alpha, logo Vortex en haut à gauche) dans `docs/assets/`.
+- **Tests (`18/18`)** : ajout de `tests/test_f64_v13.vx` et `tests/test_hw_v13.vx` (tous deux 0 erreur / 0 warning sous `--ultrasafe 3 --check --json`).
+
+---
+
 ## `v1.2.0` — 2026-11-27
 
 - **Logo officiel & icône Windows** : ajout de `docs/assets/vortex_logo.png`, `docs/assets/vortex.ico` et `src/vortex.rc` (intégré à `vortex.exe` via `llvm-rc` dans `build.bat` si présent, et affiché dans `README.md`).

@@ -14,7 +14,9 @@ size_t jit_x64_emit_jcc_placeholder(JITBuffer* j, uint8_t cond_byte);
 void jit_x64_emit_push_r(JITBuffer* j, int r);
 void jit_x64_emit_mov_rr(JITBuffer* j, int dst, int src);
 void jit_x64_emit_add_rr(JITBuffer* j, int dst, int src);
+void jit_x64_emit_sub_rr(JITBuffer* j, int dst, int src);
 void jit_x64_emit_cmp_rr(JITBuffer* j, int r1, int r2);
+void jit_x64_emit_cmp_ri(JITBuffer* j, int r1, int32_t imm);
 void jit_x64_emit_test_rr(JITBuffer* j, int r1, int r2);
 void jit_x64_emit_mov_ri64(JITBuffer* j, int reg, int64_t val);
 void jit_x64_emit_add_ri(JITBuffer* j, int rd, int32_t imm);
@@ -49,7 +51,9 @@ void emit_avx2_i64_mod_fill_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins)
 #define emit_push_r              jit_x64_emit_push_r
 #define emit_mov_rr              jit_x64_emit_mov_rr
 #define emit_add_rr              jit_x64_emit_add_rr
+#define emit_sub_rr              jit_x64_emit_sub_rr
 #define emit_cmp_rr              jit_x64_emit_cmp_rr
+#define emit_cmp_ri              jit_x64_emit_cmp_ri
 #define emit_test_rr             jit_x64_emit_test_rr
 #define emit_mov_ri64            jit_x64_emit_mov_ri64
 #define emit_add_ri              jit_x64_emit_add_ri

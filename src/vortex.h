@@ -156,6 +156,9 @@ typedef struct {
     HANDLE thread;
     HANDLE start_event;
     HANDLE done_event;
+    volatile LONG has_work;
+    volatile LONG sleeping;
+    uintptr_t affinity_mask;
 #else
     pthread_t thread;
     pthread_mutex_t mutex;
@@ -171,10 +174,15 @@ typedef struct {
     int64_t slice_end;
     bool should_exit;
     VortexRegionArena arena;
+    char _pad[64];
 } VortexWorker;
 
 typedef struct {
     int worker_count;
+    int active_worker_limit;
+#ifdef _WIN32
+    volatile LONG remaining;
+#endif
     VortexWorker workers[VORTEX_MAX_THREADS];
 #ifdef _WIN32
     HANDLE done_handles[VORTEX_MAX_THREADS];
@@ -270,6 +278,7 @@ typedef struct {
     char text[4096];
     int64_t int_val;
     float float_val;
+    double f64_val;
     int line;
     int col;
 } Token;
@@ -295,6 +304,7 @@ typedef enum {
     TYPE_PTR_I64,
     TYPE_PTR_I32,
     TYPE_PTR_F32,
+    TYPE_PTR_F64,
     TYPE_STRUCT,
     TYPE_PTR_STRUCT
 } VortexType;
@@ -527,6 +537,7 @@ typedef enum {
     IR_NOP = 0,
     IR_CONST_I64,
     IR_CONST_F32,
+    IR_CONST_F64,
     IR_MOV,
     IR_ADD,
     IR_SUB,
@@ -551,6 +562,10 @@ typedef enum {
     IR_FGE,
     IR_CAST_I64_TO_F32,
     IR_CAST_F32_TO_I64,
+    IR_CAST_I64_TO_F64,
+    IR_CAST_F64_TO_I64,
+    IR_CAST_F32_TO_F64,
+    IR_CAST_F64_TO_F32,
     IR_LOAD_OFFSET,
     IR_STORE_OFFSET,
     IR_LOAD_ARRAY,
@@ -573,6 +588,7 @@ typedef enum {
     IR_RAW_RIEMANN,
     IR_VEC_LOOP,
     IR_SUB_MOD_IMM,
+    IR_ADD_SUB_MOD_IMM,
     IR_VEC_ARR_OP,
     IR_VEC_GRID_MOD,
     IR_VEC_MOD_FILL,
@@ -599,6 +615,7 @@ typedef struct IRInstruction {
     VReg src4;
     int64_t imm;
     float fimm;
+    double f64_imm;
     int32_t offset;
     void* func_ptr;
     char func_name[64];
@@ -697,11 +714,14 @@ typedef struct {
     int popped_region_count;
     bool current_fn_is_unsafe;
     bool in_function;
+    VortexType current_fn_ret_type;
     bool block_returned;
     bool in_match_arm;
     int loop_break_lbl[MAX_LOOP_DEPTH];
     int loop_cont_lbl[MAX_LOOP_DEPTH];
     int loop_depth;
+    VReg last_f64_lit_vreg;
+    double last_f64_lit_val;
 } Compiler;
 
 /* ========================================================================= */
@@ -786,6 +806,7 @@ void* arena_alloc(size_t bytes);
 int64_t vortex_alloc_struct(int64_t size);
 int64_t vortex_alloc_slice_i64(int64_t len);
 int64_t vortex_alloc_slice_f32(int64_t len);
+int64_t vortex_alloc_slice_f64(int64_t len);
 int64_t vortex_alloc_slice_i32(int64_t len);
 int64_t vortex_slice_len(int64_t ptr_val);
 int64_t vortex_scope_push(void);
@@ -822,6 +843,7 @@ int64_t vortex_str_len(int64_t s_ptr);
 int64_t vortex_str_sub(int64_t s_ptr, int64_t start, int64_t len);
 int64_t vortex_str_from_i64(int64_t n);
 int64_t vortex_str_from_f32(int64_t f_bits);
+int64_t vortex_str_from_f64(int64_t f64_bits);
 int64_t vortex_str_byte(int64_t s_ptr, int64_t idx);
 int64_t vortex_str_from_byte(int64_t ch);
 int64_t vortex_str_eq(int64_t s1_ptr, int64_t s2_ptr);
@@ -857,6 +879,7 @@ int ir_new_label(IRBuffer* ir);
 IRInstruction* ir_emit(IRBuffer* ir, IROpcode op);
 void ir_emit_const_i64(IRBuffer* ir, VReg dest, int64_t val);
 void ir_emit_const_f32(IRBuffer* ir, VReg dest, float val);
+void ir_emit_const_f64(IRBuffer* ir, VReg dest, double val);
 void ir_emit_mov(IRBuffer* ir, VReg dest, VReg src);
 void ir_emit_binop(IRBuffer* ir, IROpcode op, VReg dest, VReg s1, VReg s2, VortexType t);
 void ir_emit_cast(IRBuffer* ir, IROpcode op, VReg dest, VReg src, VortexType t);
@@ -963,6 +986,7 @@ int vortex_cmd_fmt(int argc, char** argv);
 char* vortex_format_source(const char* src);
 void helper_print_i64(int64_t val);
 void helper_print_f32(float val);
+void helper_print_f64(double val);
 void helper_print_str(const char* s);
 int64_t vortex_math_sin(int64_t deg_x10);
 int64_t vortex_math_cos(int64_t deg_x10);
@@ -978,6 +1002,17 @@ float vortex_math_expf(float x);
 float vortex_math_logf(float x);
 float vortex_math_powf(float base, float exp);
 float vortex_math_atan2f(float y, float x);
+double vortex_math_sin_f64(double rad);
+double vortex_math_cos_f64(double rad);
+double vortex_math_sqrt_f64(double x);
+double vortex_math_tan_f64(double rad);
+double vortex_math_floor_f64(double x);
+double vortex_math_ceil_f64(double x);
+double vortex_math_fabs_f64(double x);
+double vortex_math_exp_f64(double x);
+double vortex_math_log_f64(double x);
+double vortex_math_pow_f64(double base, double exp);
+double vortex_math_atan2_f64(double y, double x);
 void vortex_set_program_args(int argc, char** argv);
 int64_t vortex_args_count(void);
 int64_t vortex_args_get(int64_t idx);
@@ -1008,6 +1043,29 @@ int64_t vortex_gui_button(int64_t win_ptr, int64_t id, int64_t label_ptr, int64_
 void vortex_thread_pool_init(void);
 void vortex_parallel_for_dispatch(void* fn_ptr, void* ctx, int64_t start, int64_t end);
 int64_t vortex_num_workers(void);
+int64_t vortex_hw_set_worker_pinning(int64_t mode);
+void vortex_thread_pool_set_worker_mask(int worker_id, uint64_t mask);
+int64_t vortex_hw_init(void);
+int64_t vortex_hw_print_map(void);
+int64_t vortex_hw_cpu_name(void);
+int64_t vortex_hw_gpu_name(void);
+int64_t vortex_hw_l1_kb(void);
+int64_t vortex_hw_l2_kb(void);
+int64_t vortex_hw_l3_kb(void);
+int64_t vortex_hw_phys_cores(void);
+int64_t vortex_hw_logical_cores(void);
+int64_t vortex_hw_simd_width(void);
+int64_t vortex_hw_has_gpu(void);
+int64_t vortex_hw_plan_route(int64_t working_bytes, int64_t flops);
+int64_t vortex_hw_plan_tile_f64(void);
+int64_t vortex_hw_pin_workers(int64_t mode);
+int64_t vortex_hw_prefetch(int64_t ptr, int64_t bytes);
+int64_t vortex_hw_matmul_f64(int64_t a_ptr, int64_t b_ptr, int64_t c_ptr, int64_t m, int64_t n, int64_t k);
+int64_t vortex_hw_matmul_f32(int64_t a_ptr, int64_t b_ptr, int64_t c_ptr, int64_t m, int64_t n, int64_t k);
+int64_t vortex_hw_matmul_f32_cpu(int64_t a_ptr, int64_t b_ptr, int64_t c_ptr, int64_t m, int64_t n, int64_t k);
+double vortex_hw_dot_f64(int64_t a_ptr, int64_t b_ptr, int64_t n);
+int64_t vortex_hw_axpy_f64(int64_t alpha_bits, int64_t x_ptr, int64_t y_ptr, int64_t n);
+int64_t vortex_hw_axpy_f32(int64_t alpha_bits, int64_t x_ptr, int64_t y_ptr, int64_t n);
 BuiltinFunc* builtin_find(const char* name);
 
 extern bool g_is_packaged_app;

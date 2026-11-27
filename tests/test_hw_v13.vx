@@ -1,0 +1,168 @@
+import "std/hw";
+
+fn test_hw_suite() -> i64 {
+    hw_init();
+
+    // 1. Hardware topology sanity checks
+    let phys = hw_phys_cores();
+    let logical = hw_logical_cores();
+    let l1 = hw_l1_kb();
+    let l2 = hw_l2_kb();
+    let l3 = hw_l3_kb();
+    let simd = hw_simd_width();
+    assert(phys >= 1);
+    assert(logical >= phys);
+    assert(l1 > 0);
+    assert(l2 >= l1);
+    assert(l3 >= 0);
+    assert(simd >= 128);
+    assert(str_len(hw_cpu_name()) > 0);
+    assert(str_len(hw_gpu_name()) > 0);
+    assert(str_len(hw_summary_line()) > 10);
+    assert(hw_plan_tile_f64() >= 32);
+
+    // 2. Route planner validation
+    let r_l1 = hw_plan_route(4096, 2000);
+    assert_eq(r_l1, HW_ROUTE_L1);
+    assert(str_eq(hw_route_name(r_l1), "L1_CACHE"));
+
+    let r_ram = hw_plan_route(268435456, 1000000);
+    assert_eq(r_ram, HW_ROUTE_RAM_STREAM);
+
+    if hw_has_gpu() != 0 {
+        let r_gpu = hw_plan_matrix_route(256, 256, 256, 4);
+        assert_eq(r_gpu, HW_ROUTE_GPU);
+        assert(str_eq(hw_route_name(r_gpu), "GPU_OPENCL"));
+    }
+
+    // 3. hw_dot_f64: small odd tail (17) + large multi-core (300000)
+    let n_sm: i64 = 17;
+    let a_sm: [f64] = slice_f64(n_sm);
+    let b_sm: [f64] = slice_f64(n_sm);
+    let mut ref_sm: f64 = 0.0;
+    for i in 0..n_sm {
+        a_sm[i] = ((i + 1) as f64) * 0.5;
+        b_sm[i] = ((i + 2) as f64) * 0.25;
+        ref_sm += a_sm[i] * b_sm[i];
+    }
+    let got_sm: f64 = hw_dot_f64(a_sm, b_sm, n_sm);
+    assert(fabs_f64(got_sm - ref_sm) < (1.0e-9 as f64));
+
+    let n_lg: i64 = 300000;
+    let a_lg: [f64] = slice_f64(n_lg);
+    let b_lg: [f64] = slice_f64(n_lg);
+    let mut ref_lg: f64 = 0.0;
+    for i in 0..n_lg {
+        let va: f64 = ((i % 97) as f64) * 0.01;
+        let vb: f64 = (((i * 3) % 89) as f64) * 0.02;
+        a_lg[i] = va;
+        b_lg[i] = vb;
+        ref_lg += va * vb;
+    }
+    let got_lg: f64 = hw_dot_f64(a_lg, b_lg, n_lg);
+    assert(fabs_f64(got_lg - ref_lg) < (1.0e-5 as f64));
+
+    // 4. hw_axpy_f64 & hw_axpy_f32
+    let y_sm: [f64] = slice_f64(n_sm);
+    for i in 0..n_sm {
+        y_sm[i] = 1.0;
+    }
+    let route_ax64 = hw_axpy_f64(2.5 as f64, a_sm, y_sm, n_sm);
+    assert(route_ax64 >= HW_ROUTE_L1);
+    for i in 0..n_sm {
+        let exp: f64 = 1.0 + (2.5 as f64) * a_sm[i];
+        assert(fabs_f64(y_sm[i] - exp) < (1.0e-12 as f64));
+    }
+
+    let n_f32: i64 = 65;
+    let x32: [f32] = slice_f32(n_f32);
+    let y32: [f32] = slice_f32(n_f32);
+    for i in 0..n_f32 {
+        x32[i] = (i as f32) * 0.25;
+        y32[i] = 2.0;
+    }
+    let route_ax32 = hw_axpy_f32(3.0, x32, y32, n_f32);
+    assert(route_ax32 >= HW_ROUTE_L1);
+    assert(y32[64] > 49.9);
+    assert(y32[64] < 50.1);
+
+    // 5. hw_matmul_f64: non-multiple primes (19 x 23 x 17)
+    let m1: i64 = 19;
+    let n1: i64 = 23;
+    let k1: i64 = 17;
+    let ma: [f64] = slice_f64(m1 * k1);
+    let mb: [f64] = slice_f64(k1 * n1);
+    let mc: [f64] = slice_f64(m1 * n1);
+    for i in 0..m1 {
+        for p in 0..k1 {
+            ma[i * k1 + p] = ((i * 3 + p + 1) as f64) * 0.1;
+        }
+    }
+    for p in 0..k1 {
+        for j in 0..n1 {
+            mb[p * n1 + j] = ((p * 5 + j + 2) as f64) * 0.1;
+        }
+    }
+    let rm1 = hw_matmul_f64(ma, mb, mc, m1, n1, k1);
+    assert(rm1 >= HW_ROUTE_L1);
+    for i in 0..m1 {
+        for j in 0..n1 {
+            let mut ref_c: f64 = 0.0;
+            for p in 0..k1 {
+                ref_c += ma[i * k1 + p] * mb[p * n1 + j];
+            }
+            assert(fabs_f64(mc[i * n1 + j] - ref_c) < (1.0e-9 as f64));
+        }
+    }
+
+    // 6. hw_matmul_f64 tiled multi-core (96 x 96 x 96)
+    let d96: i64 = 96;
+    let a96: [f64] = slice_f64(d96 * d96);
+    let b96: [f64] = slice_f64(d96 * d96);
+    let c96: [f64] = slice_f64(d96 * d96);
+    for i in 0..(d96 * d96) {
+        a96[i] = (((i % 13) + 1) as f64) * 0.05;
+        b96[i] = (((i % 17) + 1) as f64) * 0.05;
+    }
+    hw_matmul_f64(a96, b96, c96, d96, d96, d96);
+    let mut ref_96_0: f64 = 0.0;
+    for p in 0..d96 {
+        ref_96_0 += a96[p] * b96[p * d96];
+    }
+    assert(fabs_f64(c96[0] - ref_96_0) < (1.0e-8 as f64));
+
+    // 7. hw_matmul_f32_cpu vs hw_matmul_f32 (GPU OpenCL when present) on 256x256x256
+    let d256: i64 = 256;
+    let f_a: [f32] = slice_f32(d256 * d256);
+    let f_b: [f32] = slice_f32(d256 * d256);
+    let f_cpu: [f32] = slice_f32(d256 * d256);
+    let f_auto: [f32] = slice_f32(d256 * d256);
+    for i in 0..(d256 * d256) {
+        f_a[i] = ((i % 11) as f32) * 0.05;
+        f_b[i] = ((i % 7) as f32) * 0.05;
+    }
+    let r_cpu = hw_matmul_f32_cpu(f_a, f_b, f_cpu, d256, d256, d256);
+    let r_auto = hw_matmul_f32(f_a, f_b, f_auto, d256, d256, d256);
+    assert(r_cpu >= HW_ROUTE_L1);
+    if hw_has_gpu() != 0 {
+        assert_eq(r_auto, HW_ROUTE_GPU);
+    }
+    let mut max_diff: f64 = 0.0;
+    for i in 0..(d256 * d256) {
+        let diff: f64 = fabs_f64((f_cpu[i] as f64) - (f_auto[i] as f64));
+        if diff > max_diff {
+            max_diff = diff;
+        }
+    }
+    assert(max_diff < (1.0e-2 as f64));
+
+    // 8. Pinning & prefetch
+    assert(hw_prefetch(a_lg, 4096) == 64);
+    assert(hw_pin_workers(HW_PIN_PHYSICAL) >= 1);
+    assert(hw_pin_workers(HW_PIN_AUTO) >= 1);
+
+    print_str("[PASS] test_hw_v13 OK");
+    return 0;
+}
+
+test_hw_suite();

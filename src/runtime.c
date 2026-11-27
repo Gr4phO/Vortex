@@ -816,6 +816,7 @@ void vortex_error(const char* msg) {
 
 void helper_print_i64(int64_t val) { printf("%lld\n", (long long)val); fflush(stdout); }
 void helper_print_f32(float val) { printf("%.6f\n", (double)val); fflush(stdout); }
+void helper_print_f64(double val) { printf("%.6f\n", val); fflush(stdout); }
 void helper_print_str(const char* s) { printf("%s", s); fflush(stdout); }
 
 int64_t vortex_math_sin(int64_t deg_x10) {
@@ -876,6 +877,18 @@ float vortex_math_powf(float base, float exp) {
 float vortex_math_atan2f(float y, float x) {
     return atan2f(y, x);
 }
+
+double vortex_math_sin_f64(double rad) { return sin(rad); }
+double vortex_math_cos_f64(double rad) { return cos(rad); }
+double vortex_math_sqrt_f64(double x) { return x > 0.0 ? sqrt(x) : 0.0; }
+double vortex_math_tan_f64(double rad) { return tan(rad); }
+double vortex_math_floor_f64(double x) { return floor(x); }
+double vortex_math_ceil_f64(double x) { return ceil(x); }
+double vortex_math_fabs_f64(double x) { return fabs(x); }
+double vortex_math_exp_f64(double x) { return exp(x); }
+double vortex_math_log_f64(double x) { return log(x); }
+double vortex_math_pow_f64(double base, double exp) { return pow(base, exp); }
+double vortex_math_atan2_f64(double y, double x) { return atan2(y, x); }
 
 static int g_program_argc = 0;
 static char** g_program_argv = NULL;
@@ -1055,13 +1068,31 @@ static VortexThreadPool g_thread_pool;
 static DWORD WINAPI vortex_worker_proc(LPVOID lpParam) {
     VortexWorker* w = (VortexWorker*)lpParam;
     arena_set_thread_local(&w->arena);
-    while (1) {
-        WaitForSingleObject(w->start_event, INFINITE);
+    if (w->affinity_mask != 0) {
+        SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)w->affinity_mask);
+    }
+    for (;;) {
+        int spins = 0;
+        while (InterlockedCompareExchange(&w->has_work, 0, 0) == 0) {
+            if (w->should_exit) return 0;
+            if (spins < 4000) {
+                YieldProcessor();
+                spins++;
+            } else {
+                InterlockedExchange(&w->sleeping, 1);
+                if (InterlockedCompareExchange(&w->has_work, 0, 0) == 0 && !w->should_exit) {
+                    WaitForSingleObject(w->start_event, INFINITE);
+                }
+                InterlockedExchange(&w->sleeping, 0);
+            }
+        }
         if (w->should_exit) break;
         if (w->job_fn) {
             w->job_fn(w->job_ctx, w->slice_start, w->slice_end);
         }
-        SetEvent(w->done_event);
+        InterlockedExchange(&w->has_work, 0);
+        MemoryBarrier();
+        InterlockedDecrement(&g_thread_pool.remaining);
     }
     return 0;
 }
@@ -1107,6 +1138,10 @@ void vortex_thread_pool_init(void) {
     if (count <= 0) count = 1;
     if (count > VORTEX_MAX_THREADS) count = VORTEX_MAX_THREADS;
     g_thread_pool.worker_count = count;
+    g_thread_pool.active_worker_limit = 0;
+#ifdef _WIN32
+    g_thread_pool.remaining = 0;
+#endif
 
     for (int i = 0; i < count; i++) {
         VortexWorker* w = &g_thread_pool.workers[i];
@@ -1122,6 +1157,9 @@ void vortex_thread_pool_init(void) {
         w->arena.next_epoch = 2;
         arena_register(&w->arena);
 #ifdef _WIN32
+        w->has_work = 0;
+        w->sleeping = 0;
+        w->affinity_mask = 0;
         w->start_event = CreateEventA(NULL, FALSE, FALSE, NULL);
         w->done_event = CreateEventA(NULL, FALSE, FALSE, NULL);
         g_thread_pool.done_handles[i] = w->done_event;
@@ -1144,6 +1182,9 @@ void vortex_parallel_for_dispatch(void* fn_ptr, void* ctx, int64_t start, int64_
         vortex_thread_pool_init();
     }
     int count = g_thread_pool.worker_count;
+    if (g_thread_pool.active_worker_limit > 0 && g_thread_pool.active_worker_limit < count) {
+        count = g_thread_pool.active_worker_limit;
+    }
     int64_t total = end - start;
     if (total <= 0) return;
 
@@ -1156,6 +1197,10 @@ void vortex_parallel_for_dispatch(void* fn_ptr, void* ctx, int64_t start, int64_
     int64_t rem = total % count;
     int worker_dispatch = count - 1;
 
+#ifdef _WIN32
+    InterlockedExchange(&g_thread_pool.remaining, (LONG)worker_dispatch);
+#endif
+
     int64_t cur = start;
     for (int i = 0; i < worker_dispatch; i++) {
         int64_t this_chunk = chunk + (i < rem ? 1 : 0);
@@ -1166,7 +1211,11 @@ void vortex_parallel_for_dispatch(void* fn_ptr, void* ctx, int64_t start, int64_
         w->slice_end = cur + this_chunk;
         cur += this_chunk;
 #ifdef _WIN32
-        SetEvent(w->start_event);
+        MemoryBarrier();
+        InterlockedExchange(&w->has_work, 1);
+        if (InterlockedCompareExchange(&w->sleeping, 0, 0) != 0) {
+            SetEvent(w->start_event);
+        }
 #else
         pthread_mutex_lock(&w->mutex);
         w->job_ready = true;
@@ -1180,7 +1229,10 @@ void vortex_parallel_for_dispatch(void* fn_ptr, void* ctx, int64_t start, int64_
     fn(ctx, cur, end);
 
 #ifdef _WIN32
-    WaitForMultipleObjects((DWORD)worker_dispatch, g_thread_pool.done_handles, TRUE, INFINITE);
+    while (InterlockedCompareExchange(&g_thread_pool.remaining, 0, 0) > 0) {
+        YieldProcessor();
+    }
+    MemoryBarrier();
 #else
     for (int i = 0; i < worker_dispatch; i++) {
         VortexWorker* w = &g_thread_pool.workers[i];
@@ -1193,8 +1245,63 @@ void vortex_parallel_for_dispatch(void* fn_ptr, void* ctx, int64_t start, int64_
 #endif
 }
 
+void vortex_thread_pool_set_worker_mask(int worker_id, uint64_t mask) {
+    if (!g_thread_pool.initialized) vortex_thread_pool_init();
+    if (worker_id < 0 || worker_id >= g_thread_pool.worker_count) return;
+#ifdef _WIN32
+    g_thread_pool.workers[worker_id].affinity_mask = (uintptr_t)mask;
+    if (mask != 0 && g_thread_pool.workers[worker_id].thread) {
+        SetThreadAffinityMask(g_thread_pool.workers[worker_id].thread, (DWORD_PTR)mask);
+    }
+#else
+    (void)mask;
+#endif
+}
+
+int64_t vortex_hw_set_worker_pinning(int64_t mode) {
+    if (!g_thread_pool.initialized) vortex_thread_pool_init();
+    int count = g_thread_pool.worker_count;
+#ifdef _WIN32
+    if (mode <= 0) {
+        g_thread_pool.active_worker_limit = 0;
+        DWORD_PTR proc_mask = 0, sys_mask = 0;
+        GetProcessAffinityMask(GetCurrentProcess(), &proc_mask, &sys_mask);
+        if (proc_mask == 0) proc_mask = (count >= 64) ? ~(DWORD_PTR)0 : (((DWORD_PTR)1 << count) - 1);
+        for (int i = 0; i < count; i++) {
+            vortex_thread_pool_set_worker_mask(i, (uint64_t)proc_mask);
+        }
+        SetThreadAffinityMask(GetCurrentThread(), proc_mask);
+        return (int64_t)count;
+    }
+    if (mode == 2 && count >= 2) {
+        /* Physical cores only: assumes SMT pairs at (0,1), (2,3)... if caller didn't override */
+        int phys = count / 2;
+        if (phys < 1) phys = 1;
+        g_thread_pool.active_worker_limit = phys;
+        for (int i = 0; i < phys - 1; i++) {
+            vortex_thread_pool_set_worker_mask(i, 1ULL << (i * 2));
+        }
+        SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)(1ULL << ((phys - 1) * 2)));
+        return (int64_t)phys;
+    }
+    /* mode == 1: 1-to-1 pin all logical workers + caller */
+    g_thread_pool.active_worker_limit = 0;
+    for (int i = 0; i < count - 1; i++) {
+        vortex_thread_pool_set_worker_mask(i, 1ULL << i);
+    }
+    SetThreadAffinityMask(GetCurrentThread(), (DWORD_PTR)(1ULL << (count - 1)));
+    return (int64_t)count;
+#else
+    (void)mode;
+    return (int64_t)count;
+#endif
+}
+
 int64_t vortex_num_workers(void) {
     if (!g_thread_pool.initialized) vortex_thread_pool_init();
+    if (g_thread_pool.active_worker_limit > 0 && g_thread_pool.active_worker_limit < g_thread_pool.worker_count) {
+        return (int64_t)g_thread_pool.active_worker_limit;
+    }
     return (int64_t)g_thread_pool.worker_count;
 }
 
@@ -1217,6 +1324,7 @@ static BuiltinFunc g_builtins[] = {
     {"str_sub",        (void*)vortex_str_sub,        3},
     {"str_from_i64",   (void*)vortex_str_from_i64,   1},
     {"str_from_f32",   (void*)vortex_str_from_f32,   1},
+    {"str_from_f64",   (void*)vortex_str_from_f64,   1},
     {"str_byte",       (void*)vortex_str_byte,       2},
     {"str_from_byte",  (void*)vortex_str_from_byte,  1},
     {"str_eq",         (void*)vortex_str_eq,         2},
@@ -1228,6 +1336,7 @@ static BuiltinFunc g_builtins[] = {
     {"scope_pop",      (void*)vortex_scope_pop,      1},
     {"slice_i64",      (void*)vortex_alloc_slice_i64,1},
     {"slice_f32",      (void*)vortex_alloc_slice_f32,1},
+    {"slice_f64",      (void*)vortex_alloc_slice_f64,1},
     {"slice_i32",      (void*)vortex_alloc_slice_i32,1},
     {"slice_len",      (void*)vortex_slice_len,      1},
     {"ptr_read8",      (void*)vortex_ptr_read8,      1},
@@ -1271,6 +1380,17 @@ static BuiltinFunc g_builtins[] = {
     {"logf_val",       (void*)vortex_math_logf,      1},
     {"powf_val",       (void*)vortex_math_powf,      2},
     {"atan2f_rad",     (void*)vortex_math_atan2f,    2},
+    {"sin_f64",        (void*)vortex_math_sin_f64,   1},
+    {"cos_f64",        (void*)vortex_math_cos_f64,   1},
+    {"sqrt_f64",       (void*)vortex_math_sqrt_f64,  1},
+    {"tan_f64",        (void*)vortex_math_tan_f64,   1},
+    {"floor_f64",      (void*)vortex_math_floor_f64, 1},
+    {"ceil_f64",       (void*)vortex_math_ceil_f64,  1},
+    {"fabs_f64",       (void*)vortex_math_fabs_f64,  1},
+    {"exp_f64",        (void*)vortex_math_exp_f64,   1},
+    {"log_f64",        (void*)vortex_math_log_f64,   1},
+    {"pow_f64",        (void*)vortex_math_pow_f64,   2},
+    {"atan2_f64",      (void*)vortex_math_atan2_f64, 2},
     {"args_count",     (void*)vortex_args_count,     0},
     {"args_get",       (void*)vortex_args_get,       1},
     {"env_get",        (void*)vortex_env_get,        1},
@@ -1288,6 +1408,27 @@ static BuiltinFunc g_builtins[] = {
     {"assert_eq",      (void*)vortex_assert_eq,           2},
     {"time_us",        (void*)helper_time_us,             0},
     {"num_workers",    (void*)vortex_num_workers,    0},
+    {"hw_init",        (void*)vortex_hw_init,        0},
+    {"hw_print_map",   (void*)vortex_hw_print_map,   0},
+    {"hw_cpu_name",    (void*)vortex_hw_cpu_name,    0},
+    {"hw_gpu_name",    (void*)vortex_hw_gpu_name,    0},
+    {"hw_l1_kb",       (void*)vortex_hw_l1_kb,       0},
+    {"hw_l2_kb",       (void*)vortex_hw_l2_kb,       0},
+    {"hw_l3_kb",       (void*)vortex_hw_l3_kb,       0},
+    {"hw_phys_cores",  (void*)vortex_hw_phys_cores,  0},
+    {"hw_logical_cores", (void*)vortex_hw_logical_cores, 0},
+    {"hw_simd_width",  (void*)vortex_hw_simd_width,  0},
+    {"hw_has_gpu",     (void*)vortex_hw_has_gpu,     0},
+    {"hw_plan_route",  (void*)vortex_hw_plan_route,  2},
+    {"hw_plan_tile_f64", (void*)vortex_hw_plan_tile_f64, 0},
+    {"hw_pin_workers", (void*)vortex_hw_pin_workers, 1},
+    {"hw_prefetch",    (void*)vortex_hw_prefetch,    2},
+    {"hw_matmul_f64",  (void*)vortex_hw_matmul_f64,  6},
+    {"hw_matmul_f32",  (void*)vortex_hw_matmul_f32,  6},
+    {"hw_matmul_f32_cpu", (void*)vortex_hw_matmul_f32_cpu, 6},
+    {"hw_dot_f64",     (void*)vortex_hw_dot_f64,     3},
+    {"hw_axpy_f64",    (void*)vortex_hw_axpy_f64,    4},
+    {"hw_axpy_f32",    (void*)vortex_hw_axpy_f32,    4},
     {"alloc",          (void*)arena_alloc,           1},
     {"print",          (void*)helper_print_i64,      1},
     {"print_str",      (void*)helper_print_str,      1},
@@ -1361,6 +1502,7 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
     comp.j = &jit;
     comp.ir = &main_ir;
     comp.last_struct_id = -1;
+    comp.last_f64_lit_vreg = VREG_NONE;
 
     if (g_ultrasafe_level >= 3 && !g_in_repl) {
         bool prev_rec = g_recover_active;

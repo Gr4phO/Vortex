@@ -40,7 +40,7 @@ done
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
-SRCS="src/arena.c src/lexer.c src/modules.c src/parser_expr.c src/parser_stmt.c src/ir_core.c src/ir_opt.c src/ir_vec_ra.c src/ffi.c src/jit_x64_simd.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/gui.c src/packager.c src/runtime.c src/main.c"
+SRCS="src/arena.c src/lexer.c src/modules.c src/parser_expr.c src/parser_stmt.c src/ir_core.c src/ir_opt.c src/ir_vec_ra.c src/ffi.c src/jit_x64_simd.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/gui.c src/packager.c src/hw.c src/runtime.c src/main.c"
 CFLAGS="-std=c99 -O2 -Wall -Wextra $EXTRA_CFLAGS"
 LDFLAGS=""
 

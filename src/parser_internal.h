@@ -23,14 +23,16 @@ typedef struct {
     VortexType type;
     int64_t int_val;
     float float_val;
+    double f64_val;
     const char* str_val;
 } VortexConst;
 
 VortexConst* vortex_const_find(const char* name);
-VortexConst* vortex_const_add(const char* name, VortexType type, int64_t iv, float fv, const char* sv);
+VortexConst* vortex_const_add(const char* name, VortexType type, int64_t iv, float fv, double f64v, const char* sv);
 void vortex_const_reset(void);
 bool vortex_is_pointer_type(VortexType t);
 bool vortex_is_scalar_int_type(VortexType t);
+VReg vortex_promote_to_f64(Compiler* c, VReg v, VortexType t);
 void vortex_require_unsafe(Compiler* c, const char* what, int line, int col);
 bool vortex_region_is_popped(Compiler* c, int rid);
 void vortex_mark_region_popped(Compiler* c, int rid);
