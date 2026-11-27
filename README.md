@@ -164,6 +164,7 @@ tests\run_tests.bat   :: Windows (unitaires, ergonomics, opt_regression, 16 séc
 ├── docs/                # Spécification (VORTEX_SPEC.md), roadmap & graphiques SVG (assets/)
 ├── examples/            # Démonstrations 3D et GUI natives (.vx)
 ├── tests/               # Tests fonctionnels, ergonomie, sécurité (--safe/--ultrasafe), régression opt, FFI multi-OS, ARM64, LSP/pkg & stdlib
+├── CHANGELOG.md         # Journal des modifications (du plus récent au plus ancien)
 ├── LICENSE              # Licence Apache-2.0
 ├── VERSION              # Version courante SemVer (lue par build.bat / Makefile)
 ├── build.bat            # Script de compilation Windows (CLI + vortex.dll)
