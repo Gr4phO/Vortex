@@ -117,7 +117,7 @@ make release    # Binaire LTO strippé
 make shared     # Bibliothèque partagée libvortex.so / libvortex.dylib
 ```
 
-### Utilisation CLI & Outils AI-Friendly (`v1.1.5`)
+### Utilisation CLI & Outils AI-Friendly (`v1.2.0`)
 
 ```sh
 ./vortex                                                 # REPL interactif
@@ -130,15 +130,17 @@ make shared     # Bibliothèque partagée libvortex.so / libvortex.dylib
 ./vortex spec [--json]                                   # Spécification auto-générée depuis le compilateur
 ./vortex eval "let mut x = 21; x *= 2; print(x);"
 ./vortex build examples/app_3d.vx -o app_3d.exe          # Binaire autonome (Windows / Linux / macOS)
+./vortex fmt [--check|--stdout] script.vx                # Formateur de code natif
 ./vortex lsp                                             # Serveur LSP (JSON-RPC)
 ```
 
-### Ergonomie & Syntaxe (`dev` / post-`v1.1.6`)
+### Ergonomie & Syntaxe (`v1.2.0`)
 
 - **Types & littéraux** : annotations `bool`, `i8`/`u8`, `i16`/`u16`, `i32`/`u32`, `i64`/`u64`, `usize`/`isize`, `char`, `<Enum>` ; séparateurs `1_000_000`, binaire `0b1010`, octal `0o755`, scientifique `1.5e-3`, littéraux caractère `'A'`/`'\n'`, chaînes littérales jusqu'à **4095 octets**
+- **Constantes globales & indexation chaînée** : `const MAX = 16;` (expressions constantes évaluées à la compilation, visibles dans toutes les fonctions et `match`), accès et écriture chaînés `obj.arr[i]`, `a.b.arr[i] += v`, `mat[i][j]` et `arr[i].champ`
 - **Opérateurs & expressions** : court-circuit `&&`/`||`/`!`, bit-à-bit `& | ^ ~ << >>`, ternaire `cond ? a : b`, littéraux de tableau `[10, 20, 30]`, écriture chaînée sur sous-structs `world.player.pos.x += 1.0;` *(attention : `==`/`!=`/`<`/`>` sont plus prioritaires que `&`/`^`/`|`, parenthéser `(x & mask) == 0`)*
 - **Contrôle de flux & affectations composées** : `match x { 1 | 2 => ..., _ => ... }`, `break`, `continue`, `enum Nom { A, B = 10, C }` (`Nom::B` / `Nom.B`), `+=`..`>>=`, `/* ... */`
-- **Assertions & trigonométrie flottante natives** : `assert(cond)`, `assert_eq(a, b)`, `sinf_rad(rad)`, `cosf_rad(rad)`, `sqrtf_val(x)` (`72` builtins au total)
+- **Builtins & formatage natif** : `assert(cond)`, `assert_eq(a, b)`, `sinf_rad`, `cosf_rad`, `tanf_rad`..`atan2f_rad`, `fs_*`, `args_*`, `env_*`, `unix_now_ms`, `sleep_ms` (`91` builtins au total) et formateur `vortex fmt`
 
 ### Transparence Benchmarks & Reproductibilité
 
@@ -149,17 +151,17 @@ make shared     # Bibliothèque partagée libvortex.so / libvortex.dylib
 ### Suite de tests automatisés
 
 ```bat
-tests\run_tests.bat   :: Windows (unitaires, ergonomics, opt_regression, 16 sécurité, 7 ARM64, 9 outillage & stdlib, ultrasafe 1/2/3)
+tests\run_tests.bat   :: Windows (16 suites : unitaires, ergonomics, opt_regression, stdlib v1.2, lang/fmt v1.2, 16 sécurité, 7 ARM64, 9 outillage & stdlib, 10 ultrasafe 1/2/3 + fmt)
 ```
 
 ```sh
 ./tests/run_tests.sh  # Linux / macOS (dispatch FFI POSIX/Darwin automatique)
 ```
 
-### Extension VS Code (`Gr4phO.vortex-systems`)
+### Extension VS Code (`Gr4phO.vortex-systems` `1.2.0`)
 
-- **Exécution en 1 clic** : bouton **▶ Run Vortex File in Terminal** dans la barre d'onglet + sous-menu (`--release`, `--ultrasafe 3 --check`, `vortex test`, `vortex build`, `REPL`).
-- **LSP & coloration syntaxique** : client `vortex lsp` intégré (diagnostics, définition, survol, complétion) et coloration complète (`match`, `enum`, `bool`, `u8..usize`, `/* */`, `'a'`, `0b`/`0o`/`1e-5`).
+- **Exécution en 1 clic** : bouton **▶ Run Vortex File in Terminal** dans la barre d'onglet + sous-menu (`--release`, `--ultrasafe 1`, `--ultrasafe 2`, `--ultrasafe 3`, `--ultrasafe 3 --check`, `vortex test`, `vortex build`, `REPL`).
+- **LSP & coloration syntaxique** : serveur `vortex lsp` branché sur `--ultrasafe 3` (multi-erreurs + warnings en direct), formatage natif (`vortex fmt` / `textDocument/formatting`), définition, survol, complétion et coloration complète (`const`, `match`, `enum`, `bool`, `u8..usize`, `/* */`, `'a'`, `0b`/`0o`/`1e-5`).
 - **Installation** : via le [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=Gr4phO.vortex-systems), les paquets `.vsix` joints aux [GitHub Releases](https://github.com/Gr4phO/Vortex/releases/latest), ou depuis [`editors/vscode/`](editors/vscode/README.md).
 
 ---
@@ -170,7 +172,7 @@ tests\run_tests.bat   :: Windows (unitaires, ergonomics, opt_regression, 16 séc
 .
 ├── .github/             # CI (ci.yml), release multi-OS + .vsix (release.yml), SemVer auto & ISSUE_TEMPLATE/
 ├── src/                 # Compilateur C99 modulaire (~20 500 lignes) : lexer, modules, parser_expr/stmt, ir_core/ir_opt/ir_vec_ra, jit_x64/jit_x64_simd/ffi/jit_arm64, lsp, pkg, arena, gui, packager, runtime
-├── std/                 # Bibliothèque standard modulaire (.vx : net, http, json, crypto, db, gpu)
+├── std/                 # Bibliothèque standard modulaire (.vx : net, http, json, crypto, db, gpu, fs, math, str, env)
 ├── editors/vscode/      # Extension VS Code officielle (bouton ▶ Run, LSP client & grammaire .vx)
 ├── benchmarks/          # Banc d'essai suite_10_langs/ & rapport BENCHMARK_REPORT_v1.0.0.md
 ├── docs/                # Spécification (VORTEX_SPEC.md), roadmap & graphiques SVG (assets/)

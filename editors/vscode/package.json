@@ -2,7 +2,7 @@
   "name": "vortex-systems",
   "displayName": "Vortex Systems Language (.vx)",
   "description": "One-click Run in Terminal, syntax highlighting, --ultrasafe checks, REPL, and native LSP support for the Vortex systems language.",
-  "version": "1.1.9",
+  "version": "1.2.0",
   "publisher": "Gr4phO",
   "license": "Apache-2.0",
   "icon": "icon.png",
