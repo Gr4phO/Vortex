@@ -6,7 +6,9 @@
     { "include": "#comments" },
     { "include": "#attributes" },
     { "include": "#strings" },
+    { "include": "#chars" },
     { "include": "#numbers" },
+    { "include": "#booleans" },
     { "include": "#keywords" },
     { "include": "#types" },
     { "include": "#functions" },
@@ -18,6 +20,11 @@
         {
           "name": "comment.line.double-slash.vortex",
           "match": "//.*$"
+        },
+        {
+          "name": "comment.block.vortex",
+          "begin": "/\\*",
+          "end": "\\*/"
         }
       ]
     },
@@ -40,19 +47,43 @@
         }
       ]
     },
+    "chars": {
+      "name": "string.quoted.single.vortex",
+      "match": "'(\\\\['\"\\\\ntr0]|[^'\\\\])'"
+    },
     "numbers": {
       "patterns": [
         {
           "name": "constant.numeric.hex.vortex",
-          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.vortex",
+          "match": "\\b0[bB][01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.vortex",
+          "match": "\\b0[oO][0-7_]+\\b"
         },
         {
           "name": "constant.numeric.float.vortex",
-          "match": "\\b[0-9]+\\.[0-9]+\\b"
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9_]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.float.scientific.vortex",
+          "match": "\\b[0-9][0-9_]*[eE][+-]?[0-9_]+\\b"
         },
         {
           "name": "constant.numeric.integer.vortex",
-          "match": "\\b[0-9]+\\b"
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "booleans": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.vortex",
+          "match": "\\b(true|false)\\b"
         }
       ]
     },
@@ -60,11 +91,11 @@
       "patterns": [
         {
           "name": "keyword.control.vortex",
-          "match": "\\b(if|else|for|parallel_for|in|while|return|import)\\b"
+          "match": "\\b(if|else|for|parallel_for|in|while|match|break|continue|return|import)\\b"
         },
         {
           "name": "keyword.other.vortex",
-          "match": "\\b(fn|struct|let|mut|extern|unsafe|as)\\b"
+          "match": "\\b(fn|struct|enum|let|mut|extern|unsafe|as)\\b"
         }
       ]
     },
@@ -72,7 +103,7 @@
       "patterns": [
         {
           "name": "storage.type.primitive.vortex",
-          "match": "\\b(i64|i32|f32|f64|str|ptr|void)\\b"
+          "match": "\\b(i64|i32|i16|i8|u64|u32|u16|u8|usize|isize|bool|char|f32|f64|str|ptr|void)\\b"
         }
       ]
     },
@@ -88,7 +119,7 @@
       "patterns": [
         {
           "name": "keyword.operator.vortex",
-          "match": "(->|\\.\\.|==|!=|<=|>=|[+\\-*/%=<>])"
+          "match": "(=>|->|::|\\.\\.|<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<|>>|&&|\\|\\||==|!=|<=|>=|[+\\-*/%=<>!&|^~?:])"
         }
       ]
     }

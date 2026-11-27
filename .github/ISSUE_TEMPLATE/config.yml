@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Référence technique du langage (VORTEX_BIBLE.md)
+    url: https://github.com/Gr4phO/Vortex/blob/main/VORTEX_BIBLE.md
+    about: Syntaxe exacte, types, arènes, FFI, --ultrasafe 1/2/3 et pièges connus.
+  - name: Journal des modifications (CHANGELOG.md)
+    url: https://github.com/Gr4phO/Vortex/blob/main/CHANGELOG.md
+    about: Historique des versions et correctifs en cours.

@@ -156,15 +156,22 @@ tests\run_tests.bat   :: Windows (unitaires, ergonomics, opt_regression, 16 séc
 ./tests/run_tests.sh  # Linux / macOS (dispatch FFI POSIX/Darwin automatique)
 ```
 
+### Extension VS Code (`Gr4phO.vortex-systems`)
+
+- **Exécution en 1 clic** : bouton **▶ Run Vortex File in Terminal** dans la barre d'onglet + sous-menu (`--release`, `--ultrasafe 3 --check`, `vortex test`, `vortex build`, `REPL`).
+- **LSP & coloration syntaxique** : client `vortex lsp` intégré (diagnostics, définition, survol, complétion) et coloration complète (`match`, `enum`, `bool`, `u8..usize`, `/* */`, `'a'`, `0b`/`0o`/`1e-5`).
+- **Installation** : via le [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=Gr4phO.vortex-systems), les paquets `.vsix` joints aux [GitHub Releases](https://github.com/Gr4phO/Vortex/releases/latest), ou depuis [`editors/vscode/`](editors/vscode/README.md).
+
 ---
 
 ## Structure du Dépôt
 
 ```text
 .
-├── .github/workflows/   # CI (ci.yml), release multi-OS (release.yml) & SemVer auto (auto-version.yml)
+├── .github/             # CI (ci.yml), release multi-OS + .vsix (release.yml), SemVer auto & ISSUE_TEMPLATE/
 ├── src/                 # Compilateur C99 modulaire (~20 500 lignes) : lexer, modules, parser_expr/stmt, ir_core/ir_opt/ir_vec_ra, jit_x64/jit_x64_simd/ffi/jit_arm64, lsp, pkg, arena, gui, packager, runtime
 ├── std/                 # Bibliothèque standard modulaire (.vx : net, http, json, crypto, db, gpu)
+├── editors/vscode/      # Extension VS Code officielle (bouton ▶ Run, LSP client & grammaire .vx)
 ├── benchmarks/          # Banc d'essai suite_10_langs/ & rapport BENCHMARK_REPORT_v1.0.0.md
 ├── docs/                # Spécification (VORTEX_SPEC.md), roadmap & graphiques SVG (assets/)
 ├── examples/            # Démonstrations 3D et GUI natives (.vx)

@@ -14,6 +14,8 @@ Toutes les modifications notables du projet sont listées ci-dessous **dans l'or
   - Littéraux de tableau `[10, 20, 30]` / `[1.5, 2.5]` (alloués en arène avec `slice_len` et bornes tracées).
   - Instruction `match` (bras multi-motifs `|` et joker `_`), opérateur ternaire `cond ? a : b`, et écriture chaînée multi-niveaux sur sous-structures (`world.player.pos.x += 1.0;`).
 - **Benchmarks reproductibles multi-OS** : ajout de `benchmarks/suite_10_langs/run_benchmarks.py` (Python 3 stdlib, compatible Windows / Linux / macOS).
+- **Extension VS Code complète (`editors/vscode/`)** : bouton **▶ Run Vortex File in Terminal** dans la barre d'éditeur (comme Python), sous-menu `--release` / `--ultrasafe 3 --check` / `vortex test` / `build` / `REPL`, nouveau logo transparent, coloration syntaxique mise à jour (`match`, `enum`, `bool`, `u8..usize`, `/* */`, `'a'`, `0b`/`0o`/`1e-5`), packaging `.vsix` (`Gr4phO.vortex-systems`) et job automatique `build-vscode-vsix` dans `.github/workflows/release.yml` (+ publication Open VSX optionnelle).
+- **Modèles GitHub Issues** : ajout de `.github/ISSUE_TEMPLATE/` (`bug_report.yml`, `feature_request.yml`, `config.yml`).
 - **Tests** : ajout de `tests/test_v12_features.vx` à la suite automatisée (`run_tests.bat` / `run_tests.sh`).
 
 ---

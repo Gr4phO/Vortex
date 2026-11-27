@@ -1,17 +1,43 @@
 {
-  "name": "vortex-lang",
-  "displayName": "Vortex Language Support",
-  "description": "Syntax highlighting and native LSP client (vortex lsp) for the Vortex systems language.",
-  "version": "0.1.0",
-  "publisher": "vortex-lang",
+  "name": "vortex-systems",
+  "displayName": "Vortex Systems Language (.vx)",
+  "description": "One-click Run in Terminal, syntax highlighting, --ultrasafe checks, REPL, and native LSP support for the Vortex systems language.",
+  "version": "1.1.6",
+  "publisher": "Gr4phO",
+  "license": "Apache-2.0",
+  "icon": "icon.png",
+  "homepage": "https://github.com/Gr4phO/Vortex#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gr4phO/Vortex.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Gr4phO/Vortex/issues"
+  },
+  "keywords": [
+    "vortex",
+    "systems",
+    "jit",
+    "arena",
+    "ultrasafe",
+    "lsp"
+  ],
   "engines": {
     "vscode": "^1.80.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Linters"
   ],
   "activationEvents": [
-    "onLanguage:vortex"
+    "onLanguage:vortex",
+    "onCommand:vortex.runFile",
+    "onCommand:vortex.runFileRelease",
+    "onCommand:vortex.checkFileUltrasafe",
+    "onCommand:vortex.runTests",
+    "onCommand:vortex.buildStandalone",
+    "onCommand:vortex.openRepl",
+    "onCommand:vortex.restartLsp"
   ],
   "main": "./src/extension.js",
   "contributes": {
@@ -35,13 +61,148 @@
         "path": "./syntaxes/vortex.tmLanguage.json"
       }
     ],
+    "commands": [
+      {
+        "command": "vortex.runFile",
+        "title": "Run Vortex File in Terminal",
+        "category": "Vortex",
+        "icon": "$(play)"
+      },
+      {
+        "command": "vortex.runFileRelease",
+        "title": "Run Vortex File (--release)",
+        "category": "Vortex",
+        "icon": "$(flame)"
+      },
+      {
+        "command": "vortex.checkFileUltrasafe",
+        "title": "Check File (--ultrasafe 3 --check)",
+        "category": "Vortex",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "vortex.runTests",
+        "title": "Run Native Tests (vortex test)",
+        "category": "Vortex",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "vortex.buildStandalone",
+        "title": "Build Standalone Executable",
+        "category": "Vortex",
+        "icon": "$(package)"
+      },
+      {
+        "command": "vortex.openRepl",
+        "title": "Open Interactive Vortex REPL",
+        "category": "Vortex",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "vortex.restartLsp",
+        "title": "Restart Language Server",
+        "category": "Vortex",
+        "icon": "$(refresh)"
+      }
+    ],
+    "submenus": [
+      {
+        "id": "vortex.runSubmenu",
+        "label": "Vortex Actions",
+        "icon": "$(chevron-down)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "vortex.runFile",
+          "when": "resourceLangId == vortex",
+          "group": "navigation@1"
+        },
+        {
+          "submenu": "vortex.runSubmenu",
+          "when": "resourceLangId == vortex",
+          "group": "navigation@2"
+        }
+      ],
+      "vortex.runSubmenu": [
+        {
+          "command": "vortex.runFile",
+          "group": "1_run@1"
+        },
+        {
+          "command": "vortex.runFileRelease",
+          "group": "1_run@2"
+        },
+        {
+          "command": "vortex.checkFileUltrasafe",
+          "group": "2_check@1"
+        },
+        {
+          "command": "vortex.runTests",
+          "group": "2_check@2"
+        },
+        {
+          "command": "vortex.buildStandalone",
+          "group": "3_build@1"
+        },
+        {
+          "command": "vortex.openRepl",
+          "group": "4_repl@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "vortex.runFile",
+          "when": "resourceLangId == vortex",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vortex.runFileRelease",
+          "when": "resourceLangId == vortex",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vortex.checkFileUltrasafe",
+          "when": "resourceLangId == vortex",
+          "group": "navigation@3"
+        }
+      ]
+    },
     "configuration": {
       "title": "Vortex",
       "properties": {
         "vortex.serverPath": {
           "type": "string",
           "default": "vortex",
-          "description": "Path to the Vortex compiler executable (launched with `lsp`)."
+          "description": "Path to the Vortex compiler executable (or leave 'vortex' to auto-detect in PATH / workspace)."
+        },
+        "vortex.defaultRunMode": {
+          "type": "string",
+          "enum": [
+            "safe",
+            "release",
+            "ultrasafe1",
+            "ultrasafe2",
+            "ultrasafe3"
+          ],
+          "default": "safe",
+          "description": "Default safety/optimization mode used by the editor Run button."
+        },
+        "vortex.saveBeforeRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically save the active .vx file before running or checking it."
+        },
+        "vortex.clearTerminalBeforeRun": {
+          "type": "boolean",
+          "default": false,
+          "description": "Clear the Vortex integrated terminal before running a new command."
+        },
+        "vortex.enableLsp": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the built-in Vortex Language Server (`vortex lsp`)."
         },
         "vortex.trace.server": {
           "type": "string",

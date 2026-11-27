@@ -36,6 +36,8 @@ benchmarks/suite_10_langs/results_*.json
 .idea/
 .DS_Store
 Thumbs.db
+editors/vscode/node_modules/
+*.vsix
 
 # Local-only social media / release draft logs (never pushed to GitHub)
 SOCIAL_LOGS.local.md

@@ -1,0 +1,59 @@
+name: Rapport de bug (Bug Report)
+description: Signaler un crash, une régression JIT, une erreur --ultrasafe ou un problème LSP/VS Code
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Merci de prendre le temps de signaler ce problème ! Remplis les champs ci-dessous pour qu'on puisse le reproduire rapidement.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Système d'exploitation
+      options:
+        - Windows x64
+        - Linux x86-64
+        - macOS (Apple Silicon ARM64)
+        - macOS (Intel x64)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version de Vortex (`vortex --version`)
+      placeholder: "ex: Vortex v1.1.6 (x86_64-avx2)"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode utilisé
+      options:
+        - --safe (défaut)
+        - --release
+        - --ultrasafe 1
+        - --ultrasafe 2
+        - --ultrasafe 3
+        - vortex build (binaire autonome)
+        - Extension VS Code / LSP
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Extrait minimal `.vx` et commande exécutée
+      description: Un petit fichier `.vx` qui reproduit le bug et la commande exacte lancée.
+      placeholder: |
+        ```vortex
+        // Exemple minimal
+        ```
+        Commande : `vortex --ultrasafe 2 test.vx`
+    validations:
+      required: true
+  - type: textarea
+    id: actual_expected
+    attributes:
+      label: Comportement observé vs attendu
+      description: Colle la sortie d'erreur complète (ou `--json` / stacktrace) et ce que tu attendais.
+    validations:
+      required: true
