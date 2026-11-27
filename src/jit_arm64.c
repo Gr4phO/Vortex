@@ -317,6 +317,14 @@ static void a64_strs_idx(JITBuffer* j, int st, int rn, int rm) {
     a64_emit32(j, 0xBC207800U | (((uint32_t)rm & 31U) << 16) | (((uint32_t)rn & 31U) << 5) | ((uint32_t)st & 31U));
 }
 
+static void a64_ldrd_idx(JITBuffer* j, int dt, int rn, int rm) {
+    a64_emit32(j, 0xFC607800U | (((uint32_t)rm & 31U) << 16) | (((uint32_t)rn & 31U) << 5) | ((uint32_t)dt & 31U));
+}
+
+static void a64_strd_idx(JITBuffer* j, int dt, int rn, int rm) {
+    a64_emit32(j, 0xFC207800U | (((uint32_t)rm & 31U) << 16) | (((uint32_t)rn & 31U) << 5) | ((uint32_t)dt & 31U));
+}
+
 /* --- Scalar FP & NEON Emitters --- */
 static void a64_fmov_s_from_w(JITBuffer* j, int sd, int wn) {
     a64_emit32(j, 0x1E270000U | (((uint32_t)wn & 31U) << 5) | ((uint32_t)sd & 31U));
@@ -373,6 +381,54 @@ static void a64_load_f32_imm(JITBuffer* j, float val, int sd) {
     a64_movz64(j, A64_X15, (uint16_t)(bits & 0xFFFFU), 0);
     if ((bits >> 16) != 0) a64_movk64(j, A64_X15, (uint16_t)(bits >> 16), 16);
     a64_fmov_s_from_w(j, sd, A64_X15);
+}
+
+static void a64_fmov_d_from_x(JITBuffer* j, int dd, int xn) {
+    a64_emit32(j, 0x9E670000U | (((uint32_t)xn & 31U) << 5) | ((uint32_t)dd & 31U));
+}
+
+static void a64_fmov_x_from_d(JITBuffer* j, int xd, int dn) {
+    a64_emit32(j, 0x9E660000U | (((uint32_t)dn & 31U) << 5) | ((uint32_t)xd & 31U));
+}
+
+static void a64_fmov_dd(JITBuffer* j, int dd, int dn) {
+    if (dd == dn) return;
+    a64_emit32(j, 0x1E604000U | (((uint32_t)dn & 31U) << 5) | ((uint32_t)dd & 31U));
+}
+
+static void a64_faddd(JITBuffer* j, int dd, int dn, int dm) {
+    a64_emit32(j, 0x1E602800U | (((uint32_t)dm & 31U) << 16) | (((uint32_t)dn & 31U) << 5) | ((uint32_t)dd & 31U));
+}
+
+static void a64_fsubd(JITBuffer* j, int dd, int dn, int dm) {
+    a64_emit32(j, 0x1E603800U | (((uint32_t)dm & 31U) << 16) | (((uint32_t)dn & 31U) << 5) | ((uint32_t)dd & 31U));
+}
+
+static void a64_fmuld(JITBuffer* j, int dd, int dn, int dm) {
+    a64_emit32(j, 0x1E600800U | (((uint32_t)dm & 31U) << 16) | (((uint32_t)dn & 31U) << 5) | ((uint32_t)dd & 31U));
+}
+
+static void a64_fdivd(JITBuffer* j, int dd, int dn, int dm) {
+    a64_emit32(j, 0x1E601800U | (((uint32_t)dm & 31U) << 16) | (((uint32_t)dn & 31U) << 5) | ((uint32_t)dd & 31U));
+}
+
+static void a64_fcmpd(JITBuffer* j, int dn, int dm) {
+    a64_emit32(j, 0x1E602000U | (((uint32_t)dm & 31U) << 16) | (((uint32_t)dn & 31U) << 5));
+}
+
+static void a64_scvtf_d_from_x(JITBuffer* j, int dd, int xn) {
+    a64_emit32(j, 0x9E620000U | (((uint32_t)xn & 31U) << 5) | ((uint32_t)dd & 31U));
+}
+
+static void a64_fcvtzs_x_from_d(JITBuffer* j, int xd, int dn) {
+    a64_emit32(j, 0x9E780000U | (((uint32_t)dn & 31U) << 5) | ((uint32_t)xd & 31U));
+}
+
+static void a64_load_f64_imm(JITBuffer* j, double val, int dd) {
+    uint64_t bits = 0;
+    memcpy(&bits, &val, 8);
+    a64_mov_imm64(j, A64_X15, bits);
+    a64_fmov_d_from_x(j, dd, A64_X15);
 }
 
 /* NEON 128-bit vector instructions (.4S / .16B) */
@@ -538,7 +594,8 @@ static void a64_commit_int_reg(IRBuffer* ir, VReg v, int source_reg, JITBuffer* 
 static int a64_get_float_reg(IRBuffer* ir, VReg v, int scratch_s, JITBuffer* j) {
     if (v == VREG_NONE || v < 0 || v >= ir->vreg_count) return PREG_NONE;
     if (ir->vregs[v].is_spilled) {
-        a64_ldrs_off(j, scratch_s, A64_FP, -ir->vregs[v].spill_offset);
+        if (ir->vregs[v].type == TYPE_F64) a64_ldrd_off(j, scratch_s, A64_FP, -ir->vregs[v].spill_offset);
+        else a64_ldrs_off(j, scratch_s, A64_FP, -ir->vregs[v].spill_offset);
         return scratch_s;
     }
     return ir->vregs[v].preg;
@@ -547,11 +604,13 @@ static int a64_get_float_reg(IRBuffer* ir, VReg v, int scratch_s, JITBuffer* j) 
 static void a64_commit_float_reg(IRBuffer* ir, VReg v, int source_s, JITBuffer* j) {
     if (v == VREG_NONE || v < 0 || v >= ir->vreg_count) return;
     if (ir->vregs[v].is_spilled) {
-        a64_strs_off(j, source_s, A64_FP, -ir->vregs[v].spill_offset);
+        if (ir->vregs[v].type == TYPE_F64) a64_strd_off(j, source_s, A64_FP, -ir->vregs[v].spill_offset);
+        else a64_strs_off(j, source_s, A64_FP, -ir->vregs[v].spill_offset);
     } else {
         int target_s = ir->vregs[v].preg;
         if (target_s != source_s && target_s != PREG_NONE) {
-            a64_fmov_ss(j, target_s, source_s);
+            if (ir->vregs[v].type == TYPE_F64) a64_fmov_dd(j, target_s, source_s);
+            else a64_fmov_ss(j, target_s, source_s);
         }
     }
 }
@@ -612,7 +671,17 @@ static void a64_emit_stage_and_call(JITBuffer* j, IRBuffer* ir, void* fn_ptr,
             VReg av = args[k].vreg;
             if (ir->vregs[av].is_float) {
                 int s = a64_get_float_reg(ir, av, 24, j);
-                if (is_ffi && (args[k].ftype == TYPE_F64 || (is_variadic && k >= fixed_params))) {
+                if (ir->vregs[av].type == TYPE_F64) {
+                    if (is_ffi && args[k].ftype == TYPE_F32) {
+                        a64_fcvt_s_from_d(j, 25, s);
+                        a64_strs_off(j, 25, 31, off);
+                    } else if (is_ffi && (args[k].ftype == TYPE_F64 || (is_variadic && k >= fixed_params))) {
+                        a64_strd_off(j, s, 31, off);
+                    } else {
+                        a64_fmov_x_from_d(j, A64_X13, s);
+                        a64_str64_off(j, A64_X13, 31, off);
+                    }
+                } else if (is_ffi && (args[k].ftype == TYPE_F64 || (is_variadic && k >= fixed_params))) {
                     a64_fcvt_d_from_s(j, 25, s);
                     a64_strd_off(j, 25, 31, off);
                 } else if (is_ffi && args[k].ftype == TYPE_F32) {
@@ -850,6 +919,13 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 break;
             }
 
+            case IR_CONST_F64: {
+                int dd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
+                a64_load_f64_imm(j, ins->f64_imm, dd);
+                a64_commit_float_reg(ir, ins->dest, dd, j);
+                break;
+            }
+
             case IR_MOV: {
                 if (ir->vregs[ins->dest].is_float) {
                     int ss = a64_get_float_reg(ir, ins->src1, 24, j);
@@ -898,10 +974,17 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 int s1 = a64_get_float_reg(ir, ins->src1, 24, j);
                 int s2 = a64_get_float_reg(ir, ins->src2, 25, j);
                 int sd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
-                if (ins->op == IR_FADD) a64_fadds(j, sd, s1, s2);
-                else if (ins->op == IR_FSUB) a64_fsubs(j, sd, s1, s2);
-                else if (ins->op == IR_FMUL) a64_fmuls(j, sd, s1, s2);
-                else a64_fdivs(j, sd, s1, s2);
+                if (ins->type == TYPE_F64) {
+                    if (ins->op == IR_FADD) a64_faddd(j, sd, s1, s2);
+                    else if (ins->op == IR_FSUB) a64_fsubd(j, sd, s1, s2);
+                    else if (ins->op == IR_FMUL) a64_fmuld(j, sd, s1, s2);
+                    else a64_fdivd(j, sd, s1, s2);
+                } else {
+                    if (ins->op == IR_FADD) a64_fadds(j, sd, s1, s2);
+                    else if (ins->op == IR_FSUB) a64_fsubs(j, sd, s1, s2);
+                    else if (ins->op == IR_FMUL) a64_fmuls(j, sd, s1, s2);
+                    else a64_fdivs(j, sd, s1, s2);
+                }
                 a64_commit_float_reg(ir, ins->dest, sd, j);
                 break;
             }
@@ -940,7 +1023,8 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
             case IR_FGE: {
                 int s1 = a64_get_float_reg(ir, ins->src1, 24, j);
                 int s2 = a64_get_float_reg(ir, ins->src2, 25, j);
-                a64_fcmps(j, s1, s2);
+                if (ins->type == TYPE_F64) a64_fcmpd(j, s1, s2);
+                else a64_fcmps(j, s1, s2);
                 int cond = 0;
                 switch (ins->op) {
                     case IR_FEQ: cond = 0;  break; /* EQ */
@@ -971,6 +1055,38 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 int rd = ir->vregs[ins->dest].is_spilled ? A64_X13 : ir->vregs[ins->dest].preg;
                 a64_fcvtzs_x_from_s(j, rd, ss);
                 a64_commit_int_reg(ir, ins->dest, rd, j);
+                break;
+            }
+
+            case IR_CAST_I64_TO_F64: {
+                int rs = a64_get_int_reg(ir, ins->src1, A64_X13, j);
+                int dd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
+                a64_scvtf_d_from_x(j, dd, rs);
+                a64_commit_float_reg(ir, ins->dest, dd, j);
+                break;
+            }
+
+            case IR_CAST_F64_TO_I64: {
+                int ds = a64_get_float_reg(ir, ins->src1, 24, j);
+                int rd = ir->vregs[ins->dest].is_spilled ? A64_X13 : ir->vregs[ins->dest].preg;
+                a64_fcvtzs_x_from_d(j, rd, ds);
+                a64_commit_int_reg(ir, ins->dest, rd, j);
+                break;
+            }
+
+            case IR_CAST_F32_TO_F64: {
+                int ss = a64_get_float_reg(ir, ins->src1, 24, j);
+                int dd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
+                a64_fcvt_d_from_s(j, dd, ss);
+                a64_commit_float_reg(ir, ins->dest, dd, j);
+                break;
+            }
+
+            case IR_CAST_F64_TO_F32: {
+                int ds = a64_get_float_reg(ir, ins->src1, 24, j);
+                int sd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
+                a64_fcvt_s_from_d(j, sd, ds);
+                a64_commit_float_reg(ir, ins->dest, sd, j);
                 break;
             }
 
@@ -1029,7 +1145,11 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
 
             case IR_LOAD_OFFSET: {
                 int r_base = a64_get_int_reg(ir, ins->src1, A64_X13, j);
-                if (ins->type == TYPE_F32) {
+                if (ins->type == TYPE_F64) {
+                    int dd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
+                    a64_ldrd_off(j, dd, r_base, ins->offset);
+                    a64_commit_float_reg(ir, ins->dest, dd, j);
+                } else if (ins->type == TYPE_F32) {
                     int sd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
                     a64_ldrs_off(j, sd, r_base, ins->offset);
                     a64_commit_float_reg(ir, ins->dest, sd, j);
@@ -1047,7 +1167,10 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
 
             case IR_STORE_OFFSET: {
                 int r_base = a64_get_int_reg(ir, ins->src1, A64_X13, j);
-                if (ins->type == TYPE_F32) {
+                if (ins->type == TYPE_F64) {
+                    int ds = a64_get_float_reg(ir, ins->src2, 24, j);
+                    a64_strd_off(j, ds, r_base, ins->offset);
+                } else if (ins->type == TYPE_F32) {
                     int ss = a64_get_float_reg(ir, ins->src2, 24, j);
                     a64_strs_off(j, ss, r_base, ins->offset);
                 } else if (ins->type == TYPE_I32) {
@@ -1063,7 +1186,11 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
             case IR_LOAD_ARRAY: {
                 int r_base = a64_get_int_reg(ir, ins->src1, A64_X13, j);
                 int r_idx = a64_get_int_reg(ir, ins->src2, A64_X14, j);
-                if (ins->type == TYPE_F32) {
+                if (ins->type == TYPE_F64) {
+                    int dd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
+                    a64_ldrd_idx(j, dd, r_base, r_idx);
+                    a64_commit_float_reg(ir, ins->dest, dd, j);
+                } else if (ins->type == TYPE_F32) {
                     int sd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
                     a64_ldrs_idx(j, sd, r_base, r_idx);
                     a64_commit_float_reg(ir, ins->dest, sd, j);
@@ -1082,7 +1209,10 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
             case IR_STORE_ARRAY: {
                 int r_base = a64_get_int_reg(ir, ins->src1, A64_X13, j);
                 int r_idx = a64_get_int_reg(ir, ins->src2, A64_X14, j);
-                if (ins->type == TYPE_F32) {
+                if (ins->type == TYPE_F64) {
+                    int ds = a64_get_float_reg(ir, ins->src3, 24, j);
+                    a64_strd_idx(j, ds, r_base, r_idx);
+                } else if (ins->type == TYPE_F32) {
                     int ss = a64_get_float_reg(ir, ins->src3, 24, j);
                     a64_strs_idx(j, ss, r_base, r_idx);
                 } else if (ins->type == TYPE_I32) {
@@ -1097,7 +1227,11 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
 
             case IR_LOAD_DEREF: {
                 int r_ptr = a64_get_int_reg(ir, ins->src1, A64_X13, j);
-                if (ins->type == TYPE_F32) {
+                if (ins->type == TYPE_F64) {
+                    int dd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
+                    a64_ldrd_off(j, dd, r_ptr, 0);
+                    a64_commit_float_reg(ir, ins->dest, dd, j);
+                } else if (ins->type == TYPE_F32) {
                     int sd = ir->vregs[ins->dest].is_spilled ? 24 : ir->vregs[ins->dest].preg;
                     a64_ldrs_off(j, sd, r_ptr, 0);
                     a64_commit_float_reg(ir, ins->dest, sd, j);
@@ -1115,7 +1249,10 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
 
             case IR_STORE_DEREF: {
                 int r_ptr = a64_get_int_reg(ir, ins->src1, A64_X13, j);
-                if (ins->type == TYPE_F32) {
+                if (ins->type == TYPE_F64) {
+                    int ds = a64_get_float_reg(ir, ins->src2, 24, j);
+                    a64_strd_off(j, ds, r_ptr, 0);
+                } else if (ins->type == TYPE_F32) {
                     int ss = a64_get_float_reg(ir, ins->src2, 24, j);
                     a64_strs_off(j, ss, r_ptr, 0);
                 } else if (ins->type == TYPE_I32) {
@@ -1232,6 +1369,20 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                     a64_fmov_ss(j, 0, s);
                     a64_mov_imm64(j, A64_X16, (uint64_t)(uintptr_t)ins->func_ptr);
                     a64_blr(j, A64_X16);
+                } else if (ins->func_ptr == (void*)helper_print_f64 ||
+                           ins->func_ptr == (void*)vortex_math_sin_f64 ||
+                           ins->func_ptr == (void*)vortex_math_cos_f64 ||
+                           ins->func_ptr == (void*)vortex_math_sqrt_f64 ||
+                           ins->func_ptr == (void*)vortex_math_tan_f64 ||
+                           ins->func_ptr == (void*)vortex_math_floor_f64 ||
+                           ins->func_ptr == (void*)vortex_math_ceil_f64 ||
+                           ins->func_ptr == (void*)vortex_math_fabs_f64 ||
+                           ins->func_ptr == (void*)vortex_math_exp_f64 ||
+                           ins->func_ptr == (void*)vortex_math_log_f64) {
+                    int d = a64_get_float_reg(ir, ins->args[0], 0, j);
+                    a64_fmov_dd(j, 0, d);
+                    a64_mov_imm64(j, A64_X16, (uint64_t)(uintptr_t)ins->func_ptr);
+                    a64_blr(j, A64_X16);
                 } else if (ins->func_ptr == (void*)vortex_math_powf ||
                            ins->func_ptr == (void*)vortex_math_atan2f) {
                     int s0 = a64_get_float_reg(ir, ins->args[0], 0, j);
@@ -1249,6 +1400,23 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                     }
                     a64_mov_imm64(j, A64_X16, (uint64_t)(uintptr_t)ins->func_ptr);
                     a64_blr(j, A64_X16);
+                } else if (ins->func_ptr == (void*)vortex_math_pow_f64 ||
+                           ins->func_ptr == (void*)vortex_math_atan2_f64) {
+                    int d0 = a64_get_float_reg(ir, ins->args[0], 0, j);
+                    int d1 = a64_get_float_reg(ir, ins->args[1], 1, j);
+                    if (d0 == 1 && d1 == 0) {
+                        a64_fmov_dd(j, 2, 1);
+                        a64_fmov_dd(j, 1, 0);
+                        a64_fmov_dd(j, 0, 2);
+                    } else if (d1 == 0) {
+                        a64_fmov_dd(j, 1, 0);
+                        if (d0 != 0) a64_fmov_dd(j, 0, d0);
+                    } else {
+                        if (d0 != 0) a64_fmov_dd(j, 0, d0);
+                        if (d1 != 1) a64_fmov_dd(j, 1, d1);
+                    }
+                    a64_mov_imm64(j, A64_X16, (uint64_t)(uintptr_t)ins->func_ptr);
+                    a64_blr(j, A64_X16);
                 } else {
                     A64CallArg cargs[MAX_CALL_ARGS];
                     for (int a = 0; a < ins->arg_count; a++) {
@@ -1257,7 +1425,7 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                     a64_emit_stage_and_call(j, ir, ins->func_ptr, cargs, ins->arg_count, false, false, ins->arg_count);
                 }
                 if (ins->dest != VREG_NONE) {
-                    if (ins->type == TYPE_F32) a64_commit_float_reg(ir, ins->dest, 0, j);
+                    if (ins->type == TYPE_F32 || ins->type == TYPE_F64) a64_commit_float_reg(ir, ins->dest, 0, j);
                     else a64_commit_int_reg(ir, ins->dest, A64_X0, j);
                 }
                 break;
@@ -1273,7 +1441,11 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 for (int a = 0; a < num_args; a++) {
                     if (ir->vregs[ins->args[a]].is_float) {
                         int s = a64_get_float_reg(ir, ins->args[a], 24, j);
-                        a64_fmov_w_from_s(j, A64_X13, s);
+                        if (ir->vregs[ins->args[a]].type == TYPE_F64) {
+                            a64_fmov_x_from_d(j, A64_X13, s);
+                        } else {
+                            a64_fmov_w_from_s(j, A64_X13, s);
+                        }
                         a64_str64_off(j, A64_X13, 31, (int32_t)(a * 8));
                     } else {
                         int r = a64_get_int_reg(ir, ins->args[a], A64_X13, j);
@@ -1304,7 +1476,7 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 }
 
                 if (ins->dest != VREG_NONE) {
-                    if (ir->vregs[ins->dest].is_float || ins->type == TYPE_F32) {
+                    if (ir->vregs[ins->dest].is_float || ins->type == TYPE_F32 || ins->type == TYPE_F64) {
                         a64_commit_float_reg(ir, ins->dest, 0, j);
                     } else {
                         a64_commit_int_reg(ir, ins->dest, A64_X0, j);
@@ -1323,7 +1495,9 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
 
                 if (ins->dest != VREG_NONE) {
                     if (ins->ret_type == TYPE_F64) {
-                        a64_fcvt_s_from_d(j, 0, 0);
+                        if (ir->vregs[ins->dest].type != TYPE_F64) {
+                            a64_fcvt_s_from_d(j, 0, 0);
+                        }
                         a64_commit_float_reg(ir, ins->dest, 0, j);
                     } else if (ins->ret_type == TYPE_F32) {
                         a64_commit_float_reg(ir, ins->dest, 0, j);
@@ -1343,7 +1517,8 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 if (ir->vregs[ins->dest].is_float) {
                     int sd = (ir->vregs[ins->dest].is_spilled || ir->vregs[ins->dest].preg == PREG_NONE)
                            ? 24 : ir->vregs[ins->dest].preg;
-                    a64_ldrs_off(j, sd, A64_FP, off);
+                    if (ir->vregs[ins->dest].type == TYPE_F64) a64_ldrd_off(j, sd, A64_FP, off);
+                    else a64_ldrs_off(j, sd, A64_FP, off);
                     a64_commit_float_reg(ir, ins->dest, sd, j);
                 } else {
                     int rd = (ir->vregs[ins->dest].is_spilled || ir->vregs[ins->dest].preg == PREG_NONE)
@@ -1356,7 +1531,10 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
 
             case IR_RET: {
                 if (ins->src1 != VREG_NONE) {
-                    if (ins->type == TYPE_F32) {
+                    if (ins->type == TYPE_F64) {
+                        int d = a64_get_float_reg(ir, ins->src1, 0, j);
+                        a64_fmov_dd(j, 0, d);
+                    } else if (ins->type == TYPE_F32) {
                         int s = a64_get_float_reg(ir, ins->src1, 0, j);
                         a64_fmov_ss(j, 0, s);
                     } else {
@@ -1374,6 +1552,7 @@ void ir_codegen_arm64(IRBuffer* ir, JITBuffer* j) {
                 break;
             }
             case IR_SUB_MOD_IMM:
+            case IR_ADD_SUB_MOD_IMM:
             case IR_VEC_ARR_OP:
             case IR_VEC_GRID_MOD:
             case IR_VEC_MOD_FILL:

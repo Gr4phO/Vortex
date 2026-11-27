@@ -276,7 +276,7 @@ void emit_add_rr(JITBuffer* j, int dst, int src) {
     emit_u8(j, (uint8_t)(0xC0 | ((src & 7) << 3) | (dst & 7)));
 }
 
-static void emit_sub_rr(JITBuffer* j, int dst, int src) {
+void emit_sub_rr(JITBuffer* j, int dst, int src) {
     uint8_t rex = 0x48;
     if (src >= 8) rex |= 0x04;
     if (dst >= 8) rex |= 0x01;
@@ -450,7 +450,7 @@ void emit_sub_ri(JITBuffer* j, int rd, int32_t imm) {
     }
 }
 
-static void emit_cmp_ri(JITBuffer* j, int r1, int32_t imm) {
+void emit_cmp_ri(JITBuffer* j, int r1, int32_t imm) {
     uint8_t rex = 0x48 | (r1 >= 8 ? 1 : 0);
     emit_u8(j, rex);
     if (imm >= -128 && imm <= 127) {
@@ -613,6 +613,36 @@ static void emit_storess_spill(JITBuffer* j, int xmm_reg, int spill_offset) {
     }
 }
 
+static void emit_loadsd_spill(JITBuffer* j, int xmm_reg, int spill_offset) {
+    int32_t disp = -spill_offset;
+    emit_u8(j, 0xF2);
+    if (xmm_reg >= 8) emit_u8(j, 0x44);
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x10);
+    if (disp >= -128 && disp <= 127) {
+        emit_u8(j, (uint8_t)(0x40 | ((xmm_reg & 7) << 3) | 5));
+        emit_u8(j, (uint8_t)(int8_t)disp);
+    } else {
+        emit_u8(j, (uint8_t)(0x80 | ((xmm_reg & 7) << 3) | 5));
+        emit_u32(j, (uint32_t)disp);
+    }
+}
+
+static void emit_storesd_spill(JITBuffer* j, int xmm_reg, int spill_offset) {
+    int32_t disp = -spill_offset;
+    emit_u8(j, 0xF2);
+    if (xmm_reg >= 8) emit_u8(j, 0x44);
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x11);
+    if (disp >= -128 && disp <= 127) {
+        emit_u8(j, (uint8_t)(0x40 | ((xmm_reg & 7) << 3) | 5));
+        emit_u8(j, (uint8_t)(int8_t)disp);
+    } else {
+        emit_u8(j, (uint8_t)(0x80 | ((xmm_reg & 7) << 3) | 5));
+        emit_u32(j, (uint32_t)disp);
+    }
+}
+
 void emit_load_mem_offset(JITBuffer* j, int dst, int base, int32_t offset) {
     uint8_t rex = 0x48 | ((dst >= 8 ? 4 : 0) | (base >= 8 ? 1 : 0));
     uint8_t mod;
@@ -694,6 +724,21 @@ static void emit_storess_offset(JITBuffer* j, int base, int32_t offset, int src_
     emit_u32(j, (uint32_t)offset);
 }
 
+static void emit_storesd_offset(JITBuffer* j, int base, int32_t offset, int src_xmm) {
+    emit_u8(j, 0xF2);
+    uint8_t rex = 0x40 | ((src_xmm >= 8 ? 4 : 0) | (base >= 8 ? 1 : 0));
+    if (rex != 0x40) emit_u8(j, rex);
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x11);
+    if (base == PREG_RSP || base == PREG_R12) {
+        emit_u8(j, (uint8_t)(0x84 | ((src_xmm & 7) << 3)));
+        emit_u8(j, 0x24);
+    } else {
+        emit_u8(j, (uint8_t)(0x80 | ((src_xmm & 7) << 3) | (base & 7)));
+    }
+    emit_u32(j, (uint32_t)offset);
+}
+
 static void emit_load_mem32s_offset(JITBuffer* j, int dst, int base, int32_t offset) {
     uint8_t rex = 0x48 | ((dst >= 8 ? 4 : 0) | (base >= 8 ? 1 : 0));
     emit_u8(j, rex);
@@ -758,6 +803,44 @@ static void emit_cvttss2si_rx(JITBuffer* j, int dst_gpr, int src_xmm) {
     emit_u8(j, (uint8_t)(0xC0 | ((dst_gpr & 7) << 3) | (src_xmm & 7)));
 }
 
+static void emit_cvtsi2sd_xr(JITBuffer* j, int dst_xmm, int src_gpr) {
+    emit_u8(j, 0xF2);
+    uint8_t rex = 0x48 | ((dst_xmm >= 8 ? 4 : 0) | (src_gpr >= 8 ? 1 : 0));
+    emit_u8(j, rex);
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x2A);
+    emit_u8(j, (uint8_t)(0xC0 | ((dst_xmm & 7) << 3) | (src_gpr & 7)));
+}
+
+static void emit_cvttsd2si_rx(JITBuffer* j, int dst_gpr, int src_xmm) {
+    emit_u8(j, 0xF2);
+    uint8_t rex = 0x48 | ((dst_gpr >= 8 ? 4 : 0) | (src_xmm >= 8 ? 1 : 0));
+    emit_u8(j, rex);
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x2C);
+    emit_u8(j, (uint8_t)(0xC0 | ((dst_gpr & 7) << 3) | (src_xmm & 7)));
+}
+
+static void emit_cvtss2sd_xx(JITBuffer* j, int dst_xmm, int src_xmm) {
+    emit_u8(j, 0xF3);
+    if (dst_xmm >= 8 || src_xmm >= 8) {
+        emit_u8(j, (uint8_t)(0x40 | (dst_xmm >= 8 ? 4 : 0) | (src_xmm >= 8 ? 1 : 0)));
+    }
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x5A);
+    emit_u8(j, (uint8_t)(0xC0 | ((dst_xmm & 7) << 3) | (src_xmm & 7)));
+}
+
+static void emit_cvtsd2ss_xx(JITBuffer* j, int dst_xmm, int src_xmm) {
+    emit_u8(j, 0xF2);
+    if (dst_xmm >= 8 || src_xmm >= 8) {
+        emit_u8(j, (uint8_t)(0x40 | (dst_xmm >= 8 ? 4 : 0) | (src_xmm >= 8 ? 1 : 0)));
+    }
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x5A);
+    emit_u8(j, (uint8_t)(0xC0 | ((dst_xmm & 7) << 3) | (src_xmm & 7)));
+}
+
 static void emit_sub_rsp(JITBuffer* j, int32_t bytes) {
     if (bytes <= 0) return;
     if (bytes <= 127) {
@@ -801,6 +884,30 @@ static void emit_loadss_array(JITBuffer* j, int dst_xmm, int base, int idx, int 
 
 static void emit_storess_array(JITBuffer* j, int base, int idx, int src_xmm, int scale) {
     emit_u8(j, 0xF3);
+    uint8_t rex = 0x40 | ((src_xmm >= 8 ? 4 : 0) | (idx >= 8 ? 2 : 0) | (base >= 8 ? 1 : 0));
+    if (rex != 0x40) emit_u8(j, rex);
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x11);
+    uint8_t scale_bits = (scale == 4) ? 0x80 : 0xC0;
+    emit_u8(j, (uint8_t)(0x44 | ((src_xmm & 7) << 3)));
+    emit_u8(j, (uint8_t)(scale_bits | ((idx & 7) << 3) | (base & 7)));
+    emit_u8(j, 0x00);
+}
+
+static void emit_loadsd_array(JITBuffer* j, int dst_xmm, int base, int idx, int scale) {
+    emit_u8(j, 0xF2);
+    uint8_t rex = 0x40 | ((dst_xmm >= 8 ? 4 : 0) | (idx >= 8 ? 2 : 0) | (base >= 8 ? 1 : 0));
+    if (rex != 0x40) emit_u8(j, rex);
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x10);
+    uint8_t scale_bits = (scale == 4) ? 0x80 : 0xC0;
+    emit_u8(j, (uint8_t)(0x44 | ((dst_xmm & 7) << 3)));
+    emit_u8(j, (uint8_t)(scale_bits | ((idx & 7) << 3) | (base & 7)));
+    emit_u8(j, 0x00);
+}
+
+static void emit_storesd_array(JITBuffer* j, int base, int idx, int src_xmm, int scale) {
+    emit_u8(j, 0xF2);
     uint8_t rex = 0x40 | ((src_xmm >= 8 ? 4 : 0) | (idx >= 8 ? 2 : 0) | (base >= 8 ? 1 : 0));
     if (rex != 0x40) emit_u8(j, rex);
     emit_u8(j, 0x0F);
@@ -870,6 +977,56 @@ static void emit_ucomiss_xx(JITBuffer* j, int x1, int x2) {
     emit_u8(j, (uint8_t)(0xC0 | ((x1 & 7) << 3) | (x2 & 7)));
 }
 
+static void emit_addsd_xx(JITBuffer* j, int dst_xmm, int src_xmm) {
+    emit_u8(j, 0xF2);
+    if (dst_xmm >= 8 || src_xmm >= 8) {
+        emit_u8(j, (uint8_t)(0x40 | (dst_xmm >= 8 ? 4 : 0) | (src_xmm >= 8 ? 1 : 0)));
+    }
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x58);
+    emit_u8(j, (uint8_t)(0xC0 | ((dst_xmm & 7) << 3) | (src_xmm & 7)));
+}
+
+static void emit_subsd_xx(JITBuffer* j, int dst_xmm, int src_xmm) {
+    emit_u8(j, 0xF2);
+    if (dst_xmm >= 8 || src_xmm >= 8) {
+        emit_u8(j, (uint8_t)(0x40 | (dst_xmm >= 8 ? 4 : 0) | (src_xmm >= 8 ? 1 : 0)));
+    }
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x5C);
+    emit_u8(j, (uint8_t)(0xC0 | ((dst_xmm & 7) << 3) | (src_xmm & 7)));
+}
+
+static void emit_mulsd_xx(JITBuffer* j, int dst_xmm, int src_xmm) {
+    emit_u8(j, 0xF2);
+    if (dst_xmm >= 8 || src_xmm >= 8) {
+        emit_u8(j, (uint8_t)(0x40 | (dst_xmm >= 8 ? 4 : 0) | (src_xmm >= 8 ? 1 : 0)));
+    }
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x59);
+    emit_u8(j, (uint8_t)(0xC0 | ((dst_xmm & 7) << 3) | (src_xmm & 7)));
+}
+
+static void emit_divsd_xx(JITBuffer* j, int dst_xmm, int src_xmm) {
+    emit_u8(j, 0xF2);
+    if (dst_xmm >= 8 || src_xmm >= 8) {
+        emit_u8(j, (uint8_t)(0x40 | (dst_xmm >= 8 ? 4 : 0) | (src_xmm >= 8 ? 1 : 0)));
+    }
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x5E);
+    emit_u8(j, (uint8_t)(0xC0 | ((dst_xmm & 7) << 3) | (src_xmm & 7)));
+}
+
+static void emit_ucomisd_xx(JITBuffer* j, int x1, int x2) {
+    emit_u8(j, 0x66);
+    if (x1 >= 8 || x2 >= 8) {
+        emit_u8(j, (uint8_t)(0x40 | (x1 >= 8 ? 4 : 0) | (x2 >= 8 ? 1 : 0)));
+    }
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x2E);
+    emit_u8(j, (uint8_t)(0xC0 | ((x1 & 7) << 3) | (x2 & 7)));
+}
+
 void emit_load_f32_imm_to(JITBuffer* j, float val, int xmm_reg) {
     uint32_t bits;
     memcpy(&bits, &val, 4);
@@ -882,6 +1039,18 @@ void emit_load_f32_imm_to(JITBuffer* j, float val, int xmm_reg) {
     emit_u8(j, 0x6E);
     uint8_t modrm = (uint8_t)(0xC0 | ((xmm_reg & 7) << 3) | 2); /* 2 = R10 & 7 */
     emit_u8(j, modrm);
+}
+
+static void emit_load_f64_imm_to(JITBuffer* j, double val, int xmm_reg) {
+    uint64_t bits;
+    memcpy(&bits, &val, 8);
+    emit_mov_ri64(j, PREG_R10, (int64_t)bits);
+    emit_u8(j, 0x66);
+    uint8_t rex = (uint8_t)(0x48 | (xmm_reg >= 8 ? 4 : 0) | 1); /* 1 for R10 */
+    emit_u8(j, rex);
+    emit_u8(j, 0x0F);
+    emit_u8(j, 0x6E);
+    emit_u8(j, (uint8_t)(0xC0 | ((xmm_reg & 7) << 3) | 2));
 }
 
 #ifdef _WIN32
@@ -1077,7 +1246,8 @@ void commit_vreg_int_reg(IRBuffer* ir, VReg v, int source_reg, JITBuffer* j) {
 int get_vreg_float_reg(IRBuffer* ir, VReg v, int scratch_xmm, JITBuffer* j) {
     if (v == VREG_NONE || v < 0 || v >= ir->vreg_count) return 0;
     if (ir->vregs[v].is_spilled) {
-        emit_loadss_spill(j, scratch_xmm, ir->vregs[v].spill_offset);
+        if (ir->vregs[v].type == TYPE_F64) emit_loadsd_spill(j, scratch_xmm, ir->vregs[v].spill_offset);
+        else emit_loadss_spill(j, scratch_xmm, ir->vregs[v].spill_offset);
         return scratch_xmm;
     }
     return ir->vregs[v].preg;
@@ -1086,7 +1256,8 @@ int get_vreg_float_reg(IRBuffer* ir, VReg v, int scratch_xmm, JITBuffer* j) {
 void commit_vreg_float_reg(IRBuffer* ir, VReg v, int source_xmm, JITBuffer* j) {
     if (v == VREG_NONE || v < 0 || v >= ir->vreg_count) return;
     if (ir->vregs[v].is_spilled) {
-        emit_storess_spill(j, source_xmm, ir->vregs[v].spill_offset);
+        if (ir->vregs[v].type == TYPE_F64) emit_storesd_spill(j, source_xmm, ir->vregs[v].spill_offset);
+        else emit_storess_spill(j, source_xmm, ir->vregs[v].spill_offset);
     } else {
         int target_xmm = ir->vregs[v].preg;
         if (target_xmm != source_xmm && target_xmm != PREG_NONE) {
@@ -1199,6 +1370,13 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                 break;
             }
 
+            case IR_CONST_F64: {
+                int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
+                emit_load_f64_imm_to(j, ins->f64_imm, xd);
+                commit_vreg_float_reg(ir, ins->dest, xd, j);
+                break;
+            }
+
             case IR_MOV: {
                 if (ir->vregs[ins->dest].is_float) {
                     int xs = get_vreg_float_reg(ir, ins->src1, 4, j);
@@ -1305,6 +1483,19 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                 emit_lea_disp(j, PREG_R11, r1, -m);
                 if (rd != r1) emit_mov_rr(j, rd, r1);
                 emit_cmp_ri(j, rd, m);
+                emit_cmovge_rr(j, rd, PREG_R11);
+                commit_vreg_int_reg(ir, ins->dest, rd, j);
+                break;
+            }
+
+            case IR_ADD_SUB_MOD_IMM: {
+                int r1 = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
+                int rd = ir->vregs[ins->dest].is_spilled ? PREG_R10 : ir->vregs[ins->dest].preg;
+                int32_t m = (int32_t)ins->imm;
+                int32_t step = (int32_t)ins->offset;
+                emit_lea_disp(j, PREG_R11, r1, step - m);
+                emit_cmp_ri(j, r1, m - step);
+                emit_lea_disp(j, rd, r1, step);
                 emit_cmovge_rr(j, rd, PREG_R11);
                 commit_vreg_int_reg(ir, ins->dest, rd, j);
                 break;
@@ -1455,10 +1646,17 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                 if (work_xd != x1) {
                     emit_movaps_xx(j, work_xd, x1);
                 }
-                if (ins->op == IR_FADD) emit_addss_xx(j, work_xd, x2);
-                else if (ins->op == IR_FSUB) emit_subss_xx(j, work_xd, x2);
-                else if (ins->op == IR_FMUL) emit_mulss_xx(j, work_xd, x2);
-                else if (ins->op == IR_FDIV) emit_divss_xx(j, work_xd, x2);
+                if (ins->type == TYPE_F64) {
+                    if (ins->op == IR_FADD) emit_addsd_xx(j, work_xd, x2);
+                    else if (ins->op == IR_FSUB) emit_subsd_xx(j, work_xd, x2);
+                    else if (ins->op == IR_FMUL) emit_mulsd_xx(j, work_xd, x2);
+                    else if (ins->op == IR_FDIV) emit_divsd_xx(j, work_xd, x2);
+                } else {
+                    if (ins->op == IR_FADD) emit_addss_xx(j, work_xd, x2);
+                    else if (ins->op == IR_FSUB) emit_subss_xx(j, work_xd, x2);
+                    else if (ins->op == IR_FMUL) emit_mulss_xx(j, work_xd, x2);
+                    else if (ins->op == IR_FDIV) emit_divss_xx(j, work_xd, x2);
+                }
                 commit_vreg_float_reg(ir, ins->dest, work_xd, j);
                 break;
             }
@@ -1521,18 +1719,38 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
             case IR_FGE: {
                 int x1 = get_vreg_float_reg(ir, ins->src1, 4, j);
                 int x2 = get_vreg_float_reg(ir, ins->src2, 5, j);
-                emit_ucomiss_xx(j, x1, x2);
-                uint8_t cc = 0x94;
+                if (ins->type == TYPE_F64) emit_ucomisd_xx(j, x1, x2);
+                else emit_ucomiss_xx(j, x1, x2);
+                uint8_t cc_low = 0x4;
                 switch (ins->op) {
-                    case IR_FEQ: cc = 0x94; break;
-                    case IR_FNE: cc = 0x95; break;
-                    case IR_FLT: cc = 0x92; break;
-                    case IR_FLE: cc = 0x96; break;
-                    case IR_FGT: cc = 0x97; break;
-                    case IR_FGE: cc = 0x93; break;
+                    case IR_FEQ: cc_low = 0x4; break;
+                    case IR_FNE: cc_low = 0x5; break;
+                    case IR_FLT: cc_low = 0x2; break;
+                    case IR_FLE: cc_low = 0x6; break;
+                    case IR_FGT: cc_low = 0x7; break;
+                    case IR_FGE: cc_low = 0x3; break;
                     default: break;
                 }
-                emit_setcc(j, cc, PREG_RAX);
+                if (ip + 1 < ir->count &&
+                    (ir->instrs[ip + 1].op == IR_JZ || ir->instrs[ip + 1].op == IR_JNZ) &&
+                    ir->instrs[ip + 1].src1 == ins->dest &&
+                    ins->dest >= 0 && ir->vregs[ins->dest].end_ip <= ip + 1) {
+                    uint8_t jcc_op = (ir->instrs[ip + 1].op == IR_JZ)
+                                     ? (uint8_t)(0x80 | (cc_low ^ 1))
+                                     : (uint8_t)(0x80 | cc_low);
+                    int lbl = (int)ir->instrs[ip + 1].imm;
+                    emit_u8(j, 0x0F); emit_u8(j, jcc_op);
+                    if (lbl >= 0 && lbl < label_cap && label_offsets[lbl] >= 0) {
+                        int32_t rel = (int32_t)(label_offsets[lbl] - (j->size + 4));
+                        emit_u32(j, (uint32_t)rel);
+                    } else {
+                        if (patch_count < patch_cap) patches[patch_count++] = (JumpPatch){lbl, j->size};
+                        emit_u32(j, 0);
+                    }
+                    ip++;
+                    break;
+                }
+                emit_setcc(j, (uint8_t)(0x90 | cc_low), PREG_RAX);
                 int rd = ir->vregs[ins->dest].is_spilled ? PREG_R10 : ir->vregs[ins->dest].preg;
                 emit_movzx_r64_r8(j, rd, PREG_RAX);
                 commit_vreg_int_reg(ir, ins->dest, rd, j);
@@ -1555,9 +1773,45 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                 break;
             }
 
+            case IR_CAST_I64_TO_F64: {
+                int rs = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
+                int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
+                emit_cvtsi2sd_xr(j, xd, rs);
+                commit_vreg_float_reg(ir, ins->dest, xd, j);
+                break;
+            }
+
+            case IR_CAST_F64_TO_I64: {
+                int xs = get_vreg_float_reg(ir, ins->src1, 4, j);
+                int rd = ir->vregs[ins->dest].is_spilled ? PREG_R10 : ir->vregs[ins->dest].preg;
+                emit_cvttsd2si_rx(j, rd, xs);
+                commit_vreg_int_reg(ir, ins->dest, rd, j);
+                break;
+            }
+
+            case IR_CAST_F32_TO_F64: {
+                int xs = get_vreg_float_reg(ir, ins->src1, 4, j);
+                int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
+                emit_cvtss2sd_xx(j, xd, xs);
+                commit_vreg_float_reg(ir, ins->dest, xd, j);
+                break;
+            }
+
+            case IR_CAST_F64_TO_F32: {
+                int xs = get_vreg_float_reg(ir, ins->src1, 4, j);
+                int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
+                emit_cvtsd2ss_xx(j, xd, xs);
+                commit_vreg_float_reg(ir, ins->dest, xd, j);
+                break;
+            }
+
             case IR_LOAD_OFFSET: {
                 int r_base = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
-                if (ins->type == TYPE_F32) {
+                if (ins->type == TYPE_F64) {
+                    int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
+                    emit_loadsd_offset(j, xd, r_base, ins->offset);
+                    commit_vreg_float_reg(ir, ins->dest, xd, j);
+                } else if (ins->type == TYPE_F32) {
                     int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
                     emit_loadss_offset(j, xd, r_base, ins->offset);
                     commit_vreg_float_reg(ir, ins->dest, xd, j);
@@ -1575,7 +1829,10 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
 
             case IR_STORE_OFFSET: {
                 int r_base = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
-                if (ins->type == TYPE_F32) {
+                if (ins->type == TYPE_F64) {
+                    int xs = get_vreg_float_reg(ir, ins->src2, 4, j);
+                    emit_storesd_offset(j, r_base, ins->offset, xs);
+                } else if (ins->type == TYPE_F32) {
                     int xs = get_vreg_float_reg(ir, ins->src2, 4, j);
                     emit_storess_offset(j, r_base, ins->offset, xs);
                 } else if (ins->type == TYPE_I32) {
@@ -1592,7 +1849,11 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                 int r_base = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
                 int r_idx = get_vreg_int_reg(ir, ins->src2, PREG_R11, j);
                 int scale = (ins->type == TYPE_F32 || ins->type == TYPE_I32) ? 4 : 8;
-                if (ins->type == TYPE_F32) {
+                if (ins->type == TYPE_F64) {
+                    int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
+                    emit_loadsd_array(j, xd, r_base, r_idx, scale);
+                    commit_vreg_float_reg(ir, ins->dest, xd, j);
+                } else if (ins->type == TYPE_F32) {
                     int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
                     emit_loadss_array(j, xd, r_base, r_idx, scale);
                     commit_vreg_float_reg(ir, ins->dest, xd, j);
@@ -1612,7 +1873,10 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                 int r_base = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
                 int r_idx = get_vreg_int_reg(ir, ins->src2, PREG_R11, j);
                 int scale = (ins->type == TYPE_F32 || ins->type == TYPE_I32) ? 4 : 8;
-                if (ins->type == TYPE_F32) {
+                if (ins->type == TYPE_F64) {
+                    int xs = get_vreg_float_reg(ir, ins->src3, 4, j);
+                    emit_storesd_array(j, r_base, r_idx, xs, scale);
+                } else if (ins->type == TYPE_F32) {
                     int xs = get_vreg_float_reg(ir, ins->src3, 4, j);
                     emit_storess_array(j, r_base, r_idx, xs, scale);
                 } else if (ins->type == TYPE_I32) {
@@ -1627,7 +1891,11 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
 
             case IR_LOAD_DEREF: {
                 int r_ptr = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
-                if (ins->type == TYPE_F32) {
+                if (ins->type == TYPE_F64) {
+                    int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
+                    emit_loadsd_offset(j, xd, r_ptr, 0);
+                    commit_vreg_float_reg(ir, ins->dest, xd, j);
+                } else if (ins->type == TYPE_F32) {
                     int xd = ir->vregs[ins->dest].is_spilled ? 4 : ir->vregs[ins->dest].preg;
                     emit_loadss_offset(j, xd, r_ptr, 0);
                     commit_vreg_float_reg(ir, ins->dest, xd, j);
@@ -1645,7 +1913,10 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
 
             case IR_STORE_DEREF: {
                 int r_ptr = get_vreg_int_reg(ir, ins->src1, PREG_R10, j);
-                if (ins->type == TYPE_F32) {
+                if (ins->type == TYPE_F64) {
+                    int xs = get_vreg_float_reg(ir, ins->src2, 4, j);
+                    emit_storesd_offset(j, r_ptr, 0, xs);
+                } else if (ins->type == TYPE_F32) {
                     int xs = get_vreg_float_reg(ir, ins->src2, 4, j);
                     emit_storess_offset(j, r_ptr, 0, xs);
                 } else if (ins->type == TYPE_I32) {
@@ -1814,6 +2085,7 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
             case IR_CALL: {
                 if (ir->uses_avx) emit_vzeroupper(j);
                 if (ins->func_ptr == (void*)helper_print_f32 ||
+                    ins->func_ptr == (void*)helper_print_f64 ||
                     ins->func_ptr == (void*)vortex_math_sinf ||
                     ins->func_ptr == (void*)vortex_math_cosf ||
                     ins->func_ptr == (void*)vortex_math_sqrtf ||
@@ -1822,7 +2094,16 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                     ins->func_ptr == (void*)vortex_math_ceilf ||
                     ins->func_ptr == (void*)vortex_math_fabsf ||
                     ins->func_ptr == (void*)vortex_math_expf ||
-                    ins->func_ptr == (void*)vortex_math_logf) {
+                    ins->func_ptr == (void*)vortex_math_logf ||
+                    ins->func_ptr == (void*)vortex_math_sin_f64 ||
+                    ins->func_ptr == (void*)vortex_math_cos_f64 ||
+                    ins->func_ptr == (void*)vortex_math_sqrt_f64 ||
+                    ins->func_ptr == (void*)vortex_math_tan_f64 ||
+                    ins->func_ptr == (void*)vortex_math_floor_f64 ||
+                    ins->func_ptr == (void*)vortex_math_ceil_f64 ||
+                    ins->func_ptr == (void*)vortex_math_fabs_f64 ||
+                    ins->func_ptr == (void*)vortex_math_exp_f64 ||
+                    ins->func_ptr == (void*)vortex_math_log_f64) {
                     int x = get_vreg_float_reg(ir, ins->args[0], 0, j);
                     if (x != 0) emit_movaps_xx(j, 0, x);
                     emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xEC); emit_u8(j, 0x20);
@@ -1830,7 +2111,9 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                     emit_u8(j, 0xFF); emit_u8(j, 0xD0);
                     emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xC4); emit_u8(j, 0x20);
                 } else if (ins->func_ptr == (void*)vortex_math_powf ||
-                           ins->func_ptr == (void*)vortex_math_atan2f) {
+                           ins->func_ptr == (void*)vortex_math_atan2f ||
+                           ins->func_ptr == (void*)vortex_math_pow_f64 ||
+                           ins->func_ptr == (void*)vortex_math_atan2_f64) {
                     int x0 = get_vreg_float_reg(ir, ins->args[0], 0, j);
                     int x1 = get_vreg_float_reg(ir, ins->args[1], 1, j);
                     if (x0 == 1 && x1 == 0) {
@@ -2034,7 +2317,20 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
                     VReg av = ins->args[a];
                     if (ir->vregs[av].is_float) {
                         int x = get_vreg_float_reg(ir, av, 4, j);
-                        if (ins->arg_types[a] == TYPE_F64) {
+                        if (ir->vregs[av].type == TYPE_F64) {
+                            if (ins->arg_types[a] == TYPE_F32) {
+                                emit_cvtsd2ss_xx(j, 4, x);
+                                emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xEC); emit_u8(j, 0x08);
+                                emit_u8(j, 0xF3); emit_u8(j, 0x0F); emit_u8(j, 0x11); emit_u8(j, 0x24); emit_u8(j, 0x24);
+                            } else {
+                                emit_u8(j, 0x48); emit_u8(j, 0x83); emit_u8(j, 0xEC); emit_u8(j, 0x08);
+                                emit_u8(j, 0xF2);
+                                if (x >= 8) emit_u8(j, 0x44);
+                                emit_u8(j, 0x0F); emit_u8(j, 0x11);
+                                emit_u8(j, (uint8_t)(0x04 | ((x & 7) << 3)));
+                                emit_u8(j, 0x24);
+                            }
+                        } else if (ins->arg_types[a] == TYPE_F64) {
                             emit_u8(j, 0xF3);
                             if (x >= 8) emit_u8(j, 0x41);
                             emit_u8(j, 0x0F); emit_u8(j, 0x5A);
@@ -2147,7 +2443,9 @@ void ir_codegen_x86_64(IRBuffer* ir, JITBuffer* j) {
 
                 if (ins->dest != VREG_NONE) {
                     if (ins->ret_type == TYPE_F64) {
-                        emit_u8(j, 0xF2); emit_u8(j, 0x0F); emit_u8(j, 0x5A); emit_u8(j, 0xC0);
+                        if (ir->vregs[ins->dest].type != TYPE_F64) {
+                            emit_u8(j, 0xF2); emit_u8(j, 0x0F); emit_u8(j, 0x5A); emit_u8(j, 0xC0);
+                        }
                         commit_vreg_float_reg(ir, ins->dest, 0, j);
                     } else if (ins->ret_type == TYPE_F32) {
                         commit_vreg_float_reg(ir, ins->dest, 0, j);

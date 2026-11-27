@@ -1,0 +1,239 @@
+// =============================================================================
+// VORTEX v1.3.0 - REALISTIC 5-TASK CROSS-LANGUAGE BENCHMARK SUITE
+// Strict parity across C, C++, Rust, Go, Java, C#, Node.js, Python 3:
+//   T1: N-Body Gravity Simulation (600 bodies x 25 steps, strict IEEE-754 f64)
+//   T2: Recursive Hoare Quicksort (500,000 i64 via Lehmer LCG)
+//   T3: Dense Matrix Multiply f64 (320 x 320 x 320, pure i-k-j loop)
+//   T4: Sieve of Eratosthenes (N = 10,000,000, sum all primes)
+//   T5: Multi-Core Parallel Mandelbrot Set (1024 x 1024 x 256 iters, f64)
+// =============================================================================
+
+fn qsort_i64(arr: [i64], lo: i64, hi: i64) -> i64 {
+    let mut i: i64 = lo;
+    let mut j: i64 = hi;
+    let pivot: i64 = arr[(lo + hi) / 2];
+    while i <= j {
+        while arr[i] < pivot {
+            i += 1;
+        }
+        while arr[j] > pivot {
+            j -= 1;
+        }
+        if i <= j {
+            let tmp: i64 = arr[i];
+            arr[i] = arr[j];
+            arr[j] = tmp;
+            i += 1;
+            j -= 1;
+        }
+    }
+    if lo < j {
+        qsort_i64(arr, lo, j);
+    }
+    if i < hi {
+        qsort_i64(arr, i, hi);
+    }
+    return 0;
+}
+
+fn main() -> i64 {
+    let dyn_zero: i64 = num_workers() - num_workers();
+    let n1: i64 = 600 + dyn_zero;
+    let steps1: i64 = 25 + dyn_zero;
+    let n2: i64 = 500000 + dyn_zero;
+    let n3: i64 = 320 + dyn_zero;
+    let n4: i64 = 10000000 + dyn_zero;
+    let w5: i64 = 1024 + dyn_zero;
+
+    let t_all0: i64 = time_us();
+
+    // -------------------------------------------------------------------------
+    // T1: N-Body Gravity Simulation (600 bodies x 25 steps, f64)
+    // -------------------------------------------------------------------------
+    let x: [f64] = slice_f64(n1);
+    let y: [f64] = slice_f64(n1);
+    let z: [f64] = slice_f64(n1);
+    let vx: [f64] = slice_f64(n1);
+    let vy: [f64] = slice_f64(n1);
+    let vz: [f64] = slice_f64(n1);
+    let m: [f64] = slice_f64(n1);
+
+    let f_01: f64 = 0.1;
+    let f_50: f64 = 5.0;
+    let f_001: f64 = 0.01;
+    let f_05: f64 = 0.5;
+    let f_025: f64 = 0.25;
+    let f_10: f64 = 1.0;
+
+    for i in 0..n1 {
+        x[i] = (((i * 17) % 100) as f64) * f_01 - f_50;
+        y[i] = (((i * 31) % 100) as f64) * f_01 - f_50;
+        z[i] = (((i * 47) % 100) as f64) * f_01 - f_50;
+        vx[i] = (((i % 7) - 3) as f64) * f_001;
+        vy[i] = ((((i * 3) % 7) - 3) as f64) * f_001;
+        vz[i] = ((((i * 5) % 7) - 3) as f64) * f_001;
+        m[i] = f_05 + ((i % 5) as f64) * f_025;
+    }
+
+    let dt: f64 = 0.01;
+    let soft: f64 = 0.01;
+    let t1_0: i64 = time_us();
+    for s in 0..steps1 {
+        let _step_unused: i64 = s;
+        for i in 0..n1 {
+            let mut fx: f64 = 0.0;
+            let mut fy: f64 = 0.0;
+            let mut fz: f64 = 0.0;
+            let xi: f64 = x[i];
+            let yi: f64 = y[i];
+            let ziv: f64 = z[i];
+            for j in 0..n1 {
+                if j != i {
+                    let dx: f64 = x[j] - xi;
+                    let dy: f64 = y[j] - yi;
+                    let dz: f64 = z[j] - ziv;
+                    let d2: f64 = dx * dx + dy * dy + dz * dz + soft;
+                    let inv: f64 = f_10 / sqrt_f64(d2);
+                    let f: f64 = m[j] * inv * inv * inv;
+                    fx += dx * f;
+                    fy += dy * f;
+                    fz += dz * f;
+                }
+            }
+            vx[i] += fx * dt;
+            vy[i] += fy * dt;
+            vz[i] += fz * dt;
+        }
+        for i in 0..n1 {
+            x[i] += vx[i] * dt;
+            y[i] += vy[i] * dt;
+            z[i] += vz[i] * dt;
+        }
+    }
+    let mut chk1: f64 = 0.0;
+    for i in 0..n1 {
+        chk1 += f_05 * m[i] * (vx[i] * vx[i] + vy[i] * vy[i] + vz[i] * vz[i]);
+    }
+    let us1: i64 = time_us() - t1_0;
+
+    // -------------------------------------------------------------------------
+    // T2: Recursive Hoare Quicksort (500,000 i64 via Lehmer LCG)
+    // -------------------------------------------------------------------------
+    let arr2: [i64] = slice_i64(n2);
+    let mut lcg: i64 = 12345;
+    for i in 0..n2 {
+        lcg = (lcg * 48271) % 2147483647;
+        arr2[i] = lcg;
+    }
+    let t2_0: i64 = time_us();
+    qsort_i64(arr2, 0, n2 - 1);
+    let chk2: i64 = arr2[0] + arr2[250000] + arr2[n2 - 1];
+    let us2: i64 = time_us() - t2_0;
+
+    // -------------------------------------------------------------------------
+    // T3: Dense Matrix Multiply f64 (320 x 320 x 320, pure i-k-j loop)
+    // -------------------------------------------------------------------------
+    let a3: [f64] = slice_f64(n3 * n3);
+    let b3: [f64] = slice_f64(n3 * n3);
+    let c3: [f64] = slice_f64(n3 * n3);
+    for i in 0..n3 {
+        for k in 0..n3 {
+            a3[i * n3 + k] = (((i * 7 + k * 13) % 97) as f64) * f_001;
+            b3[i * n3 + k] = (((i * 11 + k * 5) % 89) as f64) * f_001;
+        }
+    }
+    let t3_0: i64 = time_us();
+    for i in 0..n3 {
+        let coff: i64 = i * n3;
+        for k in 0..n3 {
+            let aik: f64 = a3[coff + k];
+            let boff: i64 = k * n3;
+            for j in 0..n3 {
+                c3[coff + j] += aik * b3[boff + j];
+            }
+        }
+    }
+    let mut chk3: f64 = 0.0;
+    for i in 0..(n3 * n3) {
+        chk3 += c3[i];
+    }
+    let us3: i64 = time_us() - t3_0;
+
+    // -------------------------------------------------------------------------
+    // T4: Sieve of Eratosthenes (N = 10,000,000)
+    // -------------------------------------------------------------------------
+    let is_comp: [i32] = slice_i32(n4);
+    let t4_0: i64 = time_us();
+    let mut p: i64 = 2;
+    while p * p < n4 {
+        if is_comp[p] == 0 {
+            let mut m4: i64 = p * p;
+            while m4 < n4 {
+                is_comp[m4] = 1;
+                m4 += p;
+            }
+        }
+        p += 1;
+    }
+    let mut chk4: i64 = 0;
+    for i in 2..n4 {
+        if is_comp[i] == 0 {
+            chk4 += i;
+        }
+    }
+    let us4: i64 = time_us() - t4_0;
+
+    // -------------------------------------------------------------------------
+    // T5: Multi-Core Parallel Mandelbrot (1024 x 1024 x 256 iters, f64)
+    // -------------------------------------------------------------------------
+    let row_sums: [i64] = slice_i64(w5);
+    let t5_0: i64 = time_us();
+    parallel_for py in 0..w5 {
+        let f_w5: f64 = w5 as f64;
+        let f_neg125: f64 = -1.25;
+        let f_25: f64 = 2.5;
+        let f_neg20: f64 = -2.0;
+        let f_30: f64 = 3.0;
+        let f_20: f64 = 2.0;
+        let f_40: f64 = 4.0;
+        let max_it: i64 = 256;
+        let cy: f64 = f_neg125 + ((py as f64) * f_25) / f_w5;
+        let mut rsum: i64 = 0;
+        for px in 0..w5 {
+            let cx: f64 = f_neg20 + ((px as f64) * f_30) / f_w5;
+            let mut zr: f64 = 0.0;
+            let mut zi: f64 = 0.0;
+            let mut it: i64 = 0;
+            while it < max_it && (zr * zr + zi * zi <= f_40) {
+                let tmp: f64 = zr * zr - zi * zi + cx;
+                zi = f_20 * zr * zi + cy;
+                zr = tmp;
+                it += 1;
+            }
+            rsum += it;
+        }
+        row_sums[py] = rsum;
+    }
+    let mut chk5: i64 = 0;
+    for i in 0..w5 {
+        chk5 += row_sums[i];
+    }
+    let us5: i64 = time_us() - t5_0;
+
+    let total_us: i64 = time_us() - t_all0;
+
+    print_str("T1_US "); print(us1);
+    print_str("T1_CHK "); print(chk1);
+    print_str("T2_US "); print(us2);
+    print_str("T2_CHK "); print(chk2);
+    print_str("T3_US "); print(us3);
+    print_str("T3_CHK "); print(chk3);
+    print_str("T4_US "); print(us4);
+    print_str("T4_CHK "); print(chk4);
+    print_str("T5_US "); print(us5);
+    print_str("T5_CHK "); print(chk5);
+    print_str("TOTAL_US "); print(total_us);
+    return 0;
+}
+
+main();

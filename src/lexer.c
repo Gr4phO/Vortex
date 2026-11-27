@@ -176,8 +176,10 @@ void next_token(Lexer* lex) {
         lex->cur.text[len] = '\0';
 
         if (is_float) {
+            double dv = strtod(clean[0] ? clean : "0.0", NULL);
             lex->cur.type = TOK_FLOAT;
-            lex->cur.float_val = (float)strtod(clean[0] ? clean : "0.0", NULL);
+            lex->cur.f64_val = dv;
+            lex->cur.float_val = (float)dv;
         } else {
             lex->cur.type = TOK_INT;
             lex->cur.int_val = strtoll(clean[0] ? clean : "0", NULL, 10);

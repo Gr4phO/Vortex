@@ -100,9 +100,11 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
     fn_comp.j = c->j;
     fn_comp.ir = &fn_ir;
     fn_comp.last_struct_id = -1;
+    fn_comp.last_f64_lit_vreg = VREG_NONE;
     fn_comp.unsafe_depth = is_unsafe ? 1 : 0;
     fn_comp.current_fn_is_unsafe = is_unsafe;
     fn_comp.in_function = true;
+    fn_comp.current_fn_ret_type = uf->ret_type;
 
     for (int p = 0; p < uf->param_count; p++) {
         VortexType pt = uf->param_types[p];
@@ -110,7 +112,7 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
         ps->struct_id = uf->param_struct_ids[p];
         ps->vreg = ir_new_vreg(&fn_ir, pt);
         if (param_is_slice[p] &&
-            (pt == TYPE_PTR_I64 || pt == TYPE_PTR_I32 || pt == TYPE_PTR_F32 || pt == TYPE_PTR_STRUCT)) {
+            (pt == TYPE_PTR_I64 || pt == TYPE_PTR_I32 || pt == TYPE_PTR_F32 || pt == TYPE_PTR_F64 || pt == TYPE_PTR_STRUCT)) {
             ps->is_slice_ptr = true;
             fn_ir.vregs[ps->vreg].is_slice_ptr = true;
         }
@@ -285,7 +287,7 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
     }
 
     /* Pillar #1: Capture unoptimized small non-recursive function IR for caller inlining */
-    if (!is_unsafe && !uf->returns_ref && fn_ir.count > 0 && fn_ir.count <= 32 && fn_ir.vreg_count <= 256) {
+    if (!is_unsafe && !uf->returns_ref && fn_ir.count > 0 && fn_ir.count <= 64 && fn_ir.vreg_count <= 256) {
         bool ok_inline = true;
         for (int i = 0; i < fn_ir.count; i++) {
             IROpcode op = fn_ir.instrs[i].op;
@@ -344,6 +346,7 @@ typedef struct {
     VortexType type;
     int64_t iv;
     float fv;
+    double f64v;
     char* sv;
 } ConstVal;
 
@@ -352,14 +355,18 @@ static ConstVal parse_const_add(Compiler* c);
 
 static ConstVal parse_const_primary(Compiler* c) {
     Lexer* l = c->lex;
-    ConstVal res = { TYPE_I64, 0, 0.0f, NULL };
+    ConstVal res = { TYPE_I64, 0, 0.0f, 0.0, NULL };
     if (l->cur.type == TOK_MINUS || l->cur.type == TOK_PLUS) {
         bool neg = (l->cur.type == TOK_MINUS);
         next_token(l);
         res = parse_const_primary(c);
         if (neg) {
-            if (res.type == TYPE_F32) res.fv = -res.fv;
-            else res.iv = -res.iv;
+            if (res.type == TYPE_F32 || res.type == TYPE_F64) {
+                res.fv = -res.fv;
+                res.f64v = -res.f64v;
+            } else {
+                res.iv = -res.iv;
+            }
         }
         return res;
     }
@@ -372,7 +379,13 @@ static ConstVal parse_const_primary(Compiler* c) {
     if (l->cur.type == TOK_TRUE) { next_token(l); res.iv = 1; return res; }
     if (l->cur.type == TOK_FALSE) { next_token(l); res.iv = 0; return res; }
     if (l->cur.type == TOK_INT) { res.iv = l->cur.int_val; next_token(l); return res; }
-    if (l->cur.type == TOK_FLOAT) { res.type = TYPE_F32; res.fv = l->cur.float_val; next_token(l); return res; }
+    if (l->cur.type == TOK_FLOAT) {
+        res.type = TYPE_F32;
+        res.fv = l->cur.float_val;
+        res.f64v = l->cur.f64_val;
+        next_token(l);
+        return res;
+    }
     if (l->cur.type == TOK_STRING) {
         res.type = TYPE_STR;
         res.sv = strdup(l->cur.text);
@@ -408,6 +421,7 @@ static ConstVal parse_const_primary(Compiler* c) {
         res.type = kc->type;
         res.iv = kc->int_val;
         res.fv = kc->float_val;
+        res.f64v = kc->f64_val;
         if (kc->str_val) res.sv = strdup(kc->str_val);
         return res;
     }
@@ -422,15 +436,17 @@ static ConstVal parse_const_mul(Compiler* c) {
         int line = c->lex->cur.line, col = c->lex->cur.col;
         next_token(c->lex);
         ConstVal right = parse_const_primary(c);
-        if (left.type == TYPE_F32 || right.type == TYPE_F32) {
-            float lf = (left.type == TYPE_F32) ? left.fv : (float)left.iv;
-            float rf = (right.type == TYPE_F32) ? right.fv : (float)right.iv;
-            left.type = TYPE_F32;
-            if (op == TOK_STAR) left.fv = lf * rf;
+        if (left.type == TYPE_F64 || right.type == TYPE_F64 ||
+            left.type == TYPE_F32 || right.type == TYPE_F32) {
+            double ld = (left.type == TYPE_F32 || left.type == TYPE_F64) ? left.f64v : (double)left.iv;
+            double rd = (right.type == TYPE_F32 || right.type == TYPE_F64) ? right.f64v : (double)right.iv;
+            left.type = (left.type == TYPE_F64 || right.type == TYPE_F64) ? TYPE_F64 : TYPE_F32;
+            if (op == TOK_STAR) left.f64v = ld * rd;
             else if (op == TOK_SLASH) {
-                if (rf == 0.0f) vortex_compile_error("E201", line, col, "Division by zero in const expression", NULL);
-                left.fv = lf / rf;
+                if (rd == 0.0) vortex_compile_error("E201", line, col, "Division by zero in const expression", NULL);
+                left.f64v = ld / rd;
             }
+            left.fv = (float)left.f64v;
         } else {
             if (op == TOK_STAR) left.iv *= right.iv;
             else if (op == TOK_SLASH) {
@@ -451,11 +467,13 @@ static ConstVal parse_const_add(Compiler* c) {
         VortexTokenType op = c->lex->cur.type;
         next_token(c->lex);
         ConstVal right = parse_const_mul(c);
-        if (left.type == TYPE_F32 || right.type == TYPE_F32) {
-            float lf = (left.type == TYPE_F32) ? left.fv : (float)left.iv;
-            float rf = (right.type == TYPE_F32) ? right.fv : (float)right.iv;
-            left.type = TYPE_F32;
-            left.fv = (op == TOK_PLUS) ? (lf + rf) : (lf - rf);
+        if (left.type == TYPE_F64 || right.type == TYPE_F64 ||
+            left.type == TYPE_F32 || right.type == TYPE_F32) {
+            double ld = (left.type == TYPE_F32 || left.type == TYPE_F64) ? left.f64v : (double)left.iv;
+            double rd = (right.type == TYPE_F32 || right.type == TYPE_F64) ? right.f64v : (double)right.iv;
+            left.type = (left.type == TYPE_F64 || right.type == TYPE_F64) ? TYPE_F64 : TYPE_F32;
+            left.f64v = (op == TOK_PLUS) ? (ld + rd) : (ld - rd);
+            left.fv = (float)left.f64v;
         } else {
             left.iv = (op == TOK_PLUS) ? (left.iv + right.iv) : (left.iv - right.iv);
         }
@@ -484,14 +502,19 @@ static void parse_const_stmt(Compiler* c) {
     consume_stmt_end(c);
 
     VortexType final_t = (explicit_t != TYPE_UNKNOWN) ? explicit_t : val.type;
-    if (final_t == TYPE_F32 && val.type != TYPE_F32) {
+    if (final_t == TYPE_F64 && val.type != TYPE_F32 && val.type != TYPE_F64) {
+        val.f64v = (double)val.iv;
         val.fv = (float)val.iv;
-    } else if (final_t != TYPE_F32 && final_t != TYPE_STR && val.type == TYPE_F32) {
-        val.iv = (int64_t)val.fv;
+    } else if (final_t == TYPE_F32 && val.type != TYPE_F32 && val.type != TYPE_F64) {
+        val.f64v = (double)val.iv;
+        val.fv = (float)val.iv;
+    } else if (final_t != TYPE_F32 && final_t != TYPE_F64 && final_t != TYPE_STR &&
+               (val.type == TYPE_F32 || val.type == TYPE_F64)) {
+        val.iv = (int64_t)val.f64v;
     }
     const char* stored_sv = val.sv ? vortex_intern_cstr(val.sv) : NULL;
     free(val.sv);
-    vortex_const_add(cname, final_t, val.iv, val.fv, stored_sv);
+    vortex_const_add(cname, final_t, val.iv, val.fv, val.f64v, stored_sv);
 }
 
 static void parse_cfg_stmt(Compiler* c) {
@@ -766,7 +789,9 @@ static void parse_struct_stmt(Compiler* c) {
             ftype = TYPE_F32; fsize = 4; falign = 4;
             next_token(l);
         } else if (l->cur.type == TOK_IDENT) {
-            if (strcmp(l->cur.text, "i32") == 0 || strcmp(l->cur.text, "u32") == 0) {
+            if (strcmp(l->cur.text, "f64") == 0) {
+                ftype = TYPE_F64; fsize = 8; falign = 8;
+            } else if (strcmp(l->cur.text, "i32") == 0 || strcmp(l->cur.text, "u32") == 0) {
                 ftype = TYPE_I32; fsize = 4; falign = 4;
             } else if (strcmp(l->cur.text, "ptr") == 0) {
                 ftype = TYPE_PTR; fsize = 8; falign = 8;
@@ -790,6 +815,7 @@ static void parse_struct_stmt(Compiler* c) {
         } else if (l->cur.type == TOK_LBRACKET) {
             next_token(l);
             if (l->cur.type == TOK_F32_KW) ftype = TYPE_PTR_F32;
+            else if (l->cur.type == TOK_IDENT && strcmp(l->cur.text, "f64") == 0) ftype = TYPE_PTR_F64;
             else if (l->cur.type == TOK_IDENT && (strcmp(l->cur.text, "i32") == 0 || strcmp(l->cur.text, "u32") == 0)) ftype = TYPE_PTR_I32;
             else if (l->cur.type == TOK_IDENT && struct_type_find(l->cur.text) != NULL) {
                 VortexStructType* elem_st = struct_type_find(l->cur.text);
@@ -938,6 +964,13 @@ static void parse_let_stmt(Compiler* c, int stmt_line, int stmt_col) {
     }
 
     VortexType final_type = (explicit_type != TYPE_UNKNOWN) ? explicit_type : expr_type;
+    if (final_type == TYPE_F64 && expr_type != TYPE_F64) {
+        v_expr = vortex_promote_to_f64(c, v_expr, expr_type);
+    } else if (final_type == TYPE_F32 && expr_type == TYPE_F64) {
+        VReg cast_v = ir_new_vreg(c->ir, TYPE_F32);
+        ir_emit_cast(c->ir, IR_CAST_F64_TO_F32, cast_v, v_expr, TYPE_F32);
+        v_expr = cast_v;
+    }
     Symbol* sym = vortex_symtab_add(c->st, name, final_type, is_mut);
     sym->decl_line = stmt_line;
     sym->decl_col = stmt_col;
@@ -967,8 +1000,8 @@ static void parse_let_stmt(Compiler* c, int stmt_line, int stmt_col) {
             sym->len_vreg = src_vi->len_vreg;
             sym->known_len = src_vi->known_len;
             if (sym->len_vreg == VREG_NONE && sym->known_len >= 0 &&
-                (final_type == TYPE_PTR_I64 || final_type == TYPE_PTR_F32 || final_type == TYPE_PTR_I32)) {
-                int64_t esz = (final_type == TYPE_PTR_I64) ? 8 : 4;
+                (final_type == TYPE_PTR_I64 || final_type == TYPE_PTR_F64 || final_type == TYPE_PTR_F32 || final_type == TYPE_PTR_I32)) {
+                int64_t esz = (final_type == TYPE_PTR_I64 || final_type == TYPE_PTR_F64) ? 8 : 4;
                 sym->known_len /= esz;
             }
             c->ir->vregs[sym->vreg].is_slice_ptr = true;
@@ -1024,6 +1057,7 @@ static void parse_parallel_for_stmt(Compiler* c) {
     worker_c.j = c->j;
     worker_c.ir = &worker_ir;
     worker_c.last_struct_id = -1;
+    worker_c.last_f64_lit_vreg = VREG_NONE;
     worker_c.unsafe_depth = c->unsafe_depth;
     worker_c.in_function = true;
 
@@ -1352,7 +1386,7 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
         VortexTokenType assign_op = l->cur.type;
         next_token(l);
         VReg v_val;
-        vortex_parse_expr(c, &v_val);
+        VortexType val_t = vortex_parse_expr(c, &v_val);
         consume_stmt_end(c);
 
         Symbol* sym = vortex_symtab_find(c->st, name);
@@ -1374,6 +1408,10 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
                                  "Declare the binding with 'let mut' if it should be mutable.");
         }
         sym->reassigned = true;
+        if (sym->type == TYPE_F64 && val_t != TYPE_F64) {
+            v_val = vortex_promote_to_f64(c, v_val, val_t);
+            val_t = TYPE_F64;
+        }
         if (assign_op == TOK_EQ) {
             if (v_val >= 0 && v_val < c->ir->vreg_count && c->ir->vregs[v_val].is_ref) {
                 int val_depth = c->ir->vregs[v_val].region_depth;
@@ -1391,13 +1429,15 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
             ir_emit_mov(c->ir, sym->vreg, v_val);
         } else {
             sym->used = true;
+            bool is_f64 = (sym->type == TYPE_F64);
             bool is_f32 = (sym->type == TYPE_F32);
-            if (!is_f32 && (assign_op == TOK_SLASH_EQ || assign_op == TOK_PERCENT_EQ) &&
+            bool is_flt = is_f64 || is_f32;
+            if (!is_flt && (assign_op == TOK_SLASH_EQ || assign_op == TOK_PERCENT_EQ) &&
                 g_ultrasafe_level >= 1 && c->unsafe_depth == 0) {
                 ir_emit_div_check(c->ir, v_val, g_current_filename, stmt_line);
             }
-            IROpcode op = compound_assign_ir_op(assign_op, is_f32);
-            ir_emit_binop(c->ir, op, sym->vreg, sym->vreg, v_val, is_f32 ? TYPE_F32 : TYPE_I64);
+            IROpcode op = compound_assign_ir_op(assign_op, is_flt);
+            ir_emit_binop(c->ir, op, sym->vreg, sym->vreg, v_val, is_f64 ? TYPE_F64 : (is_f32 ? TYPE_F32 : TYPE_I64));
         }
         return true;
     }
@@ -1513,9 +1553,10 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
                 cur_len_vreg = VREG_NONE;
                 cur_known_len = -1;
                 cur_slice = (f_mid->type == TYPE_PTR_I64 || f_mid->type == TYPE_PTR_I32 ||
-                             f_mid->type == TYPE_PTR_F32 || f_mid->type == TYPE_PTR_STRUCT);
+                             f_mid->type == TYPE_PTR_F32 || f_mid->type == TYPE_PTR_F64 || f_mid->type == TYPE_PTR_STRUCT);
             } else {
-                VortexType elem_t = (cur_t == TYPE_PTR_F32) ? TYPE_F32 :
+                VortexType elem_t = (cur_t == TYPE_PTR_F64) ? TYPE_F64 :
+                                    (cur_t == TYPE_PTR_F32) ? TYPE_F32 :
                                     (cur_t == TYPE_PTR_I32) ? TYPE_I32 :
                                     (cur_t == TYPE_PTR_STRUCT) ? TYPE_PTR_STRUCT : TYPE_I64;
                 int32_t elem_size = (elem_t == TYPE_F32 || elem_t == TYPE_I32) ? 4 : 8;
@@ -1550,26 +1591,37 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
             if (g_compile_mode == VORTEX_MODE_SAFE && c->unsafe_depth == 0) {
                 ir_emit_ptr_check(c->ir, base_v, g_current_filename ? g_current_filename : "<input>", last->line);
             }
-            VortexType ft = (val_t == TYPE_F32 || f->type == TYPE_F32) ? TYPE_F32 : f->type;
+            VortexType ft = f->type;
+            if (f->type == TYPE_F64) {
+                v_val = vortex_promote_to_f64(c, v_val, val_t);
+                ft = TYPE_F64;
+            } else if (val_t == TYPE_F32 || f->type == TYPE_F32) {
+                ft = TYPE_F32;
+            }
             if (assign_op == TOK_EQ) {
                 ir_emit_store_offset(c->ir, base_v, f->offset, v_val, ft);
             } else {
-                bool is_f32 = (ft == TYPE_F32);
-                if (!is_f32 && (assign_op == TOK_SLASH_EQ || assign_op == TOK_PERCENT_EQ) &&
+                bool is_flt = (ft == TYPE_F32 || ft == TYPE_F64);
+                if (!is_flt && (assign_op == TOK_SLASH_EQ || assign_op == TOK_PERCENT_EQ) &&
                     g_ultrasafe_level >= 1 && c->unsafe_depth == 0) {
                     ir_emit_div_check(c->ir, v_val, g_current_filename, stmt_line);
                 }
                 VReg v_cur = ir_new_vreg(c->ir, ft);
                 VReg v_next = ir_new_vreg(c->ir, ft);
                 ir_emit_load_offset(c->ir, v_cur, base_v, f->offset, ft);
-                ir_emit_binop(c->ir, compound_assign_ir_op(assign_op, is_f32), v_next, v_cur, v_val, is_f32 ? TYPE_F32 : TYPE_I64);
+                ir_emit_binop(c->ir, compound_assign_ir_op(assign_op, is_flt), v_next, v_cur, v_val, (ft == TYPE_F64) ? TYPE_F64 : (is_flt ? TYPE_F32 : TYPE_I64));
                 ir_emit_store_offset(c->ir, base_v, f->offset, v_next, ft);
             }
         } else {
-            VortexType elem_t = (cur_t == TYPE_PTR_F32) ? TYPE_F32 :
+            VortexType elem_t = (cur_t == TYPE_PTR_F64) ? TYPE_F64 :
+                                (cur_t == TYPE_PTR_F32) ? TYPE_F32 :
                                 (cur_t == TYPE_PTR_I32) ? TYPE_I32 :
                                 (cur_t == TYPE_PTR_STRUCT) ? TYPE_PTR_STRUCT :
+                                (val_t == TYPE_F64 && (cur_t == TYPE_PTR || cur_t == TYPE_I64)) ? TYPE_F64 :
                                 (val_t == TYPE_F32 && (cur_t == TYPE_PTR || cur_t == TYPE_I64)) ? TYPE_F32 : TYPE_I64;
+            if (elem_t == TYPE_F64 && val_t != TYPE_F64) {
+                v_val = vortex_promote_to_f64(c, v_val, val_t);
+            }
             int32_t elem_size = (elem_t == TYPE_F32 || elem_t == TYPE_I32) ? 4 : 8;
             bool nested_slice = (cur_t == TYPE_I64 && cur_slice);
             bool eff_slice = cur_slice || nested_slice;
@@ -1588,15 +1640,15 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
                     c->ir->instrs[c->ir->count - 1].col = stmt_col;
                 }
             } else {
-                bool is_f32 = (elem_t == TYPE_F32);
-                if (!is_f32 && (assign_op == TOK_SLASH_EQ || assign_op == TOK_PERCENT_EQ) &&
+                bool is_flt = (elem_t == TYPE_F32 || elem_t == TYPE_F64);
+                if (!is_flt && (assign_op == TOK_SLASH_EQ || assign_op == TOK_PERCENT_EQ) &&
                     g_ultrasafe_level >= 1 && c->unsafe_depth == 0) {
                     ir_emit_div_check(c->ir, v_val, g_current_filename, stmt_line);
                 }
                 VReg v_cur = ir_new_vreg(c->ir, elem_t);
                 VReg v_next = ir_new_vreg(c->ir, elem_t);
                 ir_emit_load_array(c->ir, v_cur, base_v, last->v_idx, elem_t);
-                ir_emit_binop(c->ir, compound_assign_ir_op(assign_op, is_f32), v_next, v_cur, v_val, is_f32 ? TYPE_F32 : TYPE_I64);
+                ir_emit_binop(c->ir, compound_assign_ir_op(assign_op, is_flt), v_next, v_cur, v_val, (elem_t == TYPE_F64) ? TYPE_F64 : (is_flt ? TYPE_F32 : TYPE_I64));
                 ir_emit_store_array(c->ir, base_v, last->v_idx, v_next, elem_t);
                 if (c->ir->count > 0) {
                     c->ir->instrs[c->ir->count - 1].line = stmt_line;
@@ -1636,7 +1688,11 @@ static void parse_match_stmt(Compiler* c) {
                 VReg v_pat;
                 VortexType pat_t = vortex_parse_match_pattern(c, &v_pat);
                 VReg v_cmp = ir_new_vreg(c->ir, TYPE_I64);
-                if (scrut_t == TYPE_F32 || pat_t == TYPE_F32) {
+                if (scrut_t == TYPE_F64 || pat_t == TYPE_F64) {
+                    VReg sv = vortex_promote_to_f64(c, v_scrut, scrut_t);
+                    VReg pv = vortex_promote_to_f64(c, v_pat, pat_t);
+                    ir_emit_binop(c->ir, IR_FEQ, v_cmp, sv, pv, TYPE_F64);
+                } else if (scrut_t == TYPE_F32 || pat_t == TYPE_F32) {
                     ir_emit_binop(c->ir, IR_FEQ, v_cmp, v_scrut, v_pat, TYPE_F32);
                 } else {
                     ir_emit_binop(c->ir, IR_EQ, v_cmp, v_scrut, v_pat, TYPE_I64);
@@ -1755,8 +1811,13 @@ void parse_statement(Compiler* c) {
         VortexType vt = vortex_parse_expr(c, &v_val);
         consume_stmt_end(c);
         VortexType elem_t = (pt == TYPE_PTR_I32) ? TYPE_I32 :
+                            (pt == TYPE_PTR_F64) ? TYPE_F64 :
                             (pt == TYPE_PTR_F32) ? TYPE_F32 :
+                            (vt == TYPE_F64) ? TYPE_F64 :
                             (vt == TYPE_F32) ? TYPE_F32 : TYPE_I64;
+        if (elem_t == TYPE_F64 && vt != TYPE_F64) {
+            v_val = vortex_promote_to_f64(c, v_val, vt);
+        }
         ir_emit_store_deref(c->ir, ptr_v, v_val, elem_t);
         vortex_stamp_ir_loc(c->ir, ir_start, stmt_line);
         return;
@@ -1779,6 +1840,10 @@ void parse_statement(Compiler* c) {
                     vortex_compile_error("E301", stmt_line, stmt_col, rmsg, NULL);
                 }
             }
+        }
+        if (c->in_function && c->current_fn_ret_type == TYPE_F64 && val_t != TYPE_F64) {
+            v_val = vortex_promote_to_f64(c, v_val, val_t);
+            val_t = TYPE_F64;
         }
         ir_emit_ret(c->ir, v_val, val_t);
         c->block_returned = true;

@@ -1,0 +1,113 @@
+import "std/hw";
+import "std/math";
+
+fn run_silicon_bench() -> i64 {
+    hw_init();
+    hw_pin_workers(HW_PIN_PHYSICAL);
+
+    // 1. f64 GEMM 512x512x512 (0.268435456 GFLOPs)
+    let d512: i64 = 512;
+    let a512: [f64] = slice_f64(d512 * d512);
+    let b512: [f64] = slice_f64(d512 * d512);
+    let c_naive: [f64] = slice_f64(d512 * d512);
+    let c_hw: [f64] = slice_f64(d512 * d512);
+    let c_scale: f64 = 0.025;
+    for i in 0..(d512 * d512) {
+        a512[i] = (((i % 13) + 1) as f64) * c_scale;
+        b512[i] = (((i % 17) + 1) as f64) * c_scale;
+    }
+
+    // Pure scalar Vortex JIT loop (512^3 i-k-j)
+    let tn0: i64 = time_us();
+    for i in 0..d512 {
+        let coff: i64 = i * d512;
+        for k in 0..d512 {
+            let aik: f64 = a512[coff + k];
+            let boff: i64 = k * d512;
+            for j in 0..d512 {
+                c_naive[coff + j] += aik * b512[boff + j];
+            }
+        }
+    }
+    let us_naive_512: i64 = time_us() - tn0;
+
+    // Warmup + best of 3 runs for std/hw AVX2+FMA3 BLIS multi-core
+    hw_matmul_f64(a512, b512, c_hw, d512, d512, d512);
+    let mut best_hw_512: i64 = 999999999;
+    let mut route_512: i64 = 0;
+    for r in 0..3 {
+        let _r_unused: i64 = r;
+        let t0: i64 = time_us();
+        route_512 = hw_matmul_f64(a512, b512, c_hw, d512, d512, d512);
+        let dt_us: i64 = time_us() - t0;
+        if dt_us < best_hw_512 {
+            best_hw_512 = dt_us;
+        }
+    }
+    let mut max_err_512: f64 = 0.0;
+    for i in 0..(d512 * d512) {
+        let d: f64 = fabs_f64(c_naive[i] - c_hw[i]);
+        if d > max_err_512 {
+            max_err_512 = d;
+        }
+    }
+
+    // 2. f32 GEMM 1024x1024x1024 (2.147483648 GFLOPs): CPU AVX2 vs OpenCL GPU
+    let d1024: i64 = 1024;
+    let fa: [f32] = slice_f32(d1024 * d1024);
+    let fb: [f32] = slice_f32(d1024 * d1024);
+    let fc_cpu: [f32] = slice_f32(d1024 * d1024);
+    let fc_gpu: [f32] = slice_f32(d1024 * d1024);
+    for i in 0..(d1024 * d1024) {
+        fa[i] = ((i % 17) as f32) * 0.015;
+        fb[i] = ((i % 13) as f32) * 0.015;
+    }
+
+    hw_matmul_f32_cpu(fa, fb, fc_cpu, d1024, d1024, d1024);
+    let mut best_f32_cpu: i64 = 999999999;
+    for r in 0..3 {
+        let _ru: i64 = r;
+        let t0: i64 = time_us();
+        hw_matmul_f32_cpu(fa, fb, fc_cpu, d1024, d1024, d1024);
+        let dt_us: i64 = time_us() - t0;
+        if dt_us < best_f32_cpu {
+            best_f32_cpu = dt_us;
+        }
+    }
+
+    hw_matmul_f32(fa, fb, fc_gpu, d1024, d1024, d1024);
+    let mut best_f32_gpu: i64 = 999999999;
+    let mut route_gpu: i64 = 0;
+    for r in 0..3 {
+        let _ru2: i64 = r;
+        let t0: i64 = time_us();
+        route_gpu = hw_matmul_f32(fa, fb, fc_gpu, d1024, d1024, d1024);
+        let dt_us: i64 = time_us() - t0;
+        if dt_us < best_f32_gpu {
+            best_f32_gpu = dt_us;
+        }
+    }
+    let mut max_err_1024: f64 = 0.0;
+    for i in 0..(d1024 * d1024) {
+        let d: f64 = fabs_f64((fc_cpu[i] as f64) - (fc_gpu[i] as f64));
+        if d > max_err_1024 {
+            max_err_1024 = d;
+        }
+    }
+
+    hw_pin_workers(HW_PIN_AUTO);
+
+    print_str("CPU_NAME "); print_str(hw_cpu_name()); print_str("\n");
+    print_str("GPU_NAME "); print_str(hw_gpu_name()); print_str("\n");
+    print_str("VX_SCALAR_F64_512_US "); print(us_naive_512);
+    print_str("VX_HW_F64_512_US "); print(best_hw_512);
+    print_str("VX_HW_F64_ROUTE "); print(route_512);
+    print_str("VX_HW_F64_ERR "); print(max_err_512);
+    print_str("VX_HW_F32_CPU_1024_US "); print(best_f32_cpu);
+    print_str("VX_HW_F32_GPU_1024_US "); print(best_f32_gpu);
+    print_str("VX_HW_F32_GPU_ROUTE "); print(route_gpu);
+    print_str("VX_HW_F32_ERR "); print(max_err_1024);
+    return 0;
+}
+
+run_silicon_bench();

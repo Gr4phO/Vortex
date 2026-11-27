@@ -117,6 +117,7 @@ VortexType vortex_parse_type_spec_full(Lexer* l, int* out_struct_id, bool* out_n
         if (l->cur.type == TOK_F32_KW) { next_token(l); return TYPE_PTR_F32; }
         if (l->cur.type == TOK_I64_KW) { next_token(l); return TYPE_PTR_I64; }
         if (l->cur.type == TOK_IDENT) {
+            if (strcmp(l->cur.text, "f64") == 0) { next_token(l); return TYPE_PTR_F64; }
             if (strcmp(l->cur.text, "i32") == 0 || strcmp(l->cur.text, "u32") == 0) { next_token(l); return TYPE_PTR_I32; }
             if (strcmp(l->cur.text, "bool") == 0 || strcmp(l->cur.text, "u64") == 0 ||
                 strcmp(l->cur.text, "usize") == 0 || strcmp(l->cur.text, "isize") == 0 ||
@@ -146,7 +147,9 @@ VortexType vortex_parse_type_spec_full(Lexer* l, int* out_struct_id, bool* out_n
             elem_ptr_t = TYPE_PTR_I64;
             next_token(l);
         } else if (l->cur.type == TOK_IDENT) {
-            if (strcmp(l->cur.text, "i32") == 0 || strcmp(l->cur.text, "u32") == 0) {
+            if (strcmp(l->cur.text, "f64") == 0) {
+                elem_ptr_t = TYPE_PTR_F64;
+            } else if (strcmp(l->cur.text, "i32") == 0 || strcmp(l->cur.text, "u32") == 0) {
                 elem_ptr_t = TYPE_PTR_I32;
             } else {
                 VortexStructType* st = struct_type_find(l->cur.text);
@@ -277,12 +280,13 @@ VortexConst* vortex_const_find(const char* name) {
     return NULL;
 }
 
-VortexConst* vortex_const_add(const char* name, VortexType type, int64_t iv, float fv, const char* sv) {
+VortexConst* vortex_const_add(const char* name, VortexType type, int64_t iv, float fv, double f64v, const char* sv) {
     VortexConst* existing = vortex_const_find(name);
     if (existing) {
         existing->type = type;
         existing->int_val = iv;
         existing->float_val = fv;
+        existing->f64_val = f64v;
         existing->str_val = sv;
         return existing;
     }
@@ -296,6 +300,7 @@ VortexConst* vortex_const_add(const char* name, VortexType type, int64_t iv, flo
     kc->type = type;
     kc->int_val = iv;
     kc->float_val = fv;
+    kc->f64_val = f64v;
     kc->str_val = sv;
     return kc;
 }
@@ -350,7 +355,29 @@ static const char* register_string_literal(const char* s) {
 /* --- Safety & Static Region Helpers --- */
 bool vortex_is_pointer_type(VortexType t) {
     return t == TYPE_PTR || t == TYPE_PTR_I64 || t == TYPE_PTR_I32 ||
-           t == TYPE_PTR_F32 || t == TYPE_PTR_STRUCT || t == TYPE_STRUCT || t == TYPE_STR;
+           t == TYPE_PTR_F32 || t == TYPE_PTR_F64 || t == TYPE_PTR_STRUCT || t == TYPE_STRUCT || t == TYPE_STR;
+}
+
+VReg vortex_promote_to_f64(Compiler* c, VReg v, VortexType t) {
+    if (t == TYPE_F64) return v;
+    if (v != VREG_NONE && v == c->last_f64_lit_vreg) {
+        int lo = (c->ir->count > 8) ? (c->ir->count - 8) : 0;
+        for (int k = c->ir->count - 1; k >= lo; k--) {
+            IRInstruction* ins = &c->ir->instrs[k];
+            if (ins->dest == v && ins->op == IR_CONST_F32) {
+                ins->op = IR_CONST_F64;
+                ins->f64_imm = c->last_f64_lit_val;
+                ins->type = TYPE_F64;
+                if (v >= 0 && v < c->ir->vreg_count) c->ir->vregs[v].type = TYPE_F64;
+                c->last_f64_lit_vreg = VREG_NONE;
+                return v;
+            }
+        }
+    }
+    VReg dst = ir_new_vreg(c->ir, TYPE_F64);
+    if (t == TYPE_F32) ir_emit_cast(c->ir, IR_CAST_F32_TO_F64, dst, v, TYPE_F64);
+    else ir_emit_cast(c->ir, IR_CAST_I64_TO_F64, dst, v, TYPE_F64);
+    return dst;
 }
 
 bool vortex_is_scalar_int_type(VortexType t) {
@@ -514,7 +541,21 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
         next_token(l);
         VReg v_inner;
         VortexType t = vortex_parse_primary(c, &v_inner);
-        if (t == TYPE_F32) {
+        if (t == TYPE_F64) {
+            *out_vreg = ir_new_vreg(c->ir, TYPE_F64);
+            VReg v_zero = ir_new_vreg(c->ir, TYPE_F64);
+            ir_emit_const_f64(c->ir, v_zero, 0.0);
+            ir_emit_binop(c->ir, IR_FSUB, *out_vreg, v_zero, v_inner, TYPE_F64);
+            return TYPE_F64;
+        } else if (t == TYPE_F32) {
+            if (v_inner == c->last_f64_lit_vreg && c->ir->count > 0 &&
+                c->ir->instrs[c->ir->count - 1].op == IR_CONST_F32 &&
+                c->ir->instrs[c->ir->count - 1].dest == v_inner) {
+                c->ir->instrs[c->ir->count - 1].fimm = -c->ir->instrs[c->ir->count - 1].fimm;
+                c->last_f64_lit_val = -c->last_f64_lit_val;
+                *out_vreg = v_inner;
+                return TYPE_F32;
+            }
             *out_vreg = ir_new_vreg(c->ir, TYPE_F32);
             VReg v_zero = ir_new_vreg(c->ir, TYPE_F32);
             ir_emit_const_f32(c->ir, v_zero, 0.0f);
@@ -535,6 +576,7 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
         VReg ptr_v;
         VortexType pt = vortex_parse_primary(c, &ptr_v);
         VortexType elem_t = (pt == TYPE_PTR_I32) ? TYPE_I32 :
+                            (pt == TYPE_PTR_F64) ? TYPE_F64 :
                             (pt == TYPE_PTR_F32) ? TYPE_F32 : TYPE_I64;
         *out_vreg = ir_new_vreg(c->ir, elem_t);
         ir_emit_load_deref(c->ir, *out_vreg, ptr_v, elem_t);
@@ -626,9 +668,12 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
 
     if (l->cur.type == TOK_FLOAT) {
         float val = l->cur.float_val;
+        double dval = l->cur.f64_val;
         next_token(l);
         *out_vreg = ir_new_vreg(c->ir, TYPE_F32);
         ir_emit_const_f32(c->ir, *out_vreg, val);
+        c->last_f64_lit_vreg = *out_vreg;
+        c->last_f64_lit_val = dval;
         return TYPE_F32;
     }
 
@@ -677,7 +722,11 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
         VortexType slice_t = TYPE_PTR_I64;
         VortexType store_t = TYPE_I64;
         void* alloc_fn = (void*)vortex_alloc_slice_i64;
-        if (first_t == TYPE_F32) {
+        if (first_t == TYPE_F64) {
+            slice_t = TYPE_PTR_F64;
+            store_t = TYPE_F64;
+            alloc_fn = (void*)vortex_alloc_slice_f64;
+        } else if (first_t == TYPE_F32) {
             slice_t = TYPE_PTR_F32;
             store_t = TYPE_F32;
             alloc_fn = (void*)vortex_alloc_slice_f32;
@@ -701,9 +750,13 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
         c->ir->vregs[*out_vreg].known_len = (int64_t)count;
 
         for (int k = 0; k < count; k++) {
+            VReg ev = elems[k];
+            if (store_t == TYPE_F64 && elem_types[k] != TYPE_F64) {
+                ev = vortex_promote_to_f64(c, ev, elem_types[k]);
+            }
             VReg v_idx = ir_new_vreg(c->ir, TYPE_I64);
             ir_emit_const_i64(c->ir, v_idx, (int64_t)k);
-            ir_emit_store_array(c->ir, *out_vreg, v_idx, elems[k], store_t);
+            ir_emit_store_array(c->ir, *out_vreg, v_idx, ev, store_t);
         }
         return slice_t;
     }
@@ -775,7 +828,13 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                 VReg v_val;
                 VortexType val_t = vortex_parse_expr(c, &v_val);
                 if (f) {
-                    VortexType ft = (f->type == TYPE_F32 || val_t == TYPE_F32) ? TYPE_F32 : f->type;
+                    VortexType ft = f->type;
+                    if (f->type == TYPE_F64) {
+                        v_val = vortex_promote_to_f64(c, v_val, val_t);
+                        ft = TYPE_F64;
+                    } else if (f->type == TYPE_F32 || val_t == TYPE_F32) {
+                        ft = TYPE_F32;
+                    }
                     ir_emit_store_offset(c->ir, v_struct, f->offset, v_val, ft);
                 }
                 if (l->cur.type == TOK_COMMA || l->cur.type == TOK_SEMI) next_token(l);
@@ -845,7 +904,9 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
 
             if (strcmp(name, "print") == 0 && num_args == 1) {
                 *out_vreg = ir_new_vreg(c->ir, TYPE_I64);
-                if (arg_types[0] == TYPE_F32) {
+                if (arg_types[0] == TYPE_F64) {
+                    ir_emit_call(c->ir, *out_vreg, (void*)helper_print_f64, arg_vregs, 1, TYPE_I64);
+                } else if (arg_types[0] == TYPE_F32) {
                     ir_emit_call(c->ir, *out_vreg, (void*)helper_print_f32, arg_vregs, 1, TYPE_I64);
                 } else {
                     ir_emit_call(c->ir, *out_vreg, (void*)helper_print_i64, arg_vregs, 1, TYPE_I64);
@@ -959,15 +1020,23 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                     ret_t = TYPE_PTR_I64; is_alloc_ref = true; is_slice = true;
                 } else if (strcmp(name, "slice_f32") == 0) {
                     ret_t = TYPE_PTR_F32; is_alloc_ref = true; is_slice = true;
+                } else if (strcmp(name, "slice_f64") == 0) {
+                    ret_t = TYPE_PTR_F64; is_alloc_ref = true; is_slice = true;
                 } else if (strcmp(name, "slice_i32") == 0) {
                     ret_t = TYPE_PTR_I32; is_alloc_ref = true; is_slice = true;
                 } else if (strcmp(name, "vec_new") == 0 || strcmp(name, "map_new") == 0) {
                     ret_t = TYPE_PTR; is_alloc_ref = true;
                 } else if (strcmp(name, "str_concat") == 0 || strcmp(name, "str_sub") == 0 ||
                            strcmp(name, "str_from_i64") == 0 || strcmp(name, "str_from_f32") == 0 ||
+                           strcmp(name, "str_from_f64") == 0 ||
                            strcmp(name, "str_from_byte") == 0 || strcmp(name, "ptr_to_str") == 0 ||
                            strcmp(name, "str_join") == 0 || strcmp(name, "fs_read") == 0 ||
-                           strcmp(name, "env_get") == 0 || strcmp(name, "args_get") == 0) {
+                           strcmp(name, "env_get") == 0 || strcmp(name, "args_get") == 0 ||
+                           strcmp(name, "hw_cpu_name") == 0 || strcmp(name, "hw_gpu_name") == 0) {
+                    if (strcmp(name, "str_from_f64") == 0 && num_args >= 1 && arg_types[0] != TYPE_F64) {
+                        arg_vregs[0] = vortex_promote_to_f64(c, arg_vregs[0], arg_types[0]);
+                        arg_types[0] = TYPE_F64;
+                    }
                     ret_t = TYPE_STR; is_alloc_ref = true;
                 } else if (strcmp(name, "ffi_load") == 0 || strcmp(name, "ffi_symbol") == 0 ||
                            strcmp(name, "gui_window") == 0) {
@@ -979,6 +1048,30 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                            strcmp(name, "logf_val") == 0 || strcmp(name, "powf_val") == 0 ||
                            strcmp(name, "atan2f_rad") == 0) {
                     ret_t = TYPE_F32;
+                } else if (strcmp(name, "hw_dot_f64") == 0) {
+                    ret_t = TYPE_F64;
+                } else if (strcmp(name, "hw_axpy_f64") == 0 && num_args >= 1 && arg_types[0] != TYPE_F64) {
+                    arg_vregs[0] = vortex_promote_to_f64(c, arg_vregs[0], arg_types[0]);
+                    arg_types[0] = TYPE_F64;
+                } else if (strcmp(name, "hw_axpy_f32") == 0 && num_args >= 1 && arg_types[0] != TYPE_F32) {
+                    VReg cv = ir_new_vreg(c->ir, TYPE_F32);
+                    IROpcode cop = (arg_types[0] == TYPE_F64) ? IR_CAST_F64_TO_F32 : IR_CAST_I64_TO_F32;
+                    ir_emit_binop(c->ir, cop, TYPE_F32, cv, arg_vregs[0], VREG_NONE);
+                    arg_vregs[0] = cv;
+                    arg_types[0] = TYPE_F32;
+                } else if (strcmp(name, "sin_f64") == 0 || strcmp(name, "cos_f64") == 0 ||
+                           strcmp(name, "sqrt_f64") == 0 || strcmp(name, "tan_f64") == 0 ||
+                           strcmp(name, "floor_f64") == 0 || strcmp(name, "ceil_f64") == 0 ||
+                           strcmp(name, "fabs_f64") == 0 || strcmp(name, "exp_f64") == 0 ||
+                           strcmp(name, "log_f64") == 0 || strcmp(name, "pow_f64") == 0 ||
+                           strcmp(name, "atan2_f64") == 0) {
+                    for (int a = 0; a < num_args; a++) {
+                        if (arg_types[a] != TYPE_F64) {
+                            arg_vregs[a] = vortex_promote_to_f64(c, arg_vregs[a], arg_types[a]);
+                            arg_types[a] = TYPE_F64;
+                        }
+                    }
+                    ret_t = TYPE_F64;
                 }
 
                 *out_vreg = ir_new_vreg(c->ir, ret_t);
@@ -1017,7 +1110,7 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                         VortexType pt = (a < ff->param_count) ? ff->param_types[a] : arg_types[a];
                         if (vortex_is_pointer_type(pt)) {
                             int64_t req_align = 1;
-                            if (pt == TYPE_PTR_I64) req_align = 8;
+                            if (pt == TYPE_PTR_I64 || pt == TYPE_PTR_F64) req_align = 8;
                             else if (pt == TYPE_PTR_F32 || pt == TYPE_PTR_I32 || pt == TYPE_PTR || pt == TYPE_PTR_STRUCT) req_align = 4;
                             bool nullable = (a < ff->param_count && ff->param_nullable[a]) ||
                                             (strcmp(ff->fn_name, "fflush") == 0 && a == 0);
@@ -1027,8 +1120,13 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                         }
                     }
                 }
-                VortexType out_t = (ff->ret_type == TYPE_VOID) ? TYPE_I64 :
-                                   (ff->ret_type == TYPE_F64) ? TYPE_F32 : ff->ret_type;
+                for (int a = 0; a < num_args && a < ff->param_count; a++) {
+                    if (ff->param_types[a] == TYPE_F64 && arg_types[a] != TYPE_F64) {
+                        arg_vregs[a] = vortex_promote_to_f64(c, arg_vregs[a], arg_types[a]);
+                        arg_types[a] = TYPE_F64;
+                    }
+                }
+                VortexType out_t = (ff->ret_type == TYPE_VOID) ? TYPE_I64 : ff->ret_type;
                 *out_vreg = (ff->ret_type == TYPE_VOID) ? VREG_NONE : ir_new_vreg(c->ir, out_t);
                 ir_emit_call_ffi(c->ir, *out_vreg, ff, arg_vregs, num_args, out_t);
                 return out_t;
@@ -1039,6 +1137,12 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                 uf->called = true;
                 if (uf->is_unsafe) {
                     vortex_require_unsafe(c, "Call to 'unsafe fn'", line, col);
+                }
+                for (int a = 0; a < num_args && a < uf->param_count; a++) {
+                    if (uf->param_types[a] == TYPE_F64 && arg_types[a] != TYPE_F64) {
+                        arg_vregs[a] = vortex_promote_to_f64(c, arg_vregs[a], arg_types[a]);
+                        arg_types[a] = TYPE_F64;
+                    }
                 }
                 VortexType rt = (uf->ret_type != TYPE_UNKNOWN && uf->ret_type != TYPE_VOID) ? uf->ret_type : TYPE_I64;
                 *out_vreg = ir_new_vreg(c->ir, rt);
@@ -1090,7 +1194,9 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
         if (kc) {
             primary_type = kc->type;
             cur_v = ir_new_vreg(c->ir, primary_type);
-            if (primary_type == TYPE_F32) {
+            if (primary_type == TYPE_F64) {
+                ir_emit_const_f64(c->ir, cur_v, kc->f64_val);
+            } else if (primary_type == TYPE_F32) {
                 ir_emit_const_f32(c->ir, cur_v, kc->float_val);
             } else if (primary_type == TYPE_STR) {
                 ir_emit_const_i64(c->ir, cur_v, (int64_t)(kc->str_val ? register_string_literal(kc->str_val) : ""));
@@ -1118,7 +1224,8 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                 vortex_parse_expr(c, &v_idx);
                 vortex_parser_match(c, TOK_RBRACKET);
 
-                VortexType elem_type = (primary_type == TYPE_PTR_F32) ? TYPE_F32 :
+                VortexType elem_type = (primary_type == TYPE_PTR_F64) ? TYPE_F64 :
+                                       (primary_type == TYPE_PTR_F32) ? TYPE_F32 :
                                        (primary_type == TYPE_PTR_I32) ? TYPE_I32 :
                                        (primary_type == TYPE_PTR_STRUCT) ? TYPE_PTR_STRUCT : TYPE_I64;
                 int32_t elem_size = (elem_type == TYPE_F32 || elem_type == TYPE_I32) ? 4 : 8;
@@ -1148,7 +1255,8 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                 cur_known_len = -1;
                 cur_is_slice = (elem_type == TYPE_PTR_STRUCT || elem_type == TYPE_I64 ||
                                 elem_type == TYPE_PTR || elem_type == TYPE_PTR_I64 ||
-                                elem_type == TYPE_PTR_I32 || elem_type == TYPE_PTR_F32) && effective_slice;
+                                elem_type == TYPE_PTR_I32 || elem_type == TYPE_PTR_F32 ||
+                                elem_type == TYPE_PTR_F64) && effective_slice;
             } else {
                 next_token(l);
                 if (l->cur.type != TOK_IDENT) {
@@ -1180,7 +1288,7 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                 cur_len_vreg = VREG_NONE;
                 cur_known_len = -1;
                 cur_is_slice = (f->type == TYPE_PTR_I64 || f->type == TYPE_PTR_I32 ||
-                                f->type == TYPE_PTR_F32 || f->type == TYPE_PTR_STRUCT);
+                                f->type == TYPE_PTR_F32 || f->type == TYPE_PTR_F64 || f->type == TYPE_PTR_STRUCT);
             }
         }
 
@@ -1211,16 +1319,34 @@ static VortexType parse_cast(Compiler* c, VReg* out_vreg) {
             vortex_require_unsafe(c, "Pointer/integer cast ('as')", line, col);
         }
 
-        if ((t == TYPE_I64 || t == TYPE_I32) && (dst_t == TYPE_F32 || dst_t == TYPE_F64)) {
+        if ((t == TYPE_I64 || t == TYPE_I32) && dst_t == TYPE_F64) {
+            VReg dst_v = ir_new_vreg(c->ir, TYPE_F64);
+            ir_emit_cast(c->ir, IR_CAST_I64_TO_F64, dst_v, *out_vreg, TYPE_F64);
+            *out_vreg = dst_v;
+            t = TYPE_F64;
+        } else if ((t == TYPE_I64 || t == TYPE_I32) && dst_t == TYPE_F32) {
             VReg dst_v = ir_new_vreg(c->ir, TYPE_F32);
             ir_emit_cast(c->ir, IR_CAST_I64_TO_F32, dst_v, *out_vreg, TYPE_F32);
             *out_vreg = dst_v;
             t = TYPE_F32;
-        } else if ((t == TYPE_F32 || t == TYPE_F64) && (dst_t == TYPE_I64 || dst_t == TYPE_I32)) {
+        } else if (t == TYPE_F64 && (dst_t == TYPE_I64 || dst_t == TYPE_I32)) {
+            VReg dst_v = ir_new_vreg(c->ir, TYPE_I64);
+            ir_emit_cast(c->ir, IR_CAST_F64_TO_I64, dst_v, *out_vreg, TYPE_I64);
+            *out_vreg = dst_v;
+            t = dst_t;
+        } else if (t == TYPE_F32 && (dst_t == TYPE_I64 || dst_t == TYPE_I32)) {
             VReg dst_v = ir_new_vreg(c->ir, TYPE_I64);
             ir_emit_cast(c->ir, IR_CAST_F32_TO_I64, dst_v, *out_vreg, TYPE_I64);
             *out_vreg = dst_v;
             t = dst_t;
+        } else if (t == TYPE_F32 && dst_t == TYPE_F64) {
+            *out_vreg = vortex_promote_to_f64(c, *out_vreg, TYPE_F32);
+            t = TYPE_F64;
+        } else if (t == TYPE_F64 && dst_t == TYPE_F32) {
+            VReg dst_v = ir_new_vreg(c->ir, TYPE_F32);
+            ir_emit_cast(c->ir, IR_CAST_F64_TO_F32, dst_v, *out_vreg, TYPE_F32);
+            *out_vreg = dst_v;
+            t = TYPE_F32;
         } else {
             VReg dst_v = ir_new_vreg(c->ir, dst_t);
             ir_emit_mov(c->ir, dst_v, *out_vreg);
@@ -1251,7 +1377,15 @@ static VortexType parse_multiplicative(Compiler* c, VReg* out_vreg) {
             vortex_require_unsafe(c, "Pointer arithmetic", line, col);
         }
 
-        if (left_type == TYPE_F32 || right_type == TYPE_F32) {
+        if (left_type == TYPE_F64 || right_type == TYPE_F64) {
+            VReg lv = vortex_promote_to_f64(c, *out_vreg, left_type);
+            VReg rv = vortex_promote_to_f64(c, r_vreg, right_type);
+            VReg dest = ir_new_vreg(c->ir, TYPE_F64);
+            if (op == TOK_STAR) ir_emit_binop(c->ir, IR_FMUL, dest, lv, rv, TYPE_F64);
+            else ir_emit_binop(c->ir, IR_FDIV, dest, lv, rv, TYPE_F64);
+            *out_vreg = dest;
+            left_type = TYPE_F64;
+        } else if (left_type == TYPE_F32 || right_type == TYPE_F32) {
             VReg dest = ir_new_vreg(c->ir, TYPE_F32);
             if (op == TOK_STAR) ir_emit_binop(c->ir, IR_FMUL, dest, *out_vreg, r_vreg, TYPE_F32);
             else ir_emit_binop(c->ir, IR_FDIV, dest, *out_vreg, r_vreg, TYPE_F32);
@@ -1294,7 +1428,15 @@ static VortexType parse_additive(Compiler* c, VReg* out_vreg) {
             continue;
         }
 
-        if (left_type == TYPE_F32 || right_type == TYPE_F32) {
+        if (left_type == TYPE_F64 || right_type == TYPE_F64) {
+            VReg lv = vortex_promote_to_f64(c, *out_vreg, left_type);
+            VReg rv = vortex_promote_to_f64(c, r_vreg, right_type);
+            VReg dest = ir_new_vreg(c->ir, TYPE_F64);
+            if (op == TOK_PLUS) ir_emit_binop(c->ir, IR_FADD, dest, lv, rv, TYPE_F64);
+            else ir_emit_binop(c->ir, IR_FSUB, dest, lv, rv, TYPE_F64);
+            *out_vreg = dest;
+            left_type = TYPE_F64;
+        } else if (left_type == TYPE_F32 || right_type == TYPE_F32) {
             VReg dest = ir_new_vreg(c->ir, TYPE_F32);
             if (op == TOK_PLUS) ir_emit_binop(c->ir, IR_FADD, dest, *out_vreg, r_vreg, TYPE_F32);
             else ir_emit_binop(c->ir, IR_FSUB, dest, *out_vreg, r_vreg, TYPE_F32);
@@ -1341,7 +1483,21 @@ static VortexType parse_relational(Compiler* c, VReg* out_vreg) {
         VortexType right_type = parse_shift(c, &r_vreg);
         VReg dest = ir_new_vreg(c->ir, TYPE_I64);
 
-        if (left_type == TYPE_F32 || right_type == TYPE_F32) {
+        if (left_type == TYPE_F64 || right_type == TYPE_F64) {
+            VReg lv = vortex_promote_to_f64(c, *out_vreg, left_type);
+            VReg rv = vortex_promote_to_f64(c, r_vreg, right_type);
+            IROpcode ir_op;
+            switch (op) {
+                case TOK_EQEQ: ir_op = IR_FEQ; break;
+                case TOK_NEQ:  ir_op = IR_FNE; break;
+                case TOK_LT:   ir_op = IR_FLT; break;
+                case TOK_LE:   ir_op = IR_FLE; break;
+                case TOK_GT:   ir_op = IR_FGT; break;
+                case TOK_GE:   ir_op = IR_FGE; break;
+                default: ir_op = IR_FEQ; break;
+            }
+            ir_emit_binop(c->ir, ir_op, dest, lv, rv, TYPE_F64);
+        } else if (left_type == TYPE_F32 || right_type == TYPE_F32) {
             IROpcode ir_op;
             switch (op) {
                 case TOK_EQEQ: ir_op = IR_FEQ; break;
@@ -1493,14 +1649,21 @@ VortexType vortex_parse_expr(Compiler* c, VReg* out_vreg) {
         VReg v_else;
         VortexType t_else = vortex_parse_expr(c, &v_else);
         int else_sid = c->last_struct_id;
-        VortexType res_t = (t_then == TYPE_F32 || t_else == TYPE_F32) ? TYPE_F32 : t_then;
+        VortexType res_t = (t_then == TYPE_F64 || t_else == TYPE_F64) ? TYPE_F64 :
+                           (t_then == TYPE_F32 || t_else == TYPE_F32) ? TYPE_F32 : t_then;
+        if (res_t == TYPE_F64 && t_else != TYPE_F64) {
+            v_else = vortex_promote_to_f64(c, v_else, t_else);
+        }
         ir_emit_mov(c->ir, res, v_else);
         ir_emit_label(c->ir, lbl_end);
 
         c->ir->vregs[res].type = res_t;
-        c->ir->vregs[res].is_float = (res_t == TYPE_F32);
+        c->ir->vregs[res].is_float = (res_t == TYPE_F32 || res_t == TYPE_F64);
         if (mov1_ip >= 0 && mov1_ip < c->ir->count) {
             c->ir->instrs[mov1_ip].type = res_t;
+            if (res_t == TYPE_F64 && t_then != TYPE_F64) {
+                c->ir->instrs[mov1_ip].op = (t_then == TYPE_F32) ? IR_CAST_F32_TO_F64 : IR_CAST_I64_TO_F64;
+            }
         }
         if (then_sid >= 0) c->last_struct_id = then_sid;
         else if (else_sid >= 0) c->last_struct_id = else_sid;

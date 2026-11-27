@@ -234,6 +234,10 @@ int64_t vortex_alloc_slice_f32(int64_t len) {
     return vortex_alloc_slice_common(len, 4);
 }
 
+int64_t vortex_alloc_slice_f64(int64_t len) {
+    return vortex_alloc_slice_common(len, 8);
+}
+
 int64_t vortex_alloc_slice_i32(int64_t len) {
     return vortex_alloc_slice_common(len, 4);
 }
@@ -816,6 +820,17 @@ int64_t vortex_str_from_f32(int64_t f_bits) {
     memcpy(&f, &b, 4);
     char tmp[32];
     int n = snprintf(tmp, sizeof(tmp), "%.4f", (double)f);
+    size_t len = (n > 0 && n < (int)sizeof(tmp)) ? (size_t)n : strlen(tmp);
+    char* buf = (char*)arena_alloc_compact(len + 1);
+    memcpy(buf, tmp, len + 1);
+    return (int64_t)buf;
+}
+
+int64_t vortex_str_from_f64(int64_t f64_bits) {
+    double v;
+    memcpy(&v, &f64_bits, 8);
+    char tmp[64];
+    int n = snprintf(tmp, sizeof(tmp), "%.15g", v);
     size_t len = (n > 0 && n < (int)sizeof(tmp)) ? (size_t)n : strlen(tmp);
     char* buf = (char*)arena_alloc_compact(len + 1);
     memcpy(buf, tmp, len + 1);

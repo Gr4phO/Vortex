@@ -118,7 +118,8 @@ static bool vreg_is_used_outside_range(const IRBuffer* ir, VReg v, int range_lo,
         const IRInstruction* ins = &ir->instrs[p];
         if (ins->op == IR_NOP) continue;
         if (ins->src1 == v || ins->src2 == v || ins->src3 == v || ins->src4 == v) return true;
-        if (ins->dest == v && ins->op != IR_MOV && ins->op != IR_CONST_I64 && ins->op != IR_CONST_F32) return true;
+        if (ins->dest == v && ins->op != IR_MOV && ins->op != IR_CONST_I64 &&
+            ins->op != IR_CONST_F32 && ins->op != IR_CONST_F64) return true;
         for (int a = 0; a < ins->arg_count; a++) {
             if (ins->args[a] == v) return true;
         }

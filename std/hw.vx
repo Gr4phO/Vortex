@@ -1,0 +1,53 @@
+// Vortex Standard Library: std/hw
+// Silicon Hardware Circuit Mapper, Route Planner & AVX2/FMA3 + OpenCL GPU Kernels
+
+const HW_ROUTE_L1: i64 = 1;
+const HW_ROUTE_L2: i64 = 2;
+const HW_ROUTE_L3: i64 = 3;
+const HW_ROUTE_RAM_STREAM: i64 = 4;
+const HW_ROUTE_GPU: i64 = 5;
+
+const HW_PIN_AUTO: i64 = 0;
+const HW_PIN_LOGICAL: i64 = 1;
+const HW_PIN_PHYSICAL: i64 = 2;
+
+fn hw_route_name(route: i64) -> str {
+    if route == HW_ROUTE_L1 {
+        return "L1_CACHE";
+    }
+    if route == HW_ROUTE_L2 {
+        return "L2_CACHE";
+    }
+    if route == HW_ROUTE_L3 {
+        return "L3_CACHE";
+    }
+    if route == HW_ROUTE_RAM_STREAM {
+        return "RAM_STREAM";
+    }
+    if route == HW_ROUTE_GPU {
+        return "GPU_OPENCL";
+    }
+    return "UNKNOWN";
+}
+
+fn hw_plan_matrix_route(m: i64, n: i64, k: i64, elem_bytes: i64) -> i64 {
+    let working_bytes: i64 = (m * k + k * n + m * n) * elem_bytes;
+    let flops: i64 = 2 * m * n * k;
+    return hw_plan_route(working_bytes, flops);
+}
+
+fn hw_summary_line() -> str {
+    hw_init();
+    let cpu = hw_cpu_name();
+    let gpu = hw_gpu_name();
+    let base = str_concat(cpu, " | L1=");
+    let s1 = str_concat(base, str_from_i64(hw_l1_kb()));
+    let s2 = str_concat(s1, "KB L2=");
+    let s3 = str_concat(s2, str_from_i64(hw_l2_kb()));
+    let s4 = str_concat(s3, "KB L3=");
+    let s5 = str_concat(s4, str_from_i64(hw_l3_kb()));
+    let s6 = str_concat(s5, "KB | SIMD=");
+    let s7 = str_concat(s6, str_from_i64(hw_simd_width()));
+    let s8 = str_concat(s7, "b | GPU=");
+    return str_concat(s8, gpu);
+}

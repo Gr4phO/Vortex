@@ -1,0 +1,251 @@
+{
+  "host": {
+    "system": "Windows",
+    "release": "11",
+    "machine": "AMD64",
+    "cores": 12,
+    "cpu": "AMD Ryzen 5 5500",
+    "gpu": "gfx1031"
+  },
+  "results": [
+    {
+      "name": "C (Clang -O3)",
+      "sublabel": "clang 23 (-O3 -march=native)",
+      "runs": 3,
+      "t1_ms": 34.22,
+      "t2_ms": 28.74,
+      "t3_ms": 3.21,
+      "t4_ms": 70.33,
+      "t5_ms": 30.37,
+      "total_ms": 169.88,
+      "wall_ms": 200.17,
+      "startup_ms": 30.29,
+      "compile_ms": 797.6,
+      "binary_kb": 73.5,
+      "checksums": {
+        "T1_CHK": "2379.995400",
+        "T2_CHK": "3218448098",
+        "T3_CHK": "6920530.340000",
+        "T4_CHK": "3203324994356",
+        "T5_CHK": "59429842"
+      }
+    },
+    {
+      "name": "C++ (Clang++ -O3)",
+      "sublabel": "clang++ 23 (-std=c++20 -O3 -march=native)",
+      "runs": 3,
+      "t1_ms": 33.85,
+      "t2_ms": 29.0,
+      "t3_ms": 3.18,
+      "t4_ms": 63.84,
+      "t5_ms": 30.62,
+      "total_ms": 167.77,
+      "wall_ms": 195.66,
+      "startup_ms": 27.89,
+      "compile_ms": 1513.7,
+      "binary_kb": 82.5,
+      "checksums": {
+        "T1_CHK": "2379.995400",
+        "T2_CHK": "3218448098",
+        "T3_CHK": "6920530.340000",
+        "T4_CHK": "3203324994356",
+        "T5_CHK": "59429842"
+      }
+    },
+    {
+      "name": "Rust (-O3)",
+      "sublabel": "rustc 1.99 (-C opt-level=3 -C target-cpu=native)",
+      "runs": 3,
+      "t1_ms": 34.28,
+      "t2_ms": 29.62,
+      "t3_ms": 17.6,
+      "t4_ms": 73.43,
+      "t5_ms": 30.74,
+      "total_ms": 189.36,
+      "wall_ms": 216.2,
+      "startup_ms": 26.84,
+      "compile_ms": 928.5,
+      "binary_kb": 4317.5,
+      "checksums": {
+        "T1_CHK": "2379.995400",
+        "T2_CHK": "3218448098",
+        "T3_CHK": "6920530.340000",
+        "T4_CHK": "3203324994356",
+        "T5_CHK": "59429842"
+      }
+    },
+    {
+      "name": "Go (1.27)",
+      "sublabel": "go build (goroutines T5)",
+      "runs": 3,
+      "t1_ms": 35.42,
+      "t2_ms": 31.53,
+      "t3_ms": 17.02,
+      "t4_ms": 69.61,
+      "t5_ms": 29.52,
+      "total_ms": 186.74,
+      "wall_ms": 215.92,
+      "startup_ms": 29.18,
+      "compile_ms": 10234.6,
+      "binary_kb": 2474.5,
+      "checksums": {
+        "T1_CHK": "2379.995400",
+        "T2_CHK": "3218448098",
+        "T3_CHK": "6920530.340000",
+        "T4_CHK": "3203324994356",
+        "T5_CHK": "59429842"
+      }
+    },
+    {
+      "name": "Vortex (--release)",
+      "sublabel": "JIT x86-64 v1.3.0 (f64 SSE2 + 12T spin-pool)",
+      "runs": 3,
+      "t1_ms": 40.7,
+      "t2_ms": 30.88,
+      "t3_ms": 26.74,
+      "t4_ms": 78.69,
+      "t5_ms": 32.28,
+      "total_ms": 212.12,
+      "wall_ms": 242.3,
+      "startup_ms": 30.18,
+      "compile_ms": 0.0,
+      "binary_kb": 584.5,
+      "checksums": {
+        "T1_CHK": "2379.995400",
+        "T2_CHK": "3218448098",
+        "T3_CHK": "6920530.340000",
+        "T4_CHK": "3203324994356",
+        "T5_CHK": "59429842"
+      }
+    },
+    {
+      "name": "Vortex (--safe)",
+      "sublabel": "JIT x86-64 v1.3.0 (bounds/arena checks ON)",
+      "runs": 3,
+      "t1_ms": 295.36,
+      "t2_ms": 167.82,
+      "t3_ms": 579.17,
+      "t4_ms": 281.12,
+      "t5_ms": 33.83,
+      "total_ms": 1360.65,
+      "wall_ms": 1390.24,
+      "startup_ms": 29.59,
+      "compile_ms": 0.0,
+      "binary_kb": 584.5,
+      "checksums": {
+        "T1_CHK": "2379.995400",
+        "T2_CHK": "3218448098",
+        "T3_CHK": "6920530.340000",
+        "T4_CHK": "3203324994356",
+        "T5_CHK": "59429842"
+      }
+    },
+    {
+      "name": "Java (OpenJDK 21)",
+      "sublabel": "HotSpot 21 C2 JIT (parallel IntStream T5)",
+      "runs": 3,
+      "t1_ms": 55.46,
+      "t2_ms": 54.15,
+      "t3_ms": 9.17,
+      "t4_ms": 69.32,
+      "t5_ms": 43.11,
+      "total_ms": 237.68,
+      "wall_ms": 508.06,
+      "startup_ms": 270.38,
+      "compile_ms": 732.3,
+      "binary_kb": 4.4,
+      "checksums": {
+        "T1_CHK": "2379.995400",
+        "T2_CHK": "3218448098",
+        "T3_CHK": "6920530.340000",
+        "T4_CHK": "3203324994356",
+        "T5_CHK": "59429842"
+      }
+    },
+    {
+      "name": "C# (.NET v4.8)",
+      "sublabel": "csc 64-bit /optimize+ (Parallel.For T5)",
+      "runs": 3,
+      "t1_ms": 33.98,
+      "t2_ms": 30.92,
+      "t3_ms": 24.99,
+      "t4_ms": 76.12,
+      "t5_ms": 21.26,
+      "total_ms": 189.68,
+      "wall_ms": 238.72,
+      "startup_ms": 49.04,
+      "compile_ms": 1532.5,
+      "binary_kb": 6.0,
+      "checksums": {
+        "T1_CHK": "2379.995400",
+        "T2_CHK": "3218448098",
+        "T3_CHK": "6920530.340000",
+        "T4_CHK": "3203324994356",
+        "T5_CHK": "59429842"
+      }
+    },
+    {
+      "name": "Node.js (v26 V8)",
+      "sublabel": "V8 JIT + worker_threads T5",
+      "runs": 3,
+      "t1_ms": 48.78,
+      "t2_ms": 49.33,
+      "t3_ms": 40.37,
+      "t4_ms": 112.44,
+      "t5_ms": 73.97,
+      "total_ms": 335.96,
+      "wall_ms": 450.48,
+      "startup_ms": 114.52,
+      "compile_ms": 0.0,
+      "binary_kb": 97751.8,
+      "checksums": {
+        "T1_CHK": "2379.995400",
+        "T2_CHK": "3218448098",
+        "T3_CHK": "6920530.340000",
+        "T4_CHK": "3203324994356",
+        "T5_CHK": "59429842"
+      }
+    },
+    {
+      "name": "Python 3.12",
+      "sublabel": "CPython 3.12 (single-thread T5 GIL)",
+      "runs": 1,
+      "t1_ms": 2334.69,
+      "t2_ms": 797.19,
+      "t3_ms": 2450.49,
+      "t4_ms": 1110.24,
+      "t5_ms": 6837.08,
+      "total_ms": 13628.96,
+      "wall_ms": 13841.1,
+      "startup_ms": 212.14,
+      "compile_ms": 0.0,
+      "binary_kb": 102.5,
+      "checksums": {
+        "T1_CHK": "2379.995400",
+        "T2_CHK": "3218448098",
+        "T3_CHK": "6920530.340000",
+        "T4_CHK": "3203324994356",
+        "T5_CHK": "59429842"
+      }
+    }
+  ],
+  "silicon": {
+    "cpu_name": "AMD Ryzen 5 5500",
+    "gpu_name": "gfx1031",
+    "vx_scalar_f64_512_ms": 112.02,
+    "vx_hw_f64_512_ms": 1.47,
+    "vx_hw_f64_gflops": 182.36,
+    "vx_hw_f64_route": 3,
+    "vx_hw_f64_err": 0.0,
+    "vx_hw_f32_cpu_1024_ms": 6.01,
+    "vx_hw_f32_cpu_gflops": 357.44,
+    "vx_hw_f32_gpu_1024_ms": 4.55,
+    "vx_hw_f32_gpu_gflops": 471.87,
+    "vx_hw_f32_gpu_route": 5,
+    "vx_hw_f32_err": 0.0,
+    "c_f64_512_ms": 15.13,
+    "c_f64_512_gflops": 17.75,
+    "c_f32_1024_ms": 57.99,
+    "c_f32_1024_gflops": 37.03
+  }
+}

@@ -87,3 +87,44 @@ fn deg_to_rad(deg: f32) -> f32 {
 fn rad_to_deg(rad: f32) -> f32 {
     return rad * 57.2957795;
 }
+
+const MATH_PI_F64: f64 = 3.14159265358979323846;
+const MATH_TAU_F64: f64 = 6.28318530717958647692;
+const MATH_E_F64: f64 = 2.71828182845904523536;
+
+fn abs_f64(x: f64) -> f64 {
+    return fabs_f64(x);
+}
+
+fn min_f64(a: f64, b: f64) -> f64 {
+    return a < b ? a : b;
+}
+
+fn max_f64(a: f64, b: f64) -> f64 {
+    return a > b ? a : b;
+}
+
+fn clamp_f64(x: f64, lo: f64, hi: f64) -> f64 {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+
+fn lerp_f64(a: f64, b: f64, t: f64) -> f64 {
+    return a + (b - a) * t;
+}
+
+fn round_f64(x: f64) -> f64 {
+    if x >= (0.0 as f64) {
+        return floor_f64(x + (0.5 as f64));
+    }
+    return ceil_f64(x - (0.5 as f64));
+}
+
+fn deg_to_rad_f64(deg: f64) -> f64 {
+    return deg * (0.017453292519943295 as f64);
+}
+
+fn rad_to_deg_f64(rad: f64) -> f64 {
+    return rad * (57.29577951308232 as f64);
+}
