@@ -1,1 +1,31 @@
 1 ICON "../docs/assets/vortex.ico"
+1 24 "vortex.manifest"
+
+1 VERSIONINFO
+FILEVERSION     1,3,0,0
+PRODUCTVERSION  1,3,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          0x40004L
+FILETYPE        0x1L
+FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Vortex Programming Language (Gr4phO)\0"
+            VALUE "FileDescription",  "Vortex Programming Language Native JIT Compiler & CLI\0"
+            VALUE "FileVersion",      "1.3.0.0\0"
+            VALUE "InternalName",     "vortex\0"
+            VALUE "LegalCopyright",   "Copyright (c) Gr4phO - Apache-2.0 License\0"
+            VALUE "OriginalFilename", "vortex.exe\0"
+            VALUE "ProductName",      "Vortex Programming Language\0"
+            VALUE "ProductVersion",   "1.3.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

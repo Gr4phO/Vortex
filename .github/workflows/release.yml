@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   build-windows:
@@ -21,18 +23,42 @@ jobs:
         shell: cmd
         run: |
           if not exist dist mkdir dist
-          set VORTEX_VER=1.1.0
+          set VORTEX_VER=1.3.0
           if exist VERSION set /p VORTEX_VER=<VERSION
           for /f "tokens=* delims= " %%a in ("%VORTEX_VER%") do set VORTEX_VER=%%a
-          set VORTEX_SRCS=src/arena.c src/lexer.c src/modules.c src/parser_expr.c src/parser_stmt.c src/ir_core.c src/ir_opt.c src/ir_vec_ra.c src/ffi.c src/jit_x64_simd.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/gui.c src/packager.c src/runtime.c src/main.c
-          clang -std=c99 -O2 -s -Wall -Wextra -DVORTEX_VERSION=\"%VORTEX_VER%\" %VORTEX_SRCS% -o dist/vortex-windows-x64.exe -luser32 -lgdi32
+          set VORTEX_SRCS=src/arena.c src/lexer.c src/modules.c src/parser_expr.c src/parser_stmt.c src/ir_core.c src/ir_opt.c src/ir_vec_ra.c src/ffi.c src/jit_x64_simd.c src/jit_x64.c src/jit_arm64.c src/debug_info.c src/pkg.c src/lsp.c src/gui.c src/packager.c src/hw.c src/runtime.c src/main.c
+          set VORTEX_RES=
+          where llvm-rc >nul 2>nul
+          if %ERRORLEVEL% EQU 0 (
+            llvm-rc /FO vortex.res src\vortex.rc && set VORTEX_RES=vortex.res
+          ) else (
+            where windres >nul 2>nul
+            if %ERRORLEVEL% EQU 0 (
+              windres src\vortex.rc -O coff -o vortex.res && set VORTEX_RES=vortex.res
+            )
+          )
+          clang -std=c99 -O2 -s -Wall -Wextra -DVORTEX_VERSION=\"%VORTEX_VER%\" %VORTEX_SRCS% %VORTEX_RES% -o dist/vortex-windows-x64.exe -luser32 -lgdi32
+          if errorlevel 1 exit /b 1
+          if exist vortex.res del /Q vortex.res >nul 2>nul
           clang -std=c99 -O2 -s -shared -DVORTEX_SHARED_LIB -DVORTEX_HEADLESS -Wall -Wextra -DVORTEX_VERSION=\"%VORTEX_VER%\" %VORTEX_SRCS% -o dist/vortex-windows-x64.dll -luser32 -lgdi32
+          if errorlevel 1 exit /b 1
           copy /Y dist\vortex-windows-x64.exe vortex.exe >nul
           .\dist\vortex-windows-x64.exe --version
 
       - name: Run Vortex test suite (Windows x64)
         shell: cmd
         run: .\tests\run_tests.bat
+
+      - name: Package portable Windows x64 zip archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/pkg_win | Out-Null
+          Copy-Item dist/vortex-windows-x64.exe dist/pkg_win/vortex.exe
+          Copy-Item dist/vortex-windows-x64.dll dist/pkg_win/vortex.dll
+          Copy-Item -Recurse std dist/pkg_win/std
+          Copy-Item LICENSE dist/pkg_win/LICENSE
+          Copy-Item README.md dist/pkg_win/README.md
+          Compress-Archive -Path dist/pkg_win/* -DestinationPath dist/vortex-windows-x64.zip -Force
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -41,6 +67,7 @@ jobs:
           path: |
             dist/vortex-windows-x64.exe
             dist/vortex-windows-x64.dll
+            dist/vortex-windows-x64.zip
 
   build-linux:
     name: Build & Test Linux x86-64
@@ -152,6 +179,7 @@ jobs:
           mkdir -p release_assets
           cp dist_artifacts/vortex-windows-x64/vortex-windows-x64.exe release_assets/
           cp dist_artifacts/vortex-windows-x64/vortex-windows-x64.dll release_assets/
+          cp dist_artifacts/vortex-windows-x64/vortex-windows-x64.zip release_assets/
           cp dist_artifacts/vortex-linux-x64/vortex-linux-x64 release_assets/
           cp dist_artifacts/vortex-linux-x64/libvortex-linux-x64.so release_assets/
           cp dist_artifacts/vortex-macos/vortex-macos-arm64 release_assets/
@@ -161,11 +189,21 @@ jobs:
           (cd release_assets && sha256sum * > SHA256SUMS.txt)
           ls -lh release_assets/
 
+      - name: Generate build provenance attestations
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release_assets/*
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          body: |
+            > **Windows users:** Downloading `vortex-windows-x64.zip` (portable archive containing `vortex.exe`, `vortex.dll`, `std/`, `LICENSE`, and `README.md`) is recommended over the standalone `.exe` to reduce browser download warnings. Always verify checksums in `SHA256SUMS.txt` or via GitHub Artifact Attestations.
+            >
+            > Free code signing on Windows is provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/) (see [Code Signing & Privacy Policy](https://github.com/Gr4phO/Vortex#code-signing--privacy-policy)).
           files: |
+            release_assets/vortex-windows-x64.zip
             release_assets/vortex-windows-x64.exe
             release_assets/vortex-windows-x64.dll
             release_assets/vortex-linux-x64

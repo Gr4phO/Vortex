@@ -192,6 +192,14 @@ tests\run_tests.bat   :: Windows (18 suites : unitaires, ergonomics, opt_regress
 
 ---
 
+## Code Signing & Privacy Policy
+
+- **Code Signing Policy** : Free code signing on Windows is provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+- **Team Roles & Build Provenance** : Committers, Reviewers, and Approvers: `@Gr4phO` (project maintainer). All official release binaries are built automatically from public sources via GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)), accompanied by `SHA256SUMS.txt` checksums and GitHub Artifact Attestations. On Windows, prefer downloading the portable `vortex-windows-x64.zip` archive from [GitHub Releases](https://github.com/Gr4phO/Vortex/releases).
+- **Privacy Policy** : Vortex (`vortex`, `vortex.dll` / `libvortex`, and the VS Code extension) does not collect, store, or transmit any user data, telemetry, or analytics. Network requests only occur when explicitly triggered by user code (`std/net`, `std/http`, `vortex pkg`).
+
+---
+
 ## Licence
 
 Distribué sous licence [Apache-2.0](LICENSE).
