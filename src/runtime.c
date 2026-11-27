@@ -87,6 +87,26 @@ typedef struct {
 static VortexSourceMap g_source_map = {0};
 static bool g_source_map_active = false;
 
+#define MAX_CALL_SITES 16384
+typedef struct {
+    char name[64];
+    bool called_in_unsafe;
+    const char* file;
+    int line;
+} VortexCallSite;
+
+static VortexCallSite g_call_sites[MAX_CALL_SITES];
+static int g_call_site_count = 0;
+
+void vortex_record_user_call_site(const char* name, bool called_in_unsafe, const char* file, int line) {
+    if (!name || !name[0] || g_call_site_count >= MAX_CALL_SITES) return;
+    VortexCallSite* cs = &g_call_sites[g_call_site_count++];
+    vx_str_copy(cs->name, sizeof(cs->name), name);
+    cs->called_in_unsafe = called_in_unsafe;
+    cs->file = file;
+    cs->line = line;
+}
+
 void vortex_source_map_reset(void) {
     for (int i = 0; i < g_source_map.file_count; i++) {
         free(g_source_map.files[i]);
@@ -407,12 +427,13 @@ void vortex_diag_add(VortexDiagSeverity sev, const char* code, const char* file,
         }
     }
 
-    /* Deduplicate identical code+file+line diagnostics */
+    /* Deduplicate identical code+file+line diagnostics (and collapse duplicate E301 on same line) */
     for (int i = 0; i < g_diag_count; i++) {
         if (g_diags[i].line == line && g_diags[i].severity == sev &&
             strcmp(g_diags[i].file, f) == 0 &&
-            strcmp(g_diags[i].code, code ? code : "") == 0 &&
-            strcmp(g_diags[i].message, msg ? msg : "") == 0) {
+            ((code && strcmp(code, "E301") == 0 && strcmp(g_diags[i].code, "E301") == 0) ||
+             (strcmp(g_diags[i].code, code ? code : "") == 0 &&
+              strcmp(g_diags[i].message, msg ? msg : "") == 0))) {
             return;
         }
     }
@@ -658,9 +679,10 @@ void vortex_ultrasafe_audit_symbols(const SymbolTable* st, int start_idx, int en
         if (s->name[0] == '_' || s->decl_line <= 0) continue;
         if (!s->used) {
             char msg[160];
+            char help[160];
             snprintf(msg, sizeof(msg), "Unused local variable '%s' in '%s'", s->name, fn_name && fn_name[0] ? fn_name : "__main__");
-            vortex_diag_add(VDIAG_WARNING, "W104", g_current_filename, s->decl_line, s->decl_col, msg,
-                            "Prefix with '_' (e.g. '_tmp') or remove the unused variable.");
+            snprintf(help, sizeof(help), "Prefix with '_' (e.g. '_%s') or remove the unused variable.", s->name);
+            vortex_diag_add(VDIAG_WARNING, "W104", g_current_filename, s->decl_line, s->decl_col, msg, help);
         } else if (s->is_mut && !s->reassigned) {
             char msg[160];
             snprintf(msg, sizeof(msg), "Variable '%s' declared 'mut' is never reassigned", s->name);
@@ -700,6 +722,25 @@ int64_t vortex_assert_eq(int64_t a, int64_t b) {
         vortex_error(msg);
     }
     return 1;
+}
+
+void vortex_compile_error(const char* code, int line, int col, const char* msg, const char* suggestion) {
+    const char* c = (code && code[0]) ? code : "E001";
+    const char* m = (msg && msg[0]) ? msg : "Syntax or compilation error";
+    if (g_recover_active && g_ultrasafe_level >= 3) {
+        vortex_diag_add(VDIAG_ERROR, c, g_current_filename, line, col > 0 ? col : 1, m, suggestion);
+        longjmp(g_recover_jmp, 1);
+    }
+    const char* out_file = g_current_filename ? g_current_filename : "<input>";
+    int out_line = line;
+    map_diag_location(&out_file, &out_line);
+    char full[512];
+    if (out_line > 0) {
+        snprintf(full, sizeof(full), "%s at %s:%d:%d", m, out_file, out_line, col > 0 ? col : 1);
+    } else {
+        vx_str_copy(full, sizeof(full), m);
+    }
+    vortex_error(full);
 }
 
 void vortex_error(const char* msg) {
@@ -1061,6 +1102,7 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
     }
     g_user_func_count = 0;
     g_user_func_reloc_count = 0;
+    g_call_site_count = 0;
     g_ffi_func_count = 0;
     g_literal_string_count = 0;
 
@@ -1098,12 +1140,18 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
         g_recover_active = true;
         int recovery_steps = 0;
         while (comp.lex->cur.type != TOK_EOF && recovery_steps < 512) {
+            size_t start_pos = comp.lex->pos;
             if (setjmp(g_recover_jmp) == 0) {
                 parse_statement(&comp);
             } else {
                 recovery_steps++;
                 comp.unsafe_depth = 0;
                 comp.loop_depth = 0;
+                if (comp.lex->pos == start_pos &&
+                    comp.lex->cur.type != TOK_EOF &&
+                    comp.lex->cur.type != TOK_SEMI) {
+                    next_token(comp.lex);
+                }
                 vortex_lexer_sync(comp.lex, false);
             }
         }
@@ -1132,6 +1180,43 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
     g_recover_active = (g_ultrasafe_level >= 3);
     ir_region_verify(&main_ir);
     g_recover_active = saved_rec;
+
+    /* Audit all IR_CALL_USER sites recorded inside user function bodies */
+    for (int i = 0; i < g_call_site_count; i++) {
+        const VortexCallSite* cs = &g_call_sites[i];
+        UserFunc* uf = user_func_find(cs->name);
+        if (!uf) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[VORTEX ERROR] Unresolved user function '%s'", cs->name);
+            if (g_ultrasafe_level >= 3) {
+                vortex_diag_add(VDIAG_ERROR, "E101",
+                                cs->file ? cs->file : g_current_filename,
+                                cs->line, 1, msg, "Define the function or import its module.");
+                continue;
+            }
+            const char* err_file = cs->file ? cs->file : g_current_filename;
+            int err_line = cs->line;
+            map_diag_location(&err_file, &err_line);
+            fprintf(stderr, "%s at %s:%d\n", msg, err_file, err_line);
+            vortex_error("");
+        }
+        uf->called = true;
+        if (uf->is_unsafe && !cs->called_in_unsafe) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[VORTEX SAFETY ERROR] Calling unsafe fn '%s' requires an unsafe block or unsafe fn", uf->name);
+            if (g_ultrasafe_level >= 3) {
+                vortex_diag_add(VDIAG_ERROR, "E302",
+                                cs->file ? cs->file : g_current_filename,
+                                cs->line, 1, msg, "Wrap the call in 'unsafe { ... }' or mark the caller 'unsafe fn'.");
+                continue;
+            }
+            const char* err_file = cs->file ? cs->file : g_current_filename;
+            int err_line = cs->line;
+            map_diag_location(&err_file, &err_line);
+            fprintf(stderr, "%s at %s:%d\n", msg, err_file, err_line);
+            vortex_error("");
+        }
+    }
 
     /* Pre-scan main_ir calls so `--check` and `vortex_ultrasafe_audit_program()` see direct/forward calls */
     for (int i = 0; i < main_ir.count; i++) {

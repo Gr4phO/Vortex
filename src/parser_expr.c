@@ -320,10 +320,15 @@ bool vortex_is_scalar_int_type(VortexType t) {
 
 void vortex_require_unsafe(Compiler* c, const char* what, int line, int col) {
     if (c->unsafe_depth <= 0) {
-        fprintf(stderr,
-                "[VORTEX SAFETY ERROR] %s requires an 'unsafe' block or 'unsafe fn' at %s:%d:%d\n",
-                what, g_current_filename ? g_current_filename : "<input>", line, col);
-        vortex_error("");
+        char msg[256];
+        snprintf(msg, sizeof(msg), "[VORTEX SAFETY ERROR] %s requires an 'unsafe' block or 'unsafe fn'", what);
+        if (g_recover_active && g_ultrasafe_level >= 3) {
+            vortex_diag_add(VDIAG_ERROR, "E302", g_current_filename, line, col > 0 ? col : 1, msg,
+                            "Wrap the operation in an 'unsafe { ... }' block or mark the enclosing function 'unsafe fn'.");
+            return;
+        }
+        vortex_compile_error("E302", line, col, msg,
+                             "Wrap the operation in an 'unsafe { ... }' block or mark the enclosing function 'unsafe fn'.");
     }
 }
 
@@ -344,10 +349,15 @@ void vortex_mark_region_popped(Compiler* c, int rid) {
 
 void vortex_check_symbol_alive(Compiler* c, Symbol* sym, int line, int col) {
     if (sym && sym->is_ref && vortex_region_is_popped(c, sym->region_id)) {
-        fprintf(stderr,
-                "[VORTEX REGION ERROR] Use of reference '%s' after arena 'scope_pop()' at %s:%d:%d\n",
-                sym->name, g_current_filename ? g_current_filename : "<input>", line, col);
-        vortex_error("");
+        char msg[256];
+        snprintf(msg, sizeof(msg), "[VORTEX REGION ERROR] Use of reference '%s' after arena 'scope_pop()'", sym->name);
+        if (g_recover_active && g_ultrasafe_level >= 3) {
+            vortex_diag_add(VDIAG_ERROR, "E301", g_current_filename, line, col > 0 ? col : 1, msg,
+                            "Use the reference before 'scope_pop()' or allocate it in an outer arena scope.");
+            return;
+        }
+        vortex_compile_error("E301", line, col, msg,
+                             "Use the reference before 'scope_pop()' or allocate it in an outer arena scope.");
     }
 }
 
@@ -390,10 +400,9 @@ static VortexType parse_additive(Compiler* c, VReg* out_vreg);
 
 void vortex_parser_match(Compiler* c, VortexTokenType expected) {
     if (c->lex->cur.type != expected) {
-        fprintf(stderr, "[VORTEX SYNTAX ERROR] Unexpected token '%s' at %s:%d:%d\n",
-                c->lex->cur.text, g_current_filename ? g_current_filename : "<input>",
-                c->lex->cur.line, c->lex->cur.col);
-        vortex_error("");
+        char msg[256];
+        snprintf(msg, sizeof(msg), "[VORTEX SYNTAX ERROR] Unexpected token '%s'", c->lex->cur.text);
+        vortex_compile_error("E001", c->lex->cur.line, c->lex->cur.col, msg, NULL);
     }
     next_token(c->lex);
 }
@@ -424,16 +433,17 @@ static void check_container_escape(Compiler* c, VReg val_v, VReg cont_v, bool is
         int val_depth = c->ir->vregs[val_v].region_depth;
         int cont_depth = c->ir->vregs[cont_v].region_depth;
         if (val_depth > cont_depth) {
+            char msg[256];
             if (is_vec_push) {
-                fprintf(stderr,
-                        "[VORTEX REGION ERROR] Cannot push inner arena reference (depth %d) into outer vector (depth %d) at %s:%d:%d\n",
-                        val_depth, cont_depth, g_current_filename ? g_current_filename : "<input>", line, col);
+                snprintf(msg, sizeof(msg),
+                         "[VORTEX REGION ERROR] Cannot push inner arena reference (depth %d) into outer vector (depth %d)",
+                         val_depth, cont_depth);
             } else {
-                fprintf(stderr,
-                        "[VORTEX REGION ERROR] Cannot store inner arena reference (depth %d) into outer container (depth %d) at %s:%d:%d\n",
-                        val_depth, cont_depth, g_current_filename ? g_current_filename : "<input>", line, col);
+                snprintf(msg, sizeof(msg),
+                         "[VORTEX REGION ERROR] Cannot store inner arena reference (depth %d) into outer container (depth %d)",
+                         val_depth, cont_depth);
             }
-            vortex_error("");
+            vortex_compile_error("E301", line, col, msg, "Allocate the value in an outer arena scope.");
         }
     }
 }
@@ -895,7 +905,9 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
 
             BuiltinFunc* bf = builtin_find(name);
             if (bf) {
-                if (strncmp(name, "ffi_", 4) == 0 || strncmp(name, "ptr_", 4) == 0) {
+                if (strcmp(name, "alloc") == 0) {
+                    vortex_require_unsafe(c, "Raw memory allocation 'alloc()'", line, col);
+                } else if (strncmp(name, "ffi_", 4) == 0 || strncmp(name, "ptr_", 4) == 0) {
                     vortex_require_unsafe(c, "Low-level pointer/dynamic FFI builtin", line, col);
                 }
 
@@ -1016,12 +1028,12 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
 
         Symbol* sym = vortex_symtab_find(c->st, name);
         if (!sym) {
-            fprintf(stderr, "[VORTEX ERROR] Undefined variable '%s' at %s:%d:%d\n",
-                    name, g_current_filename ? g_current_filename : "<input>", l->cur.line, l->cur.col);
-            vortex_error("");
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[VORTEX ERROR] Undefined variable '%s'", name);
+            vortex_compile_error("E001", line, col, msg, "Declare the variable with 'let' before using it.");
         }
-        vortex_check_symbol_alive(c, sym, line, col);
         sym->used = true;
+        vortex_check_symbol_alive(c, sym, line, col);
 
         VortexType primary_type = sym->type;
         int primary_struct_id = sym->struct_id;
@@ -1069,9 +1081,9 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
 
             VortexField* f = vortex_resolve_struct_field(primary_struct_id, fname);
             if (!f) {
-                fprintf(stderr, "[VORTEX ERROR] Unknown field '%s' on variable '%s' at %s:%d:%d\n",
-                        fname, sym->name, g_current_filename ? g_current_filename : "<input>", l->cur.line, l->cur.col);
-                vortex_error("");
+                char msg[256];
+                snprintf(msg, sizeof(msg), "[VORTEX ERROR] Unknown field '%s' on variable '%s'", fname, sym->name);
+                vortex_compile_error("E001", l->cur.line, l->cur.col, msg, NULL);
             }
 
             if (g_compile_mode == VORTEX_MODE_SAFE && c->unsafe_depth == 0) {
@@ -1089,9 +1101,9 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
         return primary_type;
     }
 
-    fprintf(stderr, "[VORTEX SYNTAX ERROR] Expected primary expression, got '%s' at %s:%d:%d\n",
-            l->cur.text, g_current_filename ? g_current_filename : "<input>", l->cur.line, l->cur.col);
-    vortex_error("");
+    char msg[256];
+    snprintf(msg, sizeof(msg), "[VORTEX SYNTAX ERROR] Expected primary expression, got '%s'", l->cur.text);
+    vortex_compile_error("E001", l->cur.line, l->cur.col, msg, "Provide a valid expression before this token.");
     return TYPE_I64;
 }
 
@@ -1105,9 +1117,7 @@ static VortexType parse_cast(Compiler* c, VReg* out_vreg) {
         int dst_sid = -1;
         VortexType dst_t = parse_type_name(c->lex, &dst_sid);
         if (dst_t == TYPE_UNKNOWN) {
-            fprintf(stderr, "[VORTEX SYNTAX ERROR] Expected target type after 'as' at %s:%d:%d\n",
-                    g_current_filename ? g_current_filename : "<input>", line, col);
-            vortex_error("");
+            vortex_compile_error("E001", line, col, "[VORTEX SYNTAX ERROR] Expected target type after 'as'", NULL);
         }
 
         if ((vortex_is_pointer_type(t) || vortex_is_pointer_type(dst_t)) && t != dst_t) {

@@ -355,12 +355,18 @@ void next_token(Lexer* lex) {
 }
 
 void vortex_lexer_sync(Lexer* l, bool in_function) {
-    if (!l || l->cur.type == TOK_EOF) return;
-    int brace_depth = 0;
+    if (!l || l->cur.type == TOK_EOF || l->cur.type == TOK_RBRACE) return;
     if (l->cur.type == TOK_SEMI) {
         next_token(l);
         return;
     }
+    if (in_function && (l->cur.type == TOK_LET || l->cur.type == TOK_IF || l->cur.type == TOK_FOR ||
+                        l->cur.type == TOK_MATCH || l->cur.type == TOK_WHILE || l->cur.type == TOK_RETURN ||
+                        l->cur.type == TOK_BREAK || l->cur.type == TOK_CONTINUE || l->cur.type == TOK_UNSAFE ||
+                        l->cur.type == TOK_FN)) {
+        return;
+    }
+    int brace_depth = 0;
     if (l->cur.type == TOK_LBRACE) brace_depth = 1;
     next_token(l);
 
@@ -390,7 +396,8 @@ void vortex_lexer_sync(Lexer* l, bool in_function) {
                 return;
             }
             if (in_function && (t == TOK_LET || t == TOK_IF || t == TOK_FOR || t == TOK_MATCH ||
-                                t == TOK_WHILE || t == TOK_RETURN || t == TOK_BREAK || t == TOK_CONTINUE)) {
+                                t == TOK_WHILE || t == TOK_RETURN || t == TOK_BREAK || t == TOK_CONTINUE ||
+                                t == TOK_UNSAFE)) {
                 return;
             }
         }

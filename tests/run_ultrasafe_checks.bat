@@ -189,6 +189,49 @@ if !errorlevel! equ 0 (
 )
 echo   [PASS] Source map remaps file/line across imports and filters imported W105 warnings.
 
-del "%TMP1%" "%TMPWARN%" "%TMP2%" "%TMP2REC%" "%TMP3%" "%TMP7%" "%TMP8MOD%" "%TMP8MAIN%" "%TEMP%\vx_warn.json" "%TEMP%\vx_us2.out" "%TEMP%\vx_us3.json" "%TEMP%\vx_test.json" "%TEMP%\vx_spec.json" "%TEMP%\vx_us3_clean.json" "%TEMP%\vx_us3_map.json" 2>nul
+REM 9) Multi-error single-pass recovery (E301, E302 for alloc, E001x2, E101, E202) with 0 false W104 warnings
+set TMP9=%TEMP%\vx_us3_all6.vx
+> "%TMP9%" (
+    echo fn leak_ref^(^) -^> [i64] {
+    echo     let m = scope_push^(^);
+    echo     let tmp = slice_i64^(4^);
+    echo     scope_pop^(m^);
+    echo     return tmp;
+    echo }
+    echo fn unsafe_alloc^(^) -^> ptr {
+    echo     return alloc^(64^);
+    echo }
+    echo fn multi_fn^(^) -^> i64 {
+    echo     let imm = 10;
+    echo     imm = 20;
+    echo     let broken = ;
+    echo     let ghost = unknown_fn_404^(1, 2^);
+    echo     return ghost;
+    echo }
+    echo fn after_err^(^) -^> i64 {
+    echo     let nums = [1, 2, 3];
+    echo     return nums[99];
+    echo }
+    echo print^(after_err^(^)^);
+    echo print^(multi_fn^(^)^);
+    echo print^(slice_len^(leak_ref^(^)^)^);
+    echo print^(unsafe_alloc^(^)^);
+)
+"%VTX%" --ultrasafe 3 --check --json "%TMP9%" >"%TEMP%\vx_us3_all6.json" 2>&1
+if !errorlevel! equ 0 (
+    echo [FAIL] --ultrasafe 3 should report 6 errors on TMP9!
+    exit /b 1
+)
+for %%c in ("E301" "E302" "E001" "E101" "E202" "\"errors\": 6" "\"warnings\": 0") do (
+    findstr /C:%%c "%TEMP%\vx_us3_all6.json" >nul
+    if !errorlevel! neq 0 (
+        echo [FAIL] --ultrasafe 3 missing %%~c in TMP9 JSON output!
+        type "%TEMP%\vx_us3_all6.json"
+        exit /b 1
+    )
+)
+echo   [PASS] --ultrasafe 3 reported all 6 distinct errors (E301, E302, E001x2, E101, E202) and 0 warnings.
+
+del "%TMP1%" "%TMPWARN%" "%TMP2%" "%TMP2REC%" "%TMP3%" "%TMP7%" "%TMP8MOD%" "%TMP8MAIN%" "%TMP9%" "%TEMP%\vx_warn.json" "%TEMP%\vx_us2.out" "%TEMP%\vx_us3.json" "%TEMP%\vx_test.json" "%TEMP%\vx_spec.json" "%TEMP%\vx_us3_clean.json" "%TEMP%\vx_us3_map.json" "%TEMP%\vx_us3_all6.json" 2>nul
 echo [ULTRASAFE CHECKS] All checks PASSED!
 exit /b 0

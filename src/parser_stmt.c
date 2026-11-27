@@ -127,6 +127,7 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
         g_recover_active = true;
         int recovery_steps = 0;
         while (fn_comp.lex->cur.type != TOK_RBRACE && fn_comp.lex->cur.type != TOK_EOF && recovery_steps < 512) {
+            size_t start_pos = fn_comp.lex->pos;
             if (setjmp(g_recover_jmp) == 0) {
                 parse_statement(&fn_comp);
             } else {
@@ -134,6 +135,12 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
                 recovery_steps++;
                 fn_comp.unsafe_depth = is_unsafe ? 1 : 0;
                 fn_comp.loop_depth = 0;
+                if (fn_comp.lex->pos == start_pos &&
+                    fn_comp.lex->cur.type != TOK_EOF &&
+                    fn_comp.lex->cur.type != TOK_SEMI &&
+                    fn_comp.lex->cur.type != TOK_RBRACE) {
+                    next_token(fn_comp.lex);
+                }
                 vortex_lexer_sync(fn_comp.lex, true);
             }
         }
@@ -172,6 +179,15 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
 
     if (g_ultrasafe_level >= 1) {
         vortex_ultrasafe_audit_ir(&fn_ir, fn_st, uf->name, explicit_ret_type ? uf->ret_type : TYPE_VOID, fn_decl_line);
+    }
+
+    for (int i = 0; i < fn_ir.count; i++) {
+        if (fn_ir.instrs[i].op == IR_CALL_USER) {
+            vortex_record_user_call_site(fn_ir.instrs[i].func_name,
+                                         fn_ir.instrs[i].imm != 0,
+                                         fn_ir.instrs[i].file,
+                                         fn_ir.instrs[i].line);
+        }
     }
 
     if (g_diag_error_count > err_before) {
@@ -1186,25 +1202,33 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
 
         Symbol* sym = vortex_symtab_find(c->st, name);
         if (!sym) {
-            fprintf(stderr, "[VORTEX ERROR] Variable '%s' not found for assignment at %s:%d:%d\n",
-                    name, g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-            vortex_error("");
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[VORTEX ERROR] Variable '%s' not found for assignment", name);
+            vortex_compile_error("E001", stmt_line, stmt_col, msg, "Declare the variable with 'let mut' first.");
         }
+        sym->used = true;
         if (!sym->is_mut) {
-            fprintf(stderr, "[VORTEX SAFETY ERROR] Cannot reassign immutable binding '%s' at %s:%d:%d\n",
-                    name, g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-            vortex_error("");
+            char msg[256];
+            snprintf(msg, sizeof(msg), "[VORTEX SAFETY ERROR] Cannot reassign immutable binding '%s'", name);
+            if (g_recover_active && g_ultrasafe_level >= 3) {
+                vortex_diag_add(VDIAG_ERROR, "E001", g_current_filename, stmt_line, stmt_col, msg,
+                                "Declare the binding with 'let mut' if it should be mutable.");
+                return true;
+            }
+            vortex_compile_error("E001", stmt_line, stmt_col, msg,
+                                 "Declare the binding with 'let mut' if it should be mutable.");
         }
         sym->reassigned = true;
         if (assign_op == TOK_EQ) {
             if (v_val >= 0 && v_val < c->ir->vreg_count && c->ir->vregs[v_val].is_ref) {
                 int val_depth = c->ir->vregs[v_val].region_depth;
                 if (val_depth > sym->region_depth) {
-                    fprintf(stderr,
-                            "[VORTEX REGION ERROR] Reference from inner arena scope (depth %d) cannot escape to outer variable '%s' (depth %d) at %s:%d:%d\n",
-                            val_depth, sym->name, sym->region_depth,
-                            g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-                    vortex_error("");
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                             "[VORTEX REGION ERROR] Reference from inner arena scope (depth %d) cannot escape to outer variable '%s' (depth %d)",
+                             val_depth, sym->name, sym->region_depth);
+                    vortex_compile_error("E301", stmt_line, stmt_col, msg,
+                                         "Allocate the value in the outer scope instead.");
                 }
                 sym->is_ref = true;
                 sym->region_id = c->ir->vregs[v_val].region_id;
@@ -1258,11 +1282,12 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
 
             if (assign_op == TOK_EQ && v_val >= 0 && v_val < c->ir->vreg_count &&
                 c->ir->vregs[v_val].is_ref && c->ir->vregs[v_val].region_depth > sym->region_depth) {
-                fprintf(stderr,
-                        "[VORTEX REGION ERROR] Cannot store inner arena reference (depth %d) in outer struct '%s' (depth %d) at %s:%d:%d\n",
-                        c->ir->vregs[v_val].region_depth, sym->name, sym->region_depth,
-                        g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-                vortex_error("");
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "[VORTEX REGION ERROR] Cannot store inner arena reference (depth %d) in outer struct '%s' (depth %d)",
+                         c->ir->vregs[v_val].region_depth, sym->name, sym->region_depth);
+                vortex_compile_error("E301", stmt_line, stmt_col, msg,
+                                     "Allocate the value in an outer arena scope.");
             }
 
             VReg base_v = sym->vreg;
@@ -1391,11 +1416,12 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
 
             if (assign_op == TOK_EQ && v_val >= 0 && v_val < c->ir->vreg_count &&
                 c->ir->vregs[v_val].is_ref && c->ir->vregs[v_val].region_depth > sym->region_depth) {
-                fprintf(stderr,
-                        "[VORTEX REGION ERROR] Cannot store inner arena reference (depth %d) in outer array '%s' (depth %d) at %s:%d:%d\n",
-                        c->ir->vregs[v_val].region_depth, sym->name, sym->region_depth,
-                        g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-                vortex_error("");
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                         "[VORTEX REGION ERROR] Cannot store inner arena reference (depth %d) in outer array '%s' (depth %d)",
+                         c->ir->vregs[v_val].region_depth, sym->name, sym->region_depth);
+                vortex_compile_error("E301", stmt_line, stmt_col, msg,
+                                     "Allocate the value in an outer arena scope.");
             }
 
             VortexType elem_t = (sym->type == TYPE_PTR_F32 || val_t == TYPE_F32) ? TYPE_F32 :
@@ -1591,10 +1617,13 @@ void parse_statement(Compiler* c) {
             int rid = c->ir->vregs[v_val].region_id;
             int rdepth = c->ir->vregs[v_val].region_depth;
             if (vortex_region_is_popped(c, rid) || rdepth > 0) {
-                fprintf(stderr,
-                        "[VORTEX REGION ERROR] Cannot return reference allocated inside internal/popped 'scope_push()' region at %s:%d:%d\n",
-                        g_current_filename ? g_current_filename : "<input>", stmt_line, stmt_col);
-                vortex_error("");
+                const char* rmsg = "[VORTEX REGION ERROR] Cannot return reference allocated inside internal/popped 'scope_push()' region";
+                if (g_recover_active && g_ultrasafe_level >= 3) {
+                    vortex_diag_add(VDIAG_ERROR, "E301", g_current_filename, stmt_line, stmt_col, rmsg,
+                                    "Allocate the returned value outside the popped 'scope_push()' region.");
+                } else {
+                    vortex_compile_error("E301", stmt_line, stmt_col, rmsg, NULL);
+                }
             }
         }
         ir_emit_ret(c->ir, v_val, val_t);
