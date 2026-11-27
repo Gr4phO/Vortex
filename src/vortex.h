@@ -608,6 +608,7 @@ typedef struct IRInstruction {
     int fixed_param_count;
     /* Source location & region safety metadata */
     int line;
+    int col;
     const char* file;
     int region_id;
     int region_depth;
@@ -940,7 +941,7 @@ int64_t vortex_ffi_call6(int64_t fn_ptr, int64_t a1, int64_t a2, int64_t a3, int
 /* --- src/runtime.c --- */
 void vortex_error(const char* msg);
 void vortex_compile_error(const char* code, int line, int col, const char* msg, const char* suggestion);
-void vortex_record_user_call_site(const char* name, bool called_in_unsafe, const char* file, int line);
+void vortex_record_user_call_site(const char* name, bool called_in_unsafe, const char* file, int line, int col);
 void vortex_diag_reset(void);
 void vortex_diag_add(VortexDiagSeverity sev, const char* code, const char* file, int line, int col, const char* msg, const char* suggestion);
 void vortex_diag_print_all(void);

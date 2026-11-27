@@ -1003,6 +1003,7 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                     IRInstruction* call_ins = &c->ir->instrs[c->ir->count - 1];
                     call_ins->imm = (c->unsafe_depth > 0) ? 1 : 0;
                     call_ins->line = line;
+                    call_ins->col = col;
                     call_ins->file = g_current_filename ? g_current_filename : "<input>";
                 }
                 if (uf->returns_ref) {
@@ -1021,6 +1022,7 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                 IRInstruction* call_ins = &c->ir->instrs[c->ir->count - 1];
                 call_ins->imm = (c->unsafe_depth > 0) ? 1 : 0;
                 call_ins->line = line;
+                call_ins->col = col;
                 call_ins->file = g_current_filename ? g_current_filename : "<input>";
             }
             return TYPE_I64;
@@ -1062,6 +1064,10 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
 
             VReg v_elem = ir_new_vreg(c->ir, elem_type);
             ir_emit_load_array(c->ir, v_elem, cur_v, v_idx, elem_type);
+            if (c->ir->count > 0) {
+                c->ir->instrs[c->ir->count - 1].line = line;
+                c->ir->instrs[c->ir->count - 1].col = col;
+            }
             cur_v = v_elem;
             primary_type = (elem_type == TYPE_PTR_STRUCT) ? TYPE_STRUCT : elem_type;
         }

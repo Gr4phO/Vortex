@@ -186,7 +186,8 @@ static void parse_function_def(Compiler* c, bool is_unsafe) {
             vortex_record_user_call_site(fn_ir.instrs[i].func_name,
                                          fn_ir.instrs[i].imm != 0,
                                          fn_ir.instrs[i].file,
-                                         fn_ir.instrs[i].line);
+                                         fn_ir.instrs[i].line,
+                                         fn_ir.instrs[i].col);
         }
     }
 
@@ -1437,6 +1438,10 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
             }
             if (assign_op == TOK_EQ) {
                 ir_emit_store_array(c->ir, sym->vreg, v_idx, v_val, elem_t);
+                if (c->ir->count > 0) {
+                    c->ir->instrs[c->ir->count - 1].line = stmt_line;
+                    c->ir->instrs[c->ir->count - 1].col = stmt_col;
+                }
             } else {
                 bool is_f32 = (elem_t == TYPE_F32);
                 if (!is_f32 && (assign_op == TOK_SLASH_EQ || assign_op == TOK_PERCENT_EQ) &&
@@ -1448,6 +1453,10 @@ static bool try_parse_ident_stmt(Compiler* c, int stmt_line, int stmt_col) {
                 ir_emit_load_array(c->ir, v_cur, sym->vreg, v_idx, elem_t);
                 ir_emit_binop(c->ir, compound_assign_ir_op(assign_op, is_f32), v_next, v_cur, v_val, is_f32 ? TYPE_F32 : TYPE_I64);
                 ir_emit_store_array(c->ir, sym->vreg, v_idx, v_next, elem_t);
+                if (c->ir->count > 0) {
+                    c->ir->instrs[c->ir->count - 1].line = stmt_line;
+                    c->ir->instrs[c->ir->count - 1].col = stmt_col;
+                }
             }
             return true;
         }

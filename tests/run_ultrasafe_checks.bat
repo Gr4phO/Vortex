@@ -222,7 +222,7 @@ if !errorlevel! equ 0 (
     echo [FAIL] --ultrasafe 3 should report 6 errors on TMP9!
     exit /b 1
 )
-for %%c in ("E301" "E302" "E001" "E101" "E202" "\"errors\": 6" "\"warnings\": 0") do (
+for %%c in ("E301" "E302" "E001" "E101" "E202" "\"errors\": 6" "\"warnings\": 0" "\"col\": 17") do (
     findstr /C:%%c "%TEMP%\vx_us3_all6.json" >nul
     if !errorlevel! neq 0 (
         echo [FAIL] --ultrasafe 3 missing %%~c in TMP9 JSON output!
@@ -230,7 +230,13 @@ for %%c in ("E301" "E302" "E001" "E101" "E202" "\"errors\": 6" "\"warnings\": 0"
         exit /b 1
     )
 )
-echo   [PASS] --ultrasafe 3 reported all 6 distinct errors (E301, E302, E001x2, E101, E202) and 0 warnings.
+findstr /C:"[VORTEX " "%TEMP%\vx_us3_all6.json" >nul
+if !errorlevel! equ 0 (
+    echo [FAIL] --ultrasafe 3 emitted duplicate [VORTEX ...] prefix inside JSON message!
+    type "%TEMP%\vx_us3_all6.json"
+    exit /b 1
+)
+echo   [PASS] --ultrasafe 3 reported all 6 distinct sorted errors with clean messages, exact cols, and 0 warnings.
 
 del "%TMP1%" "%TMPWARN%" "%TMP2%" "%TMP2REC%" "%TMP3%" "%TMP7%" "%TMP8MOD%" "%TMP8MAIN%" "%TMP9%" "%TEMP%\vx_warn.json" "%TEMP%\vx_us2.out" "%TEMP%\vx_us3.json" "%TEMP%\vx_test.json" "%TEMP%\vx_spec.json" "%TEMP%\vx_us3_clean.json" "%TEMP%\vx_us3_map.json" "%TEMP%\vx_us3_all6.json" 2>nul
 echo [ULTRASAFE CHECKS] All checks PASSED!

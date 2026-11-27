@@ -93,18 +93,20 @@ typedef struct {
     bool called_in_unsafe;
     const char* file;
     int line;
+    int col;
 } VortexCallSite;
 
 static VortexCallSite g_call_sites[MAX_CALL_SITES];
 static int g_call_site_count = 0;
 
-void vortex_record_user_call_site(const char* name, bool called_in_unsafe, const char* file, int line) {
+void vortex_record_user_call_site(const char* name, bool called_in_unsafe, const char* file, int line, int col) {
     if (!name || !name[0] || g_call_site_count >= MAX_CALL_SITES) return;
     VortexCallSite* cs = &g_call_sites[g_call_site_count++];
     vx_str_copy(cs->name, sizeof(cs->name), name);
     cs->called_in_unsafe = called_in_unsafe;
     cs->file = file;
     cs->line = line;
+    cs->col = (col > 0) ? col : 1;
 }
 
 void vortex_source_map_reset(void) {
@@ -406,8 +408,22 @@ static int extract_line_from_msg(const char* msg) {
     return 0;
 }
 
+static const char* strip_vortex_diag_prefix(const char* msg) {
+    if (!msg) return "";
+    if (strncmp(msg, "[VORTEX ", 8) == 0) {
+        const char* close = strchr(msg + 8, ']');
+        if (close && (close - msg) < 48) {
+            const char* p = close + 1;
+            while (*p == ' ') p++;
+            if (*p) return p;
+        }
+    }
+    return msg;
+}
+
 void vortex_diag_add(VortexDiagSeverity sev, const char* code, const char* file, int line, int col, const char* msg, const char* suggestion) {
-    if (line <= 0 && msg) line = extract_line_from_msg(msg);
+    const char* clean_msg = strip_vortex_diag_prefix(msg);
+    if (line <= 0 && clean_msg[0]) line = extract_line_from_msg(clean_msg);
     if (col <= 0) col = 1;
     const char* f = (file && file[0]) ? file : (g_current_filename ? g_current_filename : "<input>");
 
@@ -433,7 +449,7 @@ void vortex_diag_add(VortexDiagSeverity sev, const char* code, const char* file,
             strcmp(g_diags[i].file, f) == 0 &&
             ((code && strcmp(code, "E301") == 0 && strcmp(g_diags[i].code, "E301") == 0) ||
              (strcmp(g_diags[i].code, code ? code : "") == 0 &&
-              strcmp(g_diags[i].message, msg ? msg : "") == 0))) {
+              strcmp(g_diags[i].message, clean_msg) == 0))) {
             return;
         }
     }
@@ -448,7 +464,7 @@ void vortex_diag_add(VortexDiagSeverity sev, const char* code, const char* file,
     vx_str_copy(d->file, sizeof(d->file), f);
     d->line = line;
     d->col = col;
-    vx_str_copy(d->message, sizeof(d->message), msg ? msg : "");
+    vx_str_copy(d->message, sizeof(d->message), clean_msg);
     vx_str_copy(d->suggestion, sizeof(d->suggestion), suggestion ? suggestion : "");
 }
 
@@ -469,7 +485,24 @@ static void json_print_escaped(FILE* out, const char* s) {
     fputc('"', out);
 }
 
+static int diag_cmp(const VortexDiagnostic* a, const VortexDiagnostic* b) {
+    int fc = strcmp(a->file, b->file);
+    if (fc != 0) return fc;
+    if (a->line != b->line) return a->line - b->line;
+    return a->col - b->col;
+}
+
 void vortex_diag_print_all(void) {
+    for (int i = 1; i < g_diag_count; i++) {
+        VortexDiagnostic key = g_diags[i];
+        int j = i - 1;
+        while (j >= 0 && diag_cmp(&g_diags[j], &key) > 0) {
+            g_diags[j + 1] = g_diags[j];
+            j--;
+        }
+        g_diags[j + 1] = key;
+    }
+
     if (g_json_errors) {
         FILE* out = (g_diag_error_count > 0 || g_diag_warn_count > 0) ? stderr : stdout;
         fprintf(out, "{\n  \"version\": \"%s\",\n  \"ultrasafe\": %d,\n  \"ok\": %s,\n  \"errors\": %d,\n  \"warnings\": %d,\n  \"diagnostics\": [\n",
@@ -564,7 +597,7 @@ void vortex_ultrasafe_audit_ir(const IRBuffer* ir, const SymbolTable* st, const 
 
         if (after_term && !warn_unreach_emitted && ins->line > 0) {
             vortex_diag_add(VDIAG_WARNING, "W101", ins->file ? ins->file : g_current_filename,
-                            ins->line, 1, "Unreachable code after return/break/continue",
+                            ins->line, ins->col > 0 ? ins->col : 1, "Unreachable code after return/break/continue",
                             "Remove dead statements or move them before the control-flow jump.");
             warn_unreach_emitted = true;
         }
@@ -606,7 +639,7 @@ void vortex_ultrasafe_audit_ir(const IRBuffer* ir, const SymbolTable* st, const 
                     snprintf(msg, sizeof(msg), "Negative slice allocation length (%lld) in '%s'",
                              (long long)const_val[lv], fn_name ? fn_name : "__main__");
                     vortex_diag_add(VDIAG_ERROR, "E202", ins->file ? ins->file : g_current_filename,
-                                    ins->line, 1, msg, "Use a non-negative integer length >= 0.");
+                                    ins->line, ins->col > 0 ? ins->col : 1, msg, "Use a non-negative integer length >= 0.");
                 }
                 if (slice_len) slice_len[ins->dest] = const_val[lv];
             }
@@ -624,7 +657,7 @@ void vortex_ultrasafe_audit_ir(const IRBuffer* ir, const SymbolTable* st, const 
                 snprintf(msg, sizeof(msg), "Static %s by zero detected in '%s'",
                          (ins->op == IR_MOD) ? "modulo" : "division", fn_name ? fn_name : "__main__");
                 vortex_diag_add(VDIAG_ERROR, "E201", ins->file ? ins->file : g_current_filename,
-                                ins->line, 1, msg, "Ensure the divisor is non-zero before dividing.");
+                                ins->line, ins->col > 0 ? ins->col : 1, msg, "Ensure the divisor is non-zero before dividing.");
             }
             /* Static constant out-of-bounds array access */
             if ((ins->op == IR_LOAD_ARRAY || ins->op == IR_STORE_ARRAY) &&
@@ -638,7 +671,7 @@ void vortex_ultrasafe_audit_ir(const IRBuffer* ir, const SymbolTable* st, const 
                     snprintf(msg, sizeof(msg), "Static out-of-bounds index %lld (length %lld) in '%s'",
                              (long long)idx, (long long)klen, fn_name ? fn_name : "__main__");
                     vortex_diag_add(VDIAG_ERROR, "E202", ins->file ? ins->file : g_current_filename,
-                                    ins->line, 1, msg, "Check the array index bounds: 0 <= idx < len.");
+                                    ins->line, ins->col > 0 ? ins->col : 1, msg, "Check the array index bounds: 0 <= idx < len.");
                 }
             }
             /* Static null dereference / null field access */
@@ -646,7 +679,7 @@ void vortex_ultrasafe_audit_ir(const IRBuffer* ir, const SymbolTable* st, const 
                  ins->op == IR_LOAD_OFFSET || ins->op == IR_STORE_OFFSET) &&
                 ins->src1 >= 0 && ins->src1 < n_vregs && known_null && known_null[ins->src1]) {
                 vortex_diag_add(VDIAG_ERROR, "E203", ins->file ? ins->file : g_current_filename,
-                                ins->line, 1, "Static null pointer dereference (pointer is 0)",
+                                ins->line, ins->col > 0 ? ins->col : 1, "Static null pointer dereference (pointer is 0)",
                                 "Validate the pointer against 0 before dereferencing or accessing fields.");
             }
         }
@@ -1191,7 +1224,7 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
             if (g_ultrasafe_level >= 3) {
                 vortex_diag_add(VDIAG_ERROR, "E101",
                                 cs->file ? cs->file : g_current_filename,
-                                cs->line, 1, msg, "Define the function or import its module.");
+                                cs->line, cs->col > 0 ? cs->col : 1, msg, "Define the function or import its module.");
                 continue;
             }
             const char* err_file = cs->file ? cs->file : g_current_filename;
@@ -1207,7 +1240,7 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
             if (g_ultrasafe_level >= 3) {
                 vortex_diag_add(VDIAG_ERROR, "E302",
                                 cs->file ? cs->file : g_current_filename,
-                                cs->line, 1, msg, "Wrap the call in 'unsafe { ... }' or mark the caller 'unsafe fn'.");
+                                cs->line, cs->col > 0 ? cs->col : 1, msg, "Wrap the call in 'unsafe { ... }' or mark the caller 'unsafe fn'.");
                 continue;
             }
             const char* err_file = cs->file ? cs->file : g_current_filename;
@@ -1229,7 +1262,7 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
             if (g_ultrasafe_level >= 3) {
                 vortex_diag_add(VDIAG_ERROR, "E101",
                                 ins->file ? ins->file : g_current_filename,
-                                ins->line, 1, msg, "Define the function or import its module.");
+                                ins->line, ins->col > 0 ? ins->col : 1, msg, "Define the function or import its module.");
                 continue;
             }
             const char* err_file = ins->file ? ins->file : g_current_filename;
@@ -1245,7 +1278,7 @@ bool compile_vortex_source_internal(const char* source, void* exec_mem, JITBuffe
             if (g_ultrasafe_level >= 3) {
                 vortex_diag_add(VDIAG_ERROR, "E302",
                                 ins->file ? ins->file : g_current_filename,
-                                ins->line, 1, msg, "Wrap the call in 'unsafe { ... }' or mark the caller 'unsafe fn'.");
+                                ins->line, ins->col > 0 ? ins->col : 1, msg, "Wrap the call in 'unsafe { ... }' or mark the caller 'unsafe fn'.");
                 continue;
             }
             const char* err_file = ins->file ? ins->file : g_current_filename;
