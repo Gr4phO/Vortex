@@ -1077,6 +1077,23 @@ static void lsp_parse_diag_loc(const char* msg, const char* fallback_path,
     }
 }
 
+static void lsp_normalize_path_cmp(const char* src, char* dst, size_t cap) {
+    size_t k = 0;
+    for (; k + 1 < cap && src && src[k]; k++) {
+        dst[k] = (src[k] == '\\') ? '/' : (char)tolower((unsigned char)src[k]);
+    }
+    dst[k] = '\0';
+}
+
+static bool lsp_diag_matches_doc(const char* diag_file, const char* doc_path) {
+    if (!diag_file || !diag_file[0] || diag_file[0] == '<') return true;
+    if (!doc_path || !doc_path[0]) return true;
+    char a[512], b[512];
+    lsp_normalize_path_cmp(diag_file, a, sizeof(a));
+    lsp_normalize_path_cmp(doc_path, b, sizeof(b));
+    return strcmp(a, b) == 0;
+}
+
 static void lsp_publish_diagnostics(const LspDocument* doc) {
     char diag_raw[4096] = {0};
     bool ok = vortex_frontend_check(doc->text, doc->path, diag_raw, sizeof(diag_raw));
@@ -1086,7 +1103,34 @@ static void lsp_publish_diagnostics(const LspDocument* doc) {
     lstr_add_json_str(&j, doc->uri);
     lstr_adds(&j, ",\"diagnostics\":[");
 
-    if (!ok && diag_raw[0]) {
+    int emitted = 0;
+    for (int i = 0; i < g_diag_count; i++) {
+        const VortexDiagnostic* d = &g_diags[i];
+        if (!lsp_diag_matches_doc(d->file, doc->path)) continue;
+        if (emitted > 0) lstr_adds(&j, ",");
+        int l0 = (d->line > 0) ? (d->line - 1) : 0;
+        int c0 = (d->col > 0) ? (d->col - 1) : 0;
+        int sev = (d->severity == VDIAG_ERROR) ? 1 : (d->severity == VDIAG_WARNING ? 2 : 3);
+        char msg_buf[800];
+        if (d->suggestion[0]) {
+            snprintf(msg_buf, sizeof(msg_buf), "%s\nhelp: %s", d->message, d->suggestion);
+        } else {
+            snprintf(msg_buf, sizeof(msg_buf), "%s", d->message);
+        }
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "{\"range\":{\"start\":{\"line\":%d,\"character\":%d},"
+                 "\"end\":{\"line\":%d,\"character\":%d}},\"severity\":%d,\"code\":",
+                 l0, c0, l0, c0 + 1, sev);
+        lstr_adds(&j, buf);
+        lstr_add_json_str(&j, d->code[0] ? d->code : "E001");
+        lstr_adds(&j, ",\"source\":\"vortex\",\"message\":");
+        lstr_add_json_str(&j, msg_buf);
+        lstr_adds(&j, "}");
+        emitted++;
+    }
+
+    if (!ok && emitted == 0 && diag_raw[0]) {
         int ln1 = 1, col1 = 1;
         char clean[2048];
         lsp_parse_diag_loc(diag_raw, doc->path, &ln1, &col1, clean, sizeof(clean));
