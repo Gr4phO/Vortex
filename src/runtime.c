@@ -1174,6 +1174,30 @@ void vortex_thread_pool_init(void) {
 #endif
     }
     g_thread_pool.initialized = true;
+
+    /* Prioritize physical cores for primary workers using detected hw topology (zero OpenCL load). */
+    vortex_hw_init_cpu_only();
+#ifdef _WIN32
+    int64_t phys = vortex_hw_get_phys_cores();
+    if (phys > 0 && count > 1 && vortex_hw_get_core_mask(0) != 0) {
+        int worker_slots = count - 1;
+        int widx = 0;
+        for (int c = 0; c < phys && widx < worker_slots; c++, widx++) {
+            uint64_t mask = vortex_hw_get_core_mask(c);
+            uint64_t primary_bit = mask & (~mask + 1ULL);
+            if (primary_bit != 0) vortex_thread_pool_set_worker_mask(widx, primary_bit);
+        }
+        for (int c = 0; c < phys && widx < worker_slots; c++) {
+            uint64_t mask = vortex_hw_get_core_mask(c);
+            uint64_t primary_bit = mask & (~mask + 1ULL);
+            uint64_t smt_bits = mask & ~primary_bit;
+            if (smt_bits != 0) {
+                vortex_thread_pool_set_worker_mask(widx, smt_bits);
+                widx++;
+            }
+        }
+    }
+#endif
 }
 
 void vortex_parallel_for_dispatch(void* fn_ptr, void* ctx, int64_t start, int64_t end) {
@@ -1193,8 +1217,14 @@ void vortex_parallel_for_dispatch(void* fn_ptr, void* ctx, int64_t start, int64_
         return;
     }
 
-    int64_t chunk = total / count;
-    int64_t rem = total % count;
+    /* Align worker chunk boundaries to 64-byte cache-line multiples to eliminate false sharing. */
+    int64_t align_step = 1;
+    if (total >= (int64_t)count * 64LL) align_step = 16;
+    else if (total >= (int64_t)count * 16LL) align_step = 8;
+
+    int64_t blocks = total / align_step;
+    int64_t chunk = blocks / count;
+    int64_t rem = blocks % count;
     int worker_dispatch = count - 1;
 
 #ifdef _WIN32
@@ -1203,7 +1233,7 @@ void vortex_parallel_for_dispatch(void* fn_ptr, void* ctx, int64_t start, int64_
 
     int64_t cur = start;
     for (int i = 0; i < worker_dispatch; i++) {
-        int64_t this_chunk = chunk + (i < rem ? 1 : 0);
+        int64_t this_chunk = (chunk + (i < rem ? 1 : 0)) * align_step;
         VortexWorker* w = &g_thread_pool.workers[i];
         w->job_fn = fn;
         w->job_ctx = ctx;
@@ -1429,6 +1459,18 @@ static BuiltinFunc g_builtins[] = {
     {"hw_dot_f64",     (void*)vortex_hw_dot_f64,     3},
     {"hw_axpy_f64",    (void*)vortex_hw_axpy_f64,    4},
     {"hw_axpy_f32",    (void*)vortex_hw_axpy_f32,    4},
+    {"hw_buf_from_f32",(void*)vortex_hw_buf_from_f32,2},
+    {"hw_buf_from_f64",(void*)vortex_hw_buf_from_f64,2},
+    {"hw_buf_sync_host",(void*)vortex_hw_buf_sync_host,1},
+    {"hw_buf_mark_host_dirty",(void*)vortex_hw_buf_mark_host_dirty,1},
+    {"hw_buf_state",   (void*)vortex_hw_buf_state,   1},
+    {"hw_buf_free",    (void*)vortex_hw_buf_free,    1},
+    {"hw_matmul_f32_buf",(void*)vortex_hw_matmul_f32_buf,6},
+    {"hw_matmul_f64_buf",(void*)vortex_hw_matmul_f64_buf,6},
+    {"hw_axpy_f32_buf",(void*)vortex_hw_axpy_f32_buf,4},
+    {"hw_relu_f32_buf",(void*)vortex_hw_relu_f32_buf,2},
+    {"hw_router_stats",(void*)vortex_hw_router_stats,0},
+    {"hw_gpu_cache_hits",(void*)vortex_hw_gpu_cache_hits,0},
     {"alloc",          (void*)arena_alloc,           1},
     {"print",          (void*)helper_print_i64,      1},
     {"print_str",      (void*)helper_print_str,      1},

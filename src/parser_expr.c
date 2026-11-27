@@ -1024,7 +1024,8 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                     ret_t = TYPE_PTR_F64; is_alloc_ref = true; is_slice = true;
                 } else if (strcmp(name, "slice_i32") == 0) {
                     ret_t = TYPE_PTR_I32; is_alloc_ref = true; is_slice = true;
-                } else if (strcmp(name, "vec_new") == 0 || strcmp(name, "map_new") == 0) {
+                } else if (strcmp(name, "vec_new") == 0 || strcmp(name, "map_new") == 0 ||
+                           strcmp(name, "hw_buf_from_f32") == 0 || strcmp(name, "hw_buf_from_f64") == 0) {
                     ret_t = TYPE_PTR; is_alloc_ref = true;
                 } else if (strcmp(name, "str_concat") == 0 || strcmp(name, "str_sub") == 0 ||
                            strcmp(name, "str_from_i64") == 0 || strcmp(name, "str_from_f32") == 0 ||
@@ -1053,7 +1054,8 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
                 } else if (strcmp(name, "hw_axpy_f64") == 0 && num_args >= 1 && arg_types[0] != TYPE_F64) {
                     arg_vregs[0] = vortex_promote_to_f64(c, arg_vregs[0], arg_types[0]);
                     arg_types[0] = TYPE_F64;
-                } else if (strcmp(name, "hw_axpy_f32") == 0 && num_args >= 1 && arg_types[0] != TYPE_F32) {
+                } else if ((strcmp(name, "hw_axpy_f32") == 0 || strcmp(name, "hw_axpy_f32_buf") == 0) &&
+                           num_args >= 1 && arg_types[0] != TYPE_F32) {
                     VReg cv = ir_new_vreg(c->ir, TYPE_F32);
                     IROpcode cop = (arg_types[0] == TYPE_F64) ? IR_CAST_F64_TO_F32 : IR_CAST_I64_TO_F32;
                     ir_emit_binop(c->ir, cop, TYPE_F32, cv, arg_vregs[0], VREG_NONE);

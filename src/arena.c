@@ -100,6 +100,20 @@ void arena_init(void) {
     ar->next_epoch = 2;
     tl_rewind_seq++;
     arena_register(ar);
+    if (ar == &g_arena) {
+        vortex_hw_release_all_bufs();
+    }
+}
+
+void arena_get_scope_info(void** out_arena, uint32_t* out_depth, uint64_t* out_epoch) {
+    VortexRegionArena* ar = get_active_arena();
+    if (out_arena) *out_arena = (void*)ar;
+    if (out_depth) *out_depth = ar ? ar->scope_depth : 0;
+    if (out_epoch) {
+        *out_epoch = (ar && ar->scope_depth < VORTEX_MAX_SCOPE_DEPTH)
+                   ? ar->scope_stack[ar->scope_depth]
+                   : 1;
+    }
 }
 
 static void* arena_bump_raw(VortexRegionArena* ar, size_t total_aligned) {
@@ -426,6 +440,7 @@ int64_t vortex_scope_pop(int64_t mark) {
             next_page = next_page->next;
         }
     }
+    vortex_hw_release_scope(ar, target_depth);
     tl_rewind_seq++;
     return 0;
 }

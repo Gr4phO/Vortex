@@ -1,13 +1,17 @@
 /*
- * VORTEX HARDWARE SILICON PROFILER, ROUTE PLANNER & AVX2/FMA3 + OPENCL GPU KERNELS
- * Probes host CPU topology, L1/L2/L3 caches, SIMD ISA, RAM, and OpenCL GPU dynamically,
- * pre-computes optimal memory/compute execution routes, and accelerates GEMM/DOT/AXPY.
+ * VORTEX HARDWARE SILICON PROFILER, ADAPTIVE WAZE ROUTER & AVX2/FMA3 + OPENCL GPU ENGINE
+ * - Probes host CPU topology, L1/L2/L3 caches, SIMD ISA, RAM, and OpenCL GPU dynamically.
+ * - Provides resident RAM/VRAM HwBuf buffers tied to Arena scopes (zero redundant PCIe).
+ * - Disk-cached OpenCL binaries + 64x64 4x4 register-blocked float4 GEMM / AXPY / ReLU kernels.
+ * - Adaptive EMA ("Waze") latency router with PCIe dirty-transfer cost & congestion fallback.
  */
 
 #ifdef _WIN32
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0601
 #endif
+#else
+#include <sys/stat.h>
 #endif
 
 #include "vortex.h"
@@ -35,6 +39,14 @@
 #define HW_ROUTE_RAM_STREAM  4
 #define HW_ROUTE_GPU         5
 
+/* HwBuf residency bitflags (matches std/hw.vx) */
+#define HW_BUF_HOST_DIRTY    1
+#define HW_BUF_DEV_DIRTY     2
+#define HW_BUF_IN_VRAM       4
+
+#define HW_BUF_MAGIC         0x56584857U
+#define HW_MAX_BUFS          1024
+
 /* --- Minimal Self-Contained OpenCL 1.2 C ABI Bindings (No External SDK Needed) --- */
 typedef int32_t  vx_cl_int;
 typedef uint32_t vx_cl_uint;
@@ -54,7 +66,10 @@ typedef void*    vx_cl_mem;
 #define VX_CL_DEVICE_GLOBAL_MEM_SIZE     0x101F
 #define VX_CL_DEVICE_LOCAL_MEM_SIZE      0x1023
 #define VX_CL_DEVICE_NAME                0x102B
+#define VX_CL_DEVICE_DRIVER_VERSION      0x102D
 #define VX_CL_DEVICE_DOUBLE_FP_CONFIG    0x1032
+#define VX_CL_PROGRAM_BINARY_SIZES       0x1165
+#define VX_CL_PROGRAM_BINARIES           0x1166
 #define VX_CL_MEM_READ_WRITE             (1ULL << 0)
 #define VX_CL_MEM_WRITE_ONLY             (1ULL << 1)
 #define VX_CL_MEM_READ_ONLY              (1ULL << 2)
@@ -73,6 +88,9 @@ typedef vx_cl_int (VX_CL_CALL *pfn_clGetDeviceInfo)(vx_cl_device_id, vx_cl_uint,
 typedef vx_cl_context (VX_CL_CALL *pfn_clCreateContext)(const intptr_t*, vx_cl_uint, const vx_cl_device_id*, void (VX_CL_CALL *)(const char*, const void*, size_t, void*), void*, vx_cl_int*);
 typedef vx_cl_command_queue (VX_CL_CALL *pfn_clCreateCommandQueue)(vx_cl_context, vx_cl_device_id, vx_cl_bitfield, vx_cl_int*);
 typedef vx_cl_program (VX_CL_CALL *pfn_clCreateProgramWithSource)(vx_cl_context, vx_cl_uint, const char**, const size_t*, vx_cl_int*);
+typedef vx_cl_program (VX_CL_CALL *pfn_clCreateProgramWithBinary)(vx_cl_context, vx_cl_uint, const vx_cl_device_id*, const size_t*, const unsigned char**, vx_cl_int*, vx_cl_int*);
+typedef vx_cl_int (VX_CL_CALL *pfn_clGetProgramInfo)(vx_cl_program, vx_cl_uint, size_t, void*, size_t*);
+typedef vx_cl_int (VX_CL_CALL *pfn_clReleaseProgram)(vx_cl_program);
 typedef vx_cl_int (VX_CL_CALL *pfn_clBuildProgram)(vx_cl_program, vx_cl_uint, const vx_cl_device_id*, const char*, void (VX_CL_CALL *)(vx_cl_program, void*), void*);
 typedef vx_cl_kernel (VX_CL_CALL *pfn_clCreateKernel)(vx_cl_program, const char*, vx_cl_int*);
 typedef vx_cl_mem (VX_CL_CALL *pfn_clCreateBuffer)(vx_cl_context, vx_cl_bitfield, size_t, void*, vx_cl_int*);
@@ -83,10 +101,53 @@ typedef vx_cl_int (VX_CL_CALL *pfn_clEnqueueNDRangeKernel)(vx_cl_command_queue, 
 typedef vx_cl_int (VX_CL_CALL *pfn_clFinish)(vx_cl_command_queue);
 typedef vx_cl_int (VX_CL_CALL *pfn_clReleaseMemObject)(vx_cl_mem);
 
+/* --- Adaptive "Waze" Telemetry Router --- */
+enum {
+    HW_OP_GEMM_F32 = 0,
+    HW_OP_GEMM_F64 = 1,
+    HW_OP_AXPY_F32 = 2,
+    HW_OP_RELU_F32 = 3,
+    HW_OP_COUNT    = 4,
+    HW_BUCKETS     = 6
+};
+
 typedef struct {
+    double ema_us[HW_OP_COUNT][HW_BUCKETS][2];   /* [op][size_bucket][0=CPU, 1=GPU] */
+    uint32_t samples[HW_OP_COUNT][HW_BUCKETS][2];
+    double pcie_gbps;
+    int64_t gpu_cooldown_until_us;
+    int64_t gpu_congestion_trips;
+    int64_t pcie_uploads;
+    int64_t pcie_downloads;
+    int64_t pcie_bytes_up;
+    int64_t pcie_bytes_down;
+    int64_t cl_cache_hits;
+    int64_t cl_cache_misses;
+} HwAdaptiveRouter;
+
+/* --- StarPU-style Resident RAM/VRAM Buffer Handle --- */
+typedef struct {
+    uint32_t magic;
+    uint8_t active;
+    uint8_t host_dirty;
+    uint8_t dev_dirty;
+    uint8_t elem_size;
+    uint32_t scope_depth;
+    uint64_t scope_epoch;
+    void* owner_arena;
+    void* host_ptr;
+    vx_cl_mem cl_mem;
+    size_t bytes;
+    int64_t elem_count;
+} VortexHwBuf;
+
+typedef struct {
+    bool cpu_initialized;
+    bool gpu_probed;
     bool initialized;
     char cpu_name[128];
     char gpu_name[128];
+    char gpu_driver[64];
     int64_t phys_cores;
     int64_t logical_cores;
     int64_t l1d_kb;
@@ -116,6 +177,9 @@ typedef struct {
     vx_cl_program cl_prog_f32;
     vx_cl_program cl_prog_f64;
     vx_cl_kernel k_matmul_f32;
+    vx_cl_kernel k_matmul_f32_reg64;
+    vx_cl_kernel k_axpy_f32;
+    vx_cl_kernel k_relu_f32;
     vx_cl_kernel k_matmul_f64;
 
     pfn_clGetPlatformIDs p_get_platforms;
@@ -124,6 +188,9 @@ typedef struct {
     pfn_clCreateContext p_create_ctx;
     pfn_clCreateCommandQueue p_create_queue;
     pfn_clCreateProgramWithSource p_create_prog;
+    pfn_clCreateProgramWithBinary p_create_prog_bin;
+    pfn_clGetProgramInfo p_get_prog_info;
+    pfn_clReleaseProgram p_rel_prog;
     pfn_clBuildProgram p_build_prog;
     pfn_clCreateKernel p_create_kernel;
     pfn_clCreateBuffer p_create_buf;
@@ -133,9 +200,28 @@ typedef struct {
     pfn_clEnqueueNDRangeKernel p_ndrange;
     pfn_clFinish p_finish;
     pfn_clReleaseMemObject p_rel_mem;
+
+    HwAdaptiveRouter router;
 } VortexHwProfile;
 
 static VortexHwProfile g_hw;
+static VortexHwBuf g_hw_buf_pool[HW_MAX_BUFS];
+static int g_hw_active_buf_count = 0;
+
+static int64_t hw_now_us(void) {
+#ifdef _WIN32
+    static LARGE_INTEGER freq;
+    static int init = 0;
+    if (!init) { QueryPerformanceFrequency(&freq); init = 1; }
+    LARGE_INTEGER cnt;
+    QueryPerformanceCounter(&cnt);
+    return (int64_t)((cnt.QuadPart * 1000000LL) / (freq.QuadPart ? freq.QuadPart : 1));
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000LL + (int64_t)(ts.tv_nsec / 1000LL);
+#endif
+}
 
 static void hw_trim_spaces(char* s) {
     size_t len = strlen(s);
@@ -145,6 +231,15 @@ static void hw_trim_spaces(char* s) {
     size_t start = 0;
     while (s[start] == ' ' || s[start] == '\t') start++;
     if (start > 0) memmove(s, s + start, len - start + 1);
+}
+
+static uint64_t hw_fnv1a(uint64_t h, const void* data, size_t len) {
+    const uint8_t* p = (const uint8_t*)data;
+    for (size_t i = 0; i < len; i++) {
+        h ^= (uint64_t)p[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
 }
 
 static void* hw_dl_sym(void* lib, const char* name) {
@@ -160,6 +255,125 @@ static void* hw_dl_sym(void* lib, const char* name) {
     if (!_sym) return; \
     memcpy(&g_hw.field, &_sym, sizeof(_sym)); \
 } while (0)
+
+#define HW_LOAD_CL_OPT(field, fn_name) do { \
+    void* _sym = hw_dl_sym(lib, fn_name); \
+    if (_sym) memcpy(&g_hw.field, &_sym, sizeof(_sym)); \
+} while (0)
+
+static bool hw_get_ocl_cache_dir(char* out, size_t cap) {
+    if (!out || cap < 64) return false;
+#ifdef _WIN32
+    const char* root = getenv("LOCALAPPDATA");
+    if (!root || !root[0]) root = getenv("TEMP");
+    if (!root || !root[0]) return false;
+    snprintf(out, cap, "%s\\Vortex", root);
+    CreateDirectoryA(out, NULL);
+    snprintf(out, cap, "%s\\Vortex\\ocl_cache", root);
+    CreateDirectoryA(out, NULL);
+#else
+    const char* home = getenv("HOME");
+    if (!home || !home[0]) home = "/tmp";
+    snprintf(out, cap, "%s/.cache", home);
+    mkdir(out, 0755);
+    snprintf(out, cap, "%s/.cache/vortex", home);
+    mkdir(out, 0755);
+    snprintf(out, cap, "%s/.cache/vortex/ocl_cache", home);
+    mkdir(out, 0755);
+#endif
+    return true;
+}
+
+static vx_cl_program hw_build_or_load_program(const char* tag, const char* src, const char* build_opts) {
+    size_t src_len = strlen(src);
+    size_t opt_len = build_opts ? strlen(build_opts) : 0;
+    uint64_t h = 14695981039346656037ULL;
+    h = hw_fnv1a(h, tag, strlen(tag));
+    h = hw_fnv1a(h, g_hw.gpu_name, strlen(g_hw.gpu_name));
+    h = hw_fnv1a(h, g_hw.gpu_driver, strlen(g_hw.gpu_driver));
+    if (opt_len > 0) h = hw_fnv1a(h, build_opts, opt_len);
+    h = hw_fnv1a(h, src, src_len);
+
+    char cache_dir[512];
+    char bin_path[640];
+    bool have_cache = hw_get_ocl_cache_dir(cache_dir, sizeof(cache_dir));
+    if (have_cache) {
+#ifdef _WIN32
+        snprintf(bin_path, sizeof(bin_path), "%s\\%s_%016llx.bin", cache_dir, tag, (unsigned long long)h);
+#else
+        snprintf(bin_path, sizeof(bin_path), "%s/%s_%016llx.bin", cache_dir, tag, (unsigned long long)h);
+#endif
+    }
+
+    /* Try cached OpenCL binary first for near-instant startup */
+    if (have_cache && g_hw.p_create_prog_bin) {
+        FILE* f = fopen(bin_path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long fsz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (fsz > 0 && fsz < (32L * 1024L * 1024L)) {
+                size_t bsz = (size_t)fsz;
+                unsigned char* buf = (unsigned char*)malloc(bsz);
+                if (buf && fread(buf, 1, bsz, f) == bsz) {
+                    const unsigned char* bptr = buf;
+                    vx_cl_int bin_status = -1;
+                    vx_cl_int err = 0;
+                    vx_cl_program prog = g_hw.p_create_prog_bin(g_hw.cl_ctx, 1, &g_hw.cl_dev, &bsz, &bptr, &bin_status, &err);
+                    if (err == VX_CL_SUCCESS && bin_status == VX_CL_SUCCESS && prog) {
+                        if (g_hw.p_build_prog(prog, 1, &g_hw.cl_dev, build_opts ? build_opts : "", NULL, NULL) == VX_CL_SUCCESS) {
+                            free(buf);
+                            fclose(f);
+                            g_hw.router.cl_cache_hits++;
+                            return prog;
+                        }
+                        if (g_hw.p_rel_prog) g_hw.p_rel_prog(prog);
+                    }
+                }
+                free(buf);
+            }
+            fclose(f);
+        }
+    }
+
+    /* Cache miss: compile OpenCL C source and save binary to disk */
+    vx_cl_int err = 0;
+    vx_cl_program prog = g_hw.p_create_prog(g_hw.cl_ctx, 1, &src, &src_len, &err);
+    if (err != VX_CL_SUCCESS || !prog) return NULL;
+    if (g_hw.p_build_prog(prog, 1, &g_hw.cl_dev, build_opts ? build_opts : "", NULL, NULL) != VX_CL_SUCCESS) {
+        if (g_hw.p_rel_prog) g_hw.p_rel_prog(prog);
+        return NULL;
+    }
+    g_hw.router.cl_cache_misses++;
+
+    if (have_cache && g_hw.p_get_prog_info) {
+        size_t bsz = 0;
+        if (g_hw.p_get_prog_info(prog, VX_CL_PROGRAM_BINARY_SIZES, sizeof(bsz), &bsz, NULL) == VX_CL_SUCCESS &&
+            bsz > 0 && bsz < (32ULL * 1024ULL * 1024ULL)) {
+            unsigned char* buf = (unsigned char*)malloc(bsz);
+            if (buf) {
+                unsigned char* ptrs[1] = { buf };
+                if (g_hw.p_get_prog_info(prog, VX_CL_PROGRAM_BINARIES, sizeof(ptrs), ptrs, NULL) == VX_CL_SUCCESS) {
+                    char tmp_path[656];
+                    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", bin_path);
+                    FILE* wf = fopen(tmp_path, "wb");
+                    if (wf) {
+                        size_t wr = fwrite(buf, 1, bsz, wf);
+                        fclose(wf);
+                        if (wr == bsz) {
+                            remove(bin_path);
+                            rename(tmp_path, bin_path);
+                        } else {
+                            remove(tmp_path);
+                        }
+                    }
+                }
+                free(buf);
+            }
+        }
+    }
+    return prog;
+}
 
 static void hw_probe_opencl(void) {
     void* lib = NULL;
@@ -180,6 +394,9 @@ static void hw_probe_opencl(void) {
     HW_LOAD_CL(p_create_ctx,    "clCreateContext");
     HW_LOAD_CL(p_create_queue,  "clCreateCommandQueue");
     HW_LOAD_CL(p_create_prog,   "clCreateProgramWithSource");
+    HW_LOAD_CL_OPT(p_create_prog_bin, "clCreateProgramWithBinary");
+    HW_LOAD_CL_OPT(p_get_prog_info,   "clGetProgramInfo");
+    HW_LOAD_CL_OPT(p_rel_prog,        "clReleaseProgram");
     HW_LOAD_CL(p_build_prog,    "clBuildProgram");
     HW_LOAD_CL(p_create_kernel, "clCreateKernel");
     HW_LOAD_CL(p_create_buf,    "clCreateBuffer");
@@ -216,6 +433,8 @@ static void hw_probe_opencl(void) {
     g_hw.gpu_cus = (int64_t)best_cu;
     g_hw.p_get_dev_info(best_dev, VX_CL_DEVICE_NAME, sizeof(g_hw.gpu_name) - 1, g_hw.gpu_name, NULL);
     hw_trim_spaces(g_hw.gpu_name);
+    g_hw.p_get_dev_info(best_dev, VX_CL_DEVICE_DRIVER_VERSION, sizeof(g_hw.gpu_driver) - 1, g_hw.gpu_driver, NULL);
+    hw_trim_spaces(g_hw.gpu_driver);
 
     vx_cl_ulong vram = 0, lds = 0, fp64_cfg = 0;
     g_hw.p_get_dev_info(best_dev, VX_CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(vram), &vram, NULL);
@@ -258,15 +477,75 @@ static bool hw_ensure_opencl_kernels(void) {
         "        barrier(CLK_LOCAL_MEM_FENCE);\n"
         "    }\n"
         "    if (row < M && col < N) C[row * N + col] = acc;\n"
+        "}\n"
+        "\n"
+        "__kernel void matmul_f32_reg64(__global const float* __restrict__ A,\n"
+        "                               __global const float* __restrict__ B,\n"
+        "                               __global float* __restrict__ C,\n"
+        "                               int M, int N, int K) {\n"
+        "    int lr = get_local_id(1);\n"
+        "    int lc = get_local_id(0);\n"
+        "    int tid = (lr << 4) | lc;\n"
+        "    int row_base = get_group_id(1) * 64;\n"
+        "    int col_base = get_group_id(0) * 64;\n"
+        "    __local float As[16][68];\n"
+        "    __local float Bs[16][68];\n"
+        "    float4 c0 = (float4)(0.0f);\n"
+        "    float4 c1 = (float4)(0.0f);\n"
+        "    float4 c2 = (float4)(0.0f);\n"
+        "    float4 c3 = (float4)(0.0f);\n"
+        "    int a_row = tid >> 2;\n"
+        "    int a_col4 = (tid & 3) * 4;\n"
+        "    int b_row = tid >> 4;\n"
+        "    int b_col4 = (tid & 15) * 4;\n"
+        "    for (int t = 0; t < K; t += 16) {\n"
+        "        float4 va = vload4(0, &A[(row_base + a_row) * K + (t + a_col4)]);\n"
+        "        As[a_col4 + 0][a_row] = va.x;\n"
+        "        As[a_col4 + 1][a_row] = va.y;\n"
+        "        As[a_col4 + 2][a_row] = va.z;\n"
+        "        As[a_col4 + 3][a_row] = va.w;\n"
+        "        float4 vb = vload4(0, &B[(t + b_row) * N + (col_base + b_col4)]);\n"
+        "        vstore4(vb, 0, &Bs[b_row][b_col4]);\n"
+        "        barrier(CLK_LOCAL_MEM_FENCE);\n"
+        "        #pragma unroll\n"
+        "        for (int p = 0; p < 16; p++) {\n"
+        "            float4 a4 = vload4(0, &As[p][lr * 4]);\n"
+        "            float4 b4 = vload4(0, &Bs[p][lc * 4]);\n"
+        "            c0 = fma((float4)(a4.x), b4, c0);\n"
+        "            c1 = fma((float4)(a4.y), b4, c1);\n"
+        "            c2 = fma((float4)(a4.z), b4, c2);\n"
+        "            c3 = fma((float4)(a4.w), b4, c3);\n"
+        "        }\n"
+        "        barrier(CLK_LOCAL_MEM_FENCE);\n"
+        "    }\n"
+        "    int r0 = row_base + lr * 4;\n"
+        "    int c_off = col_base + lc * 4;\n"
+        "    vstore4(c0, 0, &C[(r0 + 0) * N + c_off]);\n"
+        "    vstore4(c1, 0, &C[(r0 + 1) * N + c_off]);\n"
+        "    vstore4(c2, 0, &C[(r0 + 2) * N + c_off]);\n"
+        "    vstore4(c3, 0, &C[(r0 + 3) * N + c_off]);\n"
+        "}\n"
+        "\n"
+        "__kernel void axpy_f32(float alpha, __global const float* X, __global float* Y, int N) {\n"
+        "    int i = get_global_id(0);\n"
+        "    if (i < N) Y[i] = fma(alpha, X[i], Y[i]);\n"
+        "}\n"
+        "\n"
+        "__kernel void relu_f32(__global float* X, int N) {\n"
+        "    int i = get_global_id(0);\n"
+        "    if (i < N) X[i] = fmax(X[i], 0.0f);\n"
         "}\n";
 
-    size_t len_f32 = strlen(cl_src_f32);
-    g_hw.cl_prog_f32 = g_hw.p_create_prog(g_hw.cl_ctx, 1, &cl_src_f32, &len_f32, &err);
-    if (err == VX_CL_SUCCESS && g_hw.cl_prog_f32) {
-        if (g_hw.p_build_prog(g_hw.cl_prog_f32, 1, &g_hw.cl_dev, "-cl-fast-relaxed-math", NULL, NULL) == VX_CL_SUCCESS) {
-            g_hw.k_matmul_f32 = g_hw.p_create_kernel(g_hw.cl_prog_f32, "matmul_f32", &err);
-            if (err != VX_CL_SUCCESS) g_hw.k_matmul_f32 = NULL;
-        }
+    g_hw.cl_prog_f32 = hw_build_or_load_program("vx_f32_v2", cl_src_f32, "-cl-fast-relaxed-math");
+    if (g_hw.cl_prog_f32) {
+        g_hw.k_matmul_f32       = g_hw.p_create_kernel(g_hw.cl_prog_f32, "matmul_f32", &err);
+        if (err != VX_CL_SUCCESS) g_hw.k_matmul_f32 = NULL;
+        g_hw.k_matmul_f32_reg64 = g_hw.p_create_kernel(g_hw.cl_prog_f32, "matmul_f32_reg64", &err);
+        if (err != VX_CL_SUCCESS) g_hw.k_matmul_f32_reg64 = NULL;
+        g_hw.k_axpy_f32         = g_hw.p_create_kernel(g_hw.cl_prog_f32, "axpy_f32", &err);
+        if (err != VX_CL_SUCCESS) g_hw.k_axpy_f32 = NULL;
+        g_hw.k_relu_f32         = g_hw.p_create_kernel(g_hw.cl_prog_f32, "relu_f32", &err);
+        if (err != VX_CL_SUCCESS) g_hw.k_relu_f32 = NULL;
     }
 
     if (g_hw.gpu_fp64) {
@@ -292,16 +571,114 @@ static bool hw_ensure_opencl_kernels(void) {
             "    }\n"
             "    if (row < M && col < N) C[row * N + col] = acc;\n"
             "}\n";
-        size_t len_f64 = strlen(cl_src_f64);
-        g_hw.cl_prog_f64 = g_hw.p_create_prog(g_hw.cl_ctx, 1, &cl_src_f64, &len_f64, &err);
-        if (err == VX_CL_SUCCESS && g_hw.cl_prog_f64) {
-            if (g_hw.p_build_prog(g_hw.cl_prog_f64, 1, &g_hw.cl_dev, "", NULL, NULL) == VX_CL_SUCCESS) {
-                g_hw.k_matmul_f64 = g_hw.p_create_kernel(g_hw.cl_prog_f64, "matmul_f64", &err);
-                if (err != VX_CL_SUCCESS) g_hw.k_matmul_f64 = NULL;
-            }
+        g_hw.cl_prog_f64 = hw_build_or_load_program("vx_f64_v1", cl_src_f64, "");
+        if (g_hw.cl_prog_f64) {
+            g_hw.k_matmul_f64 = g_hw.p_create_kernel(g_hw.cl_prog_f64, "matmul_f64", &err);
+            if (err != VX_CL_SUCCESS) g_hw.k_matmul_f64 = NULL;
         }
     }
     return g_hw.k_matmul_f32 != NULL;
+}
+
+/* --- Adaptive "Waze" Cost Model & Telemetry --- */
+
+static int hw_flops_bucket(int64_t flops) {
+    if (flops < 262144LL) return 0;         /* < 256K */
+    if (flops < 2097152LL) return 1;        /* < 2M */
+    if (flops < 16777216LL) return 2;       /* < 16M */
+    if (flops < 134217728LL) return 3;      /* < 128M */
+    if (flops < 1073741824LL) return 4;     /* < 1G */
+    return 5;                               /* >= 1G */
+}
+
+static double hw_prior_compute_us(int op, int64_t flops, bool is_gpu) {
+    if (!is_gpu) {
+        double cores = (double)(g_hw.phys_cores > 0 ? g_hw.phys_cores : 1);
+        double cpu_gf = (op == HW_OP_GEMM_F64)
+                      ? (g_hw.has_avx2 && g_hw.has_fma3 ? cores * 26.0 : cores * 3.0)
+                      : ((g_hw.has_avx2 && g_hw.has_fma3) ? cores * 52.0 : cores * 5.0);
+        if (op == HW_OP_AXPY_F32 || op == HW_OP_RELU_F32) cpu_gf = cores * 6.0; /* memory-bound */
+        return ((double)flops / (cpu_gf * 1e9)) * 1e6 + 15.0;
+    }
+    double cus = (double)(g_hw.gpu_cus > 0 ? g_hw.gpu_cus : 4);
+    double gpu_gf = (op == HW_OP_GEMM_F64)
+                  ? (g_hw.gpu_fp64 ? cus * 12.0 : 1.0)
+                  : ((op == HW_OP_GEMM_F32) ? cus * 180.0 : cus * 35.0);
+    return ((double)flops / (gpu_gf * 1e9)) * 1e6 + 60.0;
+}
+
+static bool hw_router_should_use_gpu(int op, int64_t flops, size_t dirty_up, size_t dirty_down, bool resident_hint) {
+    if (!g_hw.has_gpu) return false;
+    if (op == HW_OP_GEMM_F64 && !g_hw.gpu_fp64) return false;
+
+    int64_t now = hw_now_us();
+    if (now < g_hw.router.gpu_cooldown_until_us) {
+        return false; /* Congestion cooldown active -> divert to CPU BLIS */
+    }
+
+    int b = hw_flops_bucket(flops);
+    double cpu_us = g_hw.router.samples[op][b][0] > 0
+                  ? g_hw.router.ema_us[op][b][0]
+                  : hw_prior_compute_us(op, flops, false);
+    double gpu_us = g_hw.router.samples[op][b][1] > 0
+                  ? g_hw.router.ema_us[op][b][1]
+                  : hw_prior_compute_us(op, flops, true);
+
+    double bw_gbps = (g_hw.router.pcie_gbps > 0.5) ? g_hw.router.pcie_gbps : 6.0;
+    double xfer_bytes = (double)(dirty_up + dirty_down);
+    double pcie_us = (xfer_bytes > 0.0) ? ((xfer_bytes / (bw_gbps * 1e9)) * 1e6 + 65.0) : 0.0;
+
+    if (resident_hint && (op == HW_OP_AXPY_F32 || op == HW_OP_RELU_F32)) {
+        return (gpu_us + pcie_us) <= (cpu_us + 250.0);
+    }
+    return (gpu_us + pcie_us) < cpu_us;
+}
+
+static void hw_router_record(int op, int bucket, bool is_gpu, double elapsed_us) {
+    int dev = is_gpu ? 1 : 0;
+    uint32_t n = g_hw.router.samples[op][bucket][dev];
+    double prev = g_hw.router.ema_us[op][bucket][dev];
+
+    if (is_gpu && n >= 3 && elapsed_us > prev * 2.5 && elapsed_us > 8000.0) {
+        g_hw.router.gpu_cooldown_until_us = hw_now_us() + 5000000LL; /* 5s congestion bypass */
+        g_hw.router.gpu_congestion_trips++;
+    }
+    if (n == 0) {
+        g_hw.router.ema_us[op][bucket][dev] = elapsed_us;
+    } else {
+        g_hw.router.ema_us[op][bucket][dev] = 0.75 * prev + 0.25 * elapsed_us;
+    }
+    g_hw.router.samples[op][bucket][dev] = n + 1;
+}
+
+static bool hw_dispatch_gpu_matmul_f32_mems(vx_cl_mem dA, vx_cl_mem dB, vx_cl_mem dC, int M, int N, int K) {
+    vx_cl_kernel kern = g_hw.k_matmul_f32;
+    size_t local[2] = { 16, 16 };
+    size_t global[2];
+    if (g_hw.k_matmul_f32_reg64 && M >= 64 && N >= 64 && K >= 16 &&
+        (M % 64) == 0 && (N % 64) == 0 && (K % 16) == 0) {
+        kern = g_hw.k_matmul_f32_reg64;
+        global[0] = (size_t)((N / 64) * 16);
+        global[1] = (size_t)((M / 64) * 16);
+    } else {
+        global[0] = (size_t)(((N + 15) / 16) * 16);
+        global[1] = (size_t)(((M + 15) / 16) * 16);
+    }
+
+    vx_cl_int err = 0;
+    err |= g_hw.p_set_arg(kern, 0, sizeof(vx_cl_mem), &dA);
+    err |= g_hw.p_set_arg(kern, 1, sizeof(vx_cl_mem), &dB);
+    err |= g_hw.p_set_arg(kern, 2, sizeof(vx_cl_mem), &dC);
+    err |= g_hw.p_set_arg(kern, 3, sizeof(int), &M);
+    err |= g_hw.p_set_arg(kern, 4, sizeof(int), &N);
+    err |= g_hw.p_set_arg(kern, 5, sizeof(int), &K);
+    if (err == VX_CL_SUCCESS) {
+        err = g_hw.p_ndrange(g_hw.cl_queue, kern, 2, NULL, global, local, 0, NULL, NULL);
+    }
+    if (err == VX_CL_SUCCESS) {
+        err = g_hw.p_finish(g_hw.cl_queue);
+    }
+    return err == VX_CL_SUCCESS;
 }
 
 static bool hw_gpu_matmul_f32(const float* A, const float* B, float* C, int M, int N, int K) {
@@ -311,6 +688,7 @@ static bool hw_gpu_matmul_f32(const float* A, const float* B, float* C, int M, i
     size_t sz_b = (size_t)K * (size_t)N * sizeof(float);
     size_t sz_c = (size_t)M * (size_t)N * sizeof(float);
 
+    int64_t t0 = hw_now_us();
     vx_cl_mem dA = g_hw.p_create_buf(g_hw.cl_ctx, VX_CL_MEM_READ_ONLY | VX_CL_MEM_COPY_HOST_PTR, sz_a, (void*)A, &err);
     if (err != VX_CL_SUCCESS || !dA) return false;
     vx_cl_mem dB = g_hw.p_create_buf(g_hw.cl_ctx, VX_CL_MEM_READ_ONLY | VX_CL_MEM_COPY_HOST_PTR, sz_b, (void*)B, &err);
@@ -318,29 +696,36 @@ static bool hw_gpu_matmul_f32(const float* A, const float* B, float* C, int M, i
     vx_cl_mem dC = g_hw.p_create_buf(g_hw.cl_ctx, VX_CL_MEM_WRITE_ONLY, sz_c, NULL, &err);
     if (err != VX_CL_SUCCESS || !dC) { g_hw.p_rel_mem(dA); g_hw.p_rel_mem(dB); return false; }
 
-    err |= g_hw.p_set_arg(g_hw.k_matmul_f32, 0, sizeof(vx_cl_mem), &dA);
-    err |= g_hw.p_set_arg(g_hw.k_matmul_f32, 1, sizeof(vx_cl_mem), &dB);
-    err |= g_hw.p_set_arg(g_hw.k_matmul_f32, 2, sizeof(vx_cl_mem), &dC);
-    err |= g_hw.p_set_arg(g_hw.k_matmul_f32, 3, sizeof(int), &M);
-    err |= g_hw.p_set_arg(g_hw.k_matmul_f32, 4, sizeof(int), &N);
-    err |= g_hw.p_set_arg(g_hw.k_matmul_f32, 5, sizeof(int), &K);
-
-    size_t local[2] = { 16, 16 };
-    size_t global[2] = {
-        (size_t)(((N + 15) / 16) * 16),
-        (size_t)(((M + 15) / 16) * 16)
-    };
-    if (err == VX_CL_SUCCESS) {
-        err = g_hw.p_ndrange(g_hw.cl_queue, g_hw.k_matmul_f32, 2, NULL, global, local, 0, NULL, NULL);
+    g_hw.router.pcie_uploads += 2;
+    g_hw.router.pcie_bytes_up += (int64_t)(sz_a + sz_b);
+    int64_t t_up = hw_now_us() - t0;
+    if (t_up > 0) {
+        double gbps = ((double)(sz_a + sz_b) / ((double)t_up * 1000.0));
+        if (gbps > 0.2 && gbps < 64.0) g_hw.router.pcie_gbps = 0.7 * g_hw.router.pcie_gbps + 0.3 * gbps;
     }
-    if (err == VX_CL_SUCCESS) {
+
+    int64_t tk0 = hw_now_us();
+    bool ok = hw_dispatch_gpu_matmul_f32_mems(dA, dB, dC, M, N, K);
+    int64_t tk_dt = hw_now_us() - tk0;
+    if (ok && tk_dt > 0) {
+        int64_t flops = 2LL * (int64_t)M * (int64_t)N * (int64_t)K;
+        hw_router_record(HW_OP_GEMM_F32, hw_flops_bucket(flops), true, (double)tk_dt);
+    }
+    if (ok) {
         err = g_hw.p_read_buf(g_hw.cl_queue, dC, VX_CL_TRUE, 0, sz_c, C, 0, NULL, NULL);
+        ok = (err == VX_CL_SUCCESS);
+        if (ok) {
+            g_hw.router.pcie_downloads++;
+            g_hw.router.pcie_bytes_down += (int64_t)sz_c;
+        }
     }
     g_hw.p_rel_mem(dA);
     g_hw.p_rel_mem(dB);
     g_hw.p_rel_mem(dC);
-    return err == VX_CL_SUCCESS;
+    return ok;
 }
+
+/* --- CPU & Topology Probe --- */
 
 static void hw_probe_cpu(void) {
     vx_str_copy(g_hw.cpu_name, sizeof(g_hw.cpu_name), "Generic CPU");
@@ -465,11 +850,31 @@ static void hw_probe_cpu(void) {
 #endif
 }
 
-int64_t vortex_hw_init(void) {
-    if (g_hw.initialized) return 1;
+void vortex_hw_init_cpu_only(void) {
+    if (g_hw.cpu_initialized) return;
     memset(&g_hw, 0, sizeof(g_hw));
+    g_hw.router.pcie_gbps = 6.0;
     hw_probe_cpu();
-    hw_probe_opencl();
+    g_hw.cpu_initialized = true;
+}
+
+int64_t vortex_hw_get_phys_cores(void) {
+    vortex_hw_init_cpu_only();
+    return g_hw.phys_cores;
+}
+
+uint64_t vortex_hw_get_core_mask(int core_idx) {
+    vortex_hw_init_cpu_only();
+    if (core_idx < 0 || core_idx >= VORTEX_MAX_THREADS) return 0;
+    return g_hw.core_masks[core_idx];
+}
+
+int64_t vortex_hw_init(void) {
+    if (!g_hw.cpu_initialized) vortex_hw_init_cpu_only();
+    if (!g_hw.gpu_probed) {
+        hw_probe_opencl();
+        g_hw.gpu_probed = true;
+    }
     g_hw.initialized = true;
     return 1;
 }
@@ -479,7 +884,7 @@ static inline void hw_ensure_init(void) {
 }
 
 int64_t vortex_hw_cpu_name(void) {
-    hw_ensure_init();
+    vortex_hw_init_cpu_only();
     return (int64_t)(uintptr_t)vortex_intern_cstr(g_hw.cpu_name);
 }
 
@@ -488,17 +893,20 @@ int64_t vortex_hw_gpu_name(void) {
     return (int64_t)(uintptr_t)vortex_intern_cstr(g_hw.gpu_name);
 }
 
-int64_t vortex_hw_l1_kb(void) { hw_ensure_init(); return g_hw.l1d_kb; }
-int64_t vortex_hw_l2_kb(void) { hw_ensure_init(); return g_hw.l2_kb; }
-int64_t vortex_hw_l3_kb(void) { hw_ensure_init(); return g_hw.l3_kb; }
-int64_t vortex_hw_phys_cores(void) { hw_ensure_init(); return g_hw.phys_cores; }
-int64_t vortex_hw_logical_cores(void) { hw_ensure_init(); return g_hw.logical_cores; }
-int64_t vortex_hw_simd_width(void) { hw_ensure_init(); return g_hw.simd_width; }
+int64_t vortex_hw_l1_kb(void) { vortex_hw_init_cpu_only(); return g_hw.l1d_kb; }
+int64_t vortex_hw_l2_kb(void) { vortex_hw_init_cpu_only(); return g_hw.l2_kb; }
+int64_t vortex_hw_l3_kb(void) { vortex_hw_init_cpu_only(); return g_hw.l3_kb; }
+int64_t vortex_hw_phys_cores(void) { vortex_hw_init_cpu_only(); return g_hw.phys_cores; }
+int64_t vortex_hw_logical_cores(void) { vortex_hw_init_cpu_only(); return g_hw.logical_cores; }
+int64_t vortex_hw_simd_width(void) { vortex_hw_init_cpu_only(); return g_hw.simd_width; }
 int64_t vortex_hw_has_gpu(void) { hw_ensure_init(); return g_hw.has_gpu ? 1 : 0; }
 
 int64_t vortex_hw_plan_route(int64_t working_bytes, int64_t flops) {
     hw_ensure_init();
-    if (g_hw.has_gpu && flops >= 33554432LL) return HW_ROUTE_GPU;
+    size_t est_bytes = (working_bytes > 0) ? (size_t)working_bytes : 0;
+    if (flops > 0 && hw_router_should_use_gpu(HW_OP_GEMM_F32, flops, est_bytes, est_bytes / 3, false)) {
+        return HW_ROUTE_GPU;
+    }
     if (working_bytes <= g_hw.l1d_kb * 1024LL * 3 / 4) return HW_ROUTE_L1;
     if (working_bytes <= g_hw.l2_kb * 1024LL * 3 / 4) return HW_ROUTE_L2;
     if (working_bytes <= g_hw.l3_kb * 1024LL * 3 / 4) return HW_ROUTE_L3;
@@ -506,7 +914,7 @@ int64_t vortex_hw_plan_route(int64_t working_bytes, int64_t flops) {
 }
 
 int64_t vortex_hw_plan_tile_f64(void) {
-    hw_ensure_init();
+    vortex_hw_init_cpu_only();
     int64_t l2_bytes = g_hw.l2_kb * 1024LL / 2;
     int64_t max_elems = l2_bytes / (3 * 8);
     int64_t t = 32;
@@ -515,7 +923,7 @@ int64_t vortex_hw_plan_tile_f64(void) {
 }
 
 int64_t vortex_hw_pin_workers(int64_t mode) {
-    hw_ensure_init();
+    vortex_hw_init_cpu_only();
     if (mode == 2 && g_hw.phys_cores > 0 && g_hw.core_masks[0] != 0) {
         int phys = (int)g_hw.phys_cores;
         if (phys > VORTEX_MAX_THREADS) phys = VORTEX_MAX_THREADS;
@@ -551,6 +959,26 @@ int64_t vortex_hw_prefetch(int64_t ptr, int64_t bytes) {
     return lines;
 }
 
+int64_t vortex_hw_gpu_cache_hits(void) {
+    return g_hw.router.cl_cache_hits;
+}
+
+int64_t vortex_hw_router_stats(void) {
+    hw_ensure_init();
+    printf("[HW ROUTER] GPU=%s | cache hits=%lld misses=%lld | PCIe up=%lld (%lld KB) down=%lld (%lld KB) | congestion_trips=%lld | active_vram_bufs=%d\n",
+           g_hw.has_gpu ? g_hw.gpu_name : "None",
+           (long long)g_hw.router.cl_cache_hits,
+           (long long)g_hw.router.cl_cache_misses,
+           (long long)g_hw.router.pcie_uploads,
+           (long long)(g_hw.router.pcie_bytes_up / 1024LL),
+           (long long)g_hw.router.pcie_downloads,
+           (long long)(g_hw.router.pcie_bytes_down / 1024LL),
+           (long long)g_hw.router.gpu_congestion_trips,
+           g_hw_active_buf_count);
+    fflush(stdout);
+    return g_hw.router.pcie_uploads + g_hw.router.pcie_downloads;
+}
+
 int64_t vortex_hw_print_map(void) {
     hw_ensure_init();
     int64_t tile64 = vortex_hw_plan_tile_f64();
@@ -571,14 +999,14 @@ int64_t vortex_hw_print_map(void) {
     if (g_hw.has_gpu) {
         printf("| GPU      : %-40s (%2lld CU, %5lld MB) |\n",
                g_hw.gpu_name, (long long)g_hw.gpu_cus, (long long)g_hw.gpu_vram_mb);
-        printf("| GPU ISA  : OpenCL LDS=%3lld KB/CU | FP64=%-3s (FP32 Auto >= 32M FLOPs)   |\n",
+        printf("| GPU ISA  : OpenCL LDS=%3lld KB/CU | FP64=%-3s | 64x64 float4 + DiskCache |\n",
                (long long)g_hw.gpu_lds_kb, g_hw.gpu_fp64 ? "YES" : "NO");
     } else {
         printf("| GPU      : None detected (AVX2/NEON multi-core CPU route active)     |\n");
     }
-    printf("| Routes   : L1<=%lldKB -> L2<=%lldKB -> L3<=%lldKB -> RAM -> GPU        |\n",
+    printf("| Routes   : Adaptive Waze EMA (L1<=%lldK L2<=%lldK L3<=%lldK RAM GPU)    |\n",
            (long long)(g_hw.l1d_kb * 3 / 4), (long long)(g_hw.l2_kb * 3 / 4), (long long)(g_hw.l3_kb * 3 / 4));
-    printf("| Tile Opt : %lldx%lld f64 BLIS panel (MC=64 KC=256 NC=128 micro=4x8)    |\n",
+    printf("| Tile Opt : %lldx%lld f64 BLIS panel | HwBuf VRAM Residency + ScopeGC   |\n",
            (long long)tile64, (long long)tile64);
     printf("+======================================================================+\n");
     fflush(stdout);
@@ -742,8 +1170,7 @@ int64_t vortex_hw_matmul_f64(int64_t a_ptr, int64_t b_ptr, int64_t c_ptr, int64_
 
     int64_t working = (m * k + k * n + m * n) * 8LL;
     int64_t flops = 2LL * m * n * k;
-    int64_t route = vortex_hw_plan_route(working, flops);
-    if (route == HW_ROUTE_GPU) route = HW_ROUTE_L3; /* Ryzen 5500 AVX2+FMA3 beats consumer RDNA2 1/16 FP64 */
+    int64_t route = vortex_hw_plan_route(working, 0);
 
     HwGemmF64Ctx ctx = {
         (const double*)(uintptr_t)a_ptr,
@@ -756,11 +1183,13 @@ int64_t vortex_hw_matmul_f64(int64_t a_ptr, int64_t b_ptr, int64_t c_ptr, int64_
 #if VORTEX_HW_X86
     if (g_hw.has_avx2 && g_hw.has_fma3) worker_fn = hw_matmul_f64_worker_avx2;
 #endif
+    int64_t t0 = hw_now_us();
     if (flops >= 65536LL && m_blocks >= 2) {
         vortex_parallel_for_dispatch((void*)worker_fn, &ctx, 0, m_blocks);
     } else {
         worker_fn(&ctx, 0, m_blocks);
     }
+    hw_router_record(HW_OP_GEMM_F64, hw_flops_bucket(flops), false, (double)(hw_now_us() - t0));
     return route;
 }
 
@@ -916,21 +1345,23 @@ int64_t vortex_hw_matmul_f32_cpu(int64_t a_ptr, int64_t b_ptr, int64_t c_ptr, in
 #if VORTEX_HW_X86
     if (g_hw.has_avx2 && g_hw.has_fma3) worker_fn = hw_matmul_f32_worker_avx2;
 #endif
+    int64_t t0 = hw_now_us();
     if (flops >= 65536LL && m_blocks >= 2) {
         vortex_parallel_for_dispatch((void*)worker_fn, &ctx, 0, m_blocks);
     } else {
         worker_fn(&ctx, 0, m_blocks);
     }
+    hw_router_record(HW_OP_GEMM_F32, hw_flops_bucket(flops), false, (double)(hw_now_us() - t0));
     return route;
 }
 
 int64_t vortex_hw_matmul_f32(int64_t a_ptr, int64_t b_ptr, int64_t c_ptr, int64_t m, int64_t n, int64_t k) {
     hw_ensure_init();
     if (!a_ptr || !b_ptr || !c_ptr || m <= 0 || n <= 0 || k <= 0) return 0;
-    int64_t working = (m * k + k * n + m * n) * 4LL;
+    size_t sz_up = ((size_t)m * (size_t)k + (size_t)k * (size_t)n) * sizeof(float);
+    size_t sz_dn = (size_t)m * (size_t)n * sizeof(float);
     int64_t flops = 2LL * m * n * k;
-    int64_t route = vortex_hw_plan_route(working, flops);
-    if (route == HW_ROUTE_GPU) {
+    if (hw_router_should_use_gpu(HW_OP_GEMM_F32, flops, sz_up, sz_dn, false)) {
         if (hw_gpu_matmul_f32((const float*)(uintptr_t)a_ptr,
                               (const float*)(uintptr_t)b_ptr,
                               (float*)(uintptr_t)c_ptr,
@@ -941,7 +1372,7 @@ int64_t vortex_hw_matmul_f32(int64_t a_ptr, int64_t b_ptr, int64_t c_ptr, int64_
     return vortex_hw_matmul_f32_cpu(a_ptr, b_ptr, c_ptr, m, n, k);
 }
 
-/* --- Parallel Vector Dot Product & AXPY --- */
+/* --- Parallel Vector Dot Product, AXPY & ReLU --- */
 
 typedef struct {
     const double* a;
@@ -1121,18 +1552,349 @@ static void hw_axpy_f32_worker_scalar(void* raw_ctx, int64_t start, int64_t end)
     for (int64_t i = start; i < end; i++) ctx->y[i] += a * ctx->x[i];
 }
 
+static int64_t hw_axpy_f32_cpu_internal(float alpha, const float* x, float* y, int64_t n) {
+    HwAxpyF32Ctx ctx = { alpha, x, y };
+    void (*worker_fn)(void*, int64_t, int64_t) = hw_axpy_f32_worker_scalar;
+#if VORTEX_HW_X86
+    if (g_hw.has_avx2 && g_hw.has_fma3) worker_fn = hw_axpy_f32_worker_avx2;
+#endif
+    int64_t t0 = hw_now_us();
+    if (n >= 262144LL) vortex_parallel_for_dispatch((void*)worker_fn, &ctx, 0, n);
+    else worker_fn(&ctx, 0, n);
+    hw_router_record(HW_OP_AXPY_F32, hw_flops_bucket(2LL * n), false, (double)(hw_now_us() - t0));
+    return vortex_hw_plan_route(n * 8LL, 2LL * n);
+}
+
 int64_t vortex_hw_axpy_f32(int64_t alpha_bits, int64_t x_ptr, int64_t y_ptr, int64_t n) {
     hw_ensure_init();
     if (!x_ptr || !y_ptr || n <= 0) return 0;
     uint32_t u32 = (uint32_t)(uint64_t)alpha_bits;
     float alpha = 0.0f;
     memcpy(&alpha, &u32, sizeof(float));
-    HwAxpyF32Ctx ctx = { alpha, (const float*)(uintptr_t)x_ptr, (float*)(uintptr_t)y_ptr };
-    void (*worker_fn)(void*, int64_t, int64_t) = hw_axpy_f32_worker_scalar;
+    return hw_axpy_f32_cpu_internal(alpha, (const float*)(uintptr_t)x_ptr, (float*)(uintptr_t)y_ptr, n);
+}
+
 #if VORTEX_HW_X86
-    if (g_hw.has_avx2 && g_hw.has_fma3) worker_fn = hw_axpy_f32_worker_avx2;
+__attribute__((target("avx2")))
+static void hw_relu_f32_worker_avx2(void* raw_ctx, int64_t start, int64_t end) {
+    float* x = (float*)raw_ctx;
+    __m256 z = _mm256_setzero_ps();
+    int64_t i = start;
+    for (; i + 32 <= end; i += 32) {
+        _mm256_storeu_ps(x + i + 0,  _mm256_max_ps(_mm256_loadu_ps(x + i + 0),  z));
+        _mm256_storeu_ps(x + i + 8,  _mm256_max_ps(_mm256_loadu_ps(x + i + 8),  z));
+        _mm256_storeu_ps(x + i + 16, _mm256_max_ps(_mm256_loadu_ps(x + i + 16), z));
+        _mm256_storeu_ps(x + i + 24, _mm256_max_ps(_mm256_loadu_ps(x + i + 24), z));
+    }
+    for (; i < end; i++) {
+        if (x[i] < 0.0f) x[i] = 0.0f;
+    }
+}
 #endif
-    if (n >= 262144LL) vortex_parallel_for_dispatch((void*)worker_fn, &ctx, 0, n);
-    else worker_fn(&ctx, 0, n);
-    return vortex_hw_plan_route(n * 8LL, 2LL * n);
+
+static void hw_relu_f32_worker_scalar(void* raw_ctx, int64_t start, int64_t end) {
+    float* x = (float*)raw_ctx;
+    for (int64_t i = start; i < end; i++) {
+        if (x[i] < 0.0f) x[i] = 0.0f;
+    }
+}
+
+/* --- Resident RAM/VRAM HwBuf Implementation --- */
+
+static VortexHwBuf* hw_buf_validate(int64_t handle) {
+    if (!handle) return NULL;
+    uintptr_t addr = (uintptr_t)handle;
+    uintptr_t lo = (uintptr_t)&g_hw_buf_pool[0];
+    uintptr_t hi = (uintptr_t)&g_hw_buf_pool[HW_MAX_BUFS];
+    if (addr < lo || addr >= hi) return NULL;
+    if ((addr - lo) % sizeof(VortexHwBuf) != 0) return NULL;
+    VortexHwBuf* b = (VortexHwBuf*)addr;
+    if (b->magic != HW_BUF_MAGIC || !b->active) return NULL;
+    return b;
+}
+
+static void hw_buf_release_slot(VortexHwBuf* b) {
+    if (!b || !b->active) return;
+    if (b->cl_mem && g_hw.p_rel_mem) {
+        g_hw.p_rel_mem(b->cl_mem);
+    }
+    memset(b, 0, sizeof(*b));
+    if (g_hw_active_buf_count > 0) g_hw_active_buf_count--;
+}
+
+void vortex_hw_release_scope(void* arena_ptr, uint32_t target_depth) {
+    if (g_hw_active_buf_count == 0) return;
+    for (int i = 0; i < HW_MAX_BUFS; i++) {
+        VortexHwBuf* b = &g_hw_buf_pool[i];
+        if (b->active && b->owner_arena == arena_ptr && b->scope_depth > target_depth) {
+            hw_buf_release_slot(b);
+        }
+    }
+}
+
+void vortex_hw_release_all_bufs(void) {
+    if (g_hw_active_buf_count == 0) return;
+    for (int i = 0; i < HW_MAX_BUFS; i++) {
+        if (g_hw_buf_pool[i].active) {
+            hw_buf_release_slot(&g_hw_buf_pool[i]);
+        }
+    }
+}
+
+static int64_t hw_buf_alloc_common(int64_t slice_ptr, int64_t n, uint8_t elem_size) {
+    hw_ensure_init();
+    if (!slice_ptr || n <= 0) return 0;
+    for (int i = 0; i < HW_MAX_BUFS; i++) {
+        if (!g_hw_buf_pool[i].active) {
+            VortexHwBuf* b = &g_hw_buf_pool[i];
+            memset(b, 0, sizeof(*b));
+            b->magic = HW_BUF_MAGIC;
+            b->active = 1;
+            b->host_dirty = 1;
+            b->dev_dirty = 0;
+            b->elem_size = elem_size;
+            b->host_ptr = (void*)(uintptr_t)slice_ptr;
+            b->elem_count = n;
+            b->bytes = (size_t)n * (size_t)elem_size;
+            arena_get_scope_info(&b->owner_arena, &b->scope_depth, &b->scope_epoch);
+            g_hw_active_buf_count++;
+            return (int64_t)(uintptr_t)b;
+        }
+    }
+    return 0;
+}
+
+int64_t vortex_hw_buf_from_f32(int64_t slice_ptr, int64_t n) {
+    return hw_buf_alloc_common(slice_ptr, n, 4);
+}
+
+int64_t vortex_hw_buf_from_f64(int64_t slice_ptr, int64_t n) {
+    return hw_buf_alloc_common(slice_ptr, n, 8);
+}
+
+static bool hw_buf_ensure_dev(VortexHwBuf* b, bool need_contents) {
+    if (!b || !g_hw.has_gpu || !hw_ensure_opencl_kernels()) return false;
+    vx_cl_int err = 0;
+    if (!b->cl_mem) {
+        if (need_contents && b->host_dirty) {
+            int64_t t0 = hw_now_us();
+            b->cl_mem = g_hw.p_create_buf(g_hw.cl_ctx, VX_CL_MEM_READ_WRITE | VX_CL_MEM_COPY_HOST_PTR,
+                                          b->bytes, b->host_ptr, &err);
+            if (err != VX_CL_SUCCESS || !b->cl_mem) { b->cl_mem = NULL; return false; }
+            int64_t dt = hw_now_us() - t0;
+            if (dt > 0 && b->bytes >= 65536) {
+                double gbps = ((double)b->bytes / ((double)dt * 1000.0));
+                if (gbps > 0.2 && gbps < 64.0) g_hw.router.pcie_gbps = 0.7 * g_hw.router.pcie_gbps + 0.3 * gbps;
+            }
+            g_hw.router.pcie_uploads++;
+            g_hw.router.pcie_bytes_up += (int64_t)b->bytes;
+            b->host_dirty = 0;
+            b->dev_dirty = 0;
+        } else {
+            b->cl_mem = g_hw.p_create_buf(g_hw.cl_ctx, VX_CL_MEM_READ_WRITE, b->bytes, NULL, &err);
+            if (err != VX_CL_SUCCESS || !b->cl_mem) { b->cl_mem = NULL; return false; }
+            if (!need_contents) b->host_dirty = 0;
+        }
+        return true;
+    }
+
+    if (need_contents && b->host_dirty) {
+        int64_t t0 = hw_now_us();
+        err = g_hw.p_write_buf(g_hw.cl_queue, b->cl_mem, VX_CL_TRUE, 0, b->bytes, b->host_ptr, 0, NULL, NULL);
+        if (err != VX_CL_SUCCESS) return false;
+        int64_t dt = hw_now_us() - t0;
+        if (dt > 0 && b->bytes >= 65536) {
+            double gbps = ((double)b->bytes / ((double)dt * 1000.0));
+            if (gbps > 0.2 && gbps < 64.0) g_hw.router.pcie_gbps = 0.7 * g_hw.router.pcie_gbps + 0.3 * gbps;
+        }
+        g_hw.router.pcie_uploads++;
+        g_hw.router.pcie_bytes_up += (int64_t)b->bytes;
+        b->host_dirty = 0;
+    }
+    return true;
+}
+
+static bool hw_buf_ensure_host(VortexHwBuf* b) {
+    if (!b) return false;
+    if (b->dev_dirty && b->cl_mem && g_hw.p_read_buf) {
+        vx_cl_int err = g_hw.p_read_buf(g_hw.cl_queue, b->cl_mem, VX_CL_TRUE, 0, b->bytes, b->host_ptr, 0, NULL, NULL);
+        if (err != VX_CL_SUCCESS) return false;
+        g_hw.router.pcie_downloads++;
+        g_hw.router.pcie_bytes_down += (int64_t)b->bytes;
+        b->dev_dirty = 0;
+        b->host_dirty = 0;
+    }
+    return true;
+}
+
+int64_t vortex_hw_buf_sync_host(int64_t buf_handle) {
+    hw_ensure_init();
+    VortexHwBuf* b = hw_buf_validate(buf_handle);
+    if (!b) return 0;
+    uint8_t was_dirty = b->dev_dirty;
+    if (!hw_buf_ensure_host(b)) return 0;
+    return was_dirty ? 1 : 0;
+}
+
+int64_t vortex_hw_buf_mark_host_dirty(int64_t buf_handle) {
+    VortexHwBuf* b = hw_buf_validate(buf_handle);
+    if (!b) return 0;
+    b->host_dirty = 1;
+    b->dev_dirty = 0;
+    return 1;
+}
+
+int64_t vortex_hw_buf_state(int64_t buf_handle) {
+    VortexHwBuf* b = hw_buf_validate(buf_handle);
+    if (!b) return 0;
+    int64_t s = 0;
+    if (b->host_dirty) s |= HW_BUF_HOST_DIRTY;
+    if (b->dev_dirty)  s |= HW_BUF_DEV_DIRTY;
+    if (b->cl_mem)     s |= HW_BUF_IN_VRAM;
+    return s;
+}
+
+int64_t vortex_hw_buf_free(int64_t buf_handle) {
+    VortexHwBuf* b = hw_buf_validate(buf_handle);
+    if (!b) return 0;
+    hw_buf_release_slot(b);
+    return 1;
+}
+
+int64_t vortex_hw_matmul_f32_buf(int64_t a_buf, int64_t b_buf, int64_t c_buf, int64_t m, int64_t n, int64_t k) {
+    hw_ensure_init();
+    VortexHwBuf* ba = hw_buf_validate(a_buf);
+    VortexHwBuf* bb = hw_buf_validate(b_buf);
+    VortexHwBuf* bc = hw_buf_validate(c_buf);
+    if (!ba || !bb || !bc || m <= 0 || n <= 0 || k <= 0) return 0;
+
+    size_t dirty_up = (ba->host_dirty ? ba->bytes : 0) + (bb->host_dirty ? bb->bytes : 0);
+    int64_t flops = 2LL * m * n * k;
+    bool resident_hint = (ba->cl_mem != NULL && bb->cl_mem != NULL);
+
+    if (hw_router_should_use_gpu(HW_OP_GEMM_F32, flops, dirty_up, 0, resident_hint)) {
+        if (hw_buf_ensure_dev(ba, true) && hw_buf_ensure_dev(bb, true) && hw_buf_ensure_dev(bc, false)) {
+            int64_t t0 = hw_now_us();
+            bool ok = hw_dispatch_gpu_matmul_f32_mems(ba->cl_mem, bb->cl_mem, bc->cl_mem, (int)m, (int)n, (int)k);
+            int64_t dt = hw_now_us() - t0;
+            if (ok) {
+                bc->dev_dirty = 1;
+                bc->host_dirty = 0;
+                hw_router_record(HW_OP_GEMM_F32, hw_flops_bucket(flops), true, (double)dt);
+                return HW_ROUTE_GPU;
+            }
+        }
+    }
+
+    hw_buf_ensure_host(ba);
+    hw_buf_ensure_host(bb);
+    int64_t route = vortex_hw_matmul_f32_cpu((int64_t)(uintptr_t)ba->host_ptr,
+                                             (int64_t)(uintptr_t)bb->host_ptr,
+                                             (int64_t)(uintptr_t)bc->host_ptr,
+                                             m, n, k);
+    bc->host_dirty = 1;
+    bc->dev_dirty = 0;
+    return route;
+}
+
+int64_t vortex_hw_matmul_f64_buf(int64_t a_buf, int64_t b_buf, int64_t c_buf, int64_t m, int64_t n, int64_t k) {
+    hw_ensure_init();
+    VortexHwBuf* ba = hw_buf_validate(a_buf);
+    VortexHwBuf* bb = hw_buf_validate(b_buf);
+    VortexHwBuf* bc = hw_buf_validate(c_buf);
+    if (!ba || !bb || !bc || m <= 0 || n <= 0 || k <= 0) return 0;
+
+    hw_buf_ensure_host(ba);
+    hw_buf_ensure_host(bb);
+    int64_t route = vortex_hw_matmul_f64((int64_t)(uintptr_t)ba->host_ptr,
+                                         (int64_t)(uintptr_t)bb->host_ptr,
+                                         (int64_t)(uintptr_t)bc->host_ptr,
+                                         m, n, k);
+    bc->host_dirty = 1;
+    bc->dev_dirty = 0;
+    return route;
+}
+
+int64_t vortex_hw_axpy_f32_buf(int64_t alpha_bits, int64_t x_buf, int64_t y_buf, int64_t n) {
+    hw_ensure_init();
+    VortexHwBuf* bx = hw_buf_validate(x_buf);
+    VortexHwBuf* by = hw_buf_validate(y_buf);
+    if (!bx || !by || n <= 0) return 0;
+    uint32_t u32 = (uint32_t)(uint64_t)alpha_bits;
+    float alpha = 0.0f;
+    memcpy(&alpha, &u32, sizeof(float));
+
+    size_t dirty_up = (bx->host_dirty ? bx->bytes : 0) + (by->host_dirty ? by->bytes : 0);
+    bool resident_hint = (bx->cl_mem != NULL && by->cl_mem != NULL && !bx->host_dirty && !by->host_dirty);
+    int64_t flops = 2LL * n;
+
+    if ((resident_hint || hw_router_should_use_gpu(HW_OP_AXPY_F32, flops, dirty_up, 0, resident_hint)) &&
+        hw_buf_ensure_dev(bx, true) && hw_buf_ensure_dev(by, true) && g_hw.k_axpy_f32) {
+        int ni = (int)n;
+        size_t local[1] = { 256 };
+        size_t global[1] = { (size_t)(((n + 255) / 256) * 256) };
+        int64_t t0 = hw_now_us();
+        vx_cl_int err = 0;
+        err |= g_hw.p_set_arg(g_hw.k_axpy_f32, 0, sizeof(float), &alpha);
+        err |= g_hw.p_set_arg(g_hw.k_axpy_f32, 1, sizeof(vx_cl_mem), &bx->cl_mem);
+        err |= g_hw.p_set_arg(g_hw.k_axpy_f32, 2, sizeof(vx_cl_mem), &by->cl_mem);
+        err |= g_hw.p_set_arg(g_hw.k_axpy_f32, 3, sizeof(int), &ni);
+        if (err == VX_CL_SUCCESS) err = g_hw.p_ndrange(g_hw.cl_queue, g_hw.k_axpy_f32, 1, NULL, global, local, 0, NULL, NULL);
+        if (err == VX_CL_SUCCESS) err = g_hw.p_finish(g_hw.cl_queue);
+        if (err == VX_CL_SUCCESS) {
+            by->dev_dirty = 1;
+            by->host_dirty = 0;
+            hw_router_record(HW_OP_AXPY_F32, hw_flops_bucket(flops), true, (double)(hw_now_us() - t0));
+            return HW_ROUTE_GPU;
+        }
+    }
+
+    hw_buf_ensure_host(bx);
+    hw_buf_ensure_host(by);
+    int64_t route = hw_axpy_f32_cpu_internal(alpha, (const float*)bx->host_ptr, (float*)by->host_ptr, n);
+    by->host_dirty = 1;
+    by->dev_dirty = 0;
+    return route;
+}
+
+int64_t vortex_hw_relu_f32_buf(int64_t x_buf, int64_t n) {
+    hw_ensure_init();
+    VortexHwBuf* bx = hw_buf_validate(x_buf);
+    if (!bx || n <= 0) return 0;
+
+    size_t dirty_up = bx->host_dirty ? bx->bytes : 0;
+    bool resident_hint = (bx->cl_mem != NULL && !bx->host_dirty);
+    int64_t flops = n;
+
+    if ((resident_hint || hw_router_should_use_gpu(HW_OP_RELU_F32, flops, dirty_up, 0, resident_hint)) &&
+        hw_buf_ensure_dev(bx, true) && g_hw.k_relu_f32) {
+        int ni = (int)n;
+        size_t local[1] = { 256 };
+        size_t global[1] = { (size_t)(((n + 255) / 256) * 256) };
+        int64_t t0 = hw_now_us();
+        vx_cl_int err = 0;
+        err |= g_hw.p_set_arg(g_hw.k_relu_f32, 0, sizeof(vx_cl_mem), &bx->cl_mem);
+        err |= g_hw.p_set_arg(g_hw.k_relu_f32, 1, sizeof(int), &ni);
+        if (err == VX_CL_SUCCESS) err = g_hw.p_ndrange(g_hw.cl_queue, g_hw.k_relu_f32, 1, NULL, global, local, 0, NULL, NULL);
+        if (err == VX_CL_SUCCESS) err = g_hw.p_finish(g_hw.cl_queue);
+        if (err == VX_CL_SUCCESS) {
+            bx->dev_dirty = 1;
+            bx->host_dirty = 0;
+            hw_router_record(HW_OP_RELU_F32, hw_flops_bucket(flops), true, (double)(hw_now_us() - t0));
+            return HW_ROUTE_GPU;
+        }
+    }
+
+    hw_buf_ensure_host(bx);
+    void (*worker_fn)(void*, int64_t, int64_t) = hw_relu_f32_worker_scalar;
+#if VORTEX_HW_X86
+    if (g_hw.has_avx2) worker_fn = hw_relu_f32_worker_avx2;
+#endif
+    int64_t t0 = hw_now_us();
+    if (n >= 262144LL) vortex_parallel_for_dispatch((void*)worker_fn, bx->host_ptr, 0, n);
+    else worker_fn(bx->host_ptr, 0, n);
+    hw_router_record(HW_OP_RELU_F32, hw_flops_bucket(flops), false, (double)(hw_now_us() - t0));
+    bx->host_dirty = 1;
+    bx->dev_dirty = 0;
+    return vortex_hw_plan_route(n * 4LL, flops);
 }

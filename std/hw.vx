@@ -11,6 +11,14 @@ const HW_PIN_AUTO: i64 = 0;
 const HW_PIN_LOGICAL: i64 = 1;
 const HW_PIN_PHYSICAL: i64 = 2;
 
+const HW_BUF_HOST_DIRTY: i64 = 1;
+const HW_BUF_DEV_DIRTY: i64 = 2;
+const HW_BUF_IN_VRAM: i64 = 4;
+
+fn hw_buf_is_vram(buf: ptr) -> i64 {
+    return (hw_buf_state(buf) & HW_BUF_IN_VRAM) != 0 ? 1 : 0;
+}
+
 fn hw_route_name(route: i64) -> str {
     if route == HW_ROUTE_L1 {
         return "L1_CACHE";
