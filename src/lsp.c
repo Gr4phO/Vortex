@@ -1388,8 +1388,9 @@ static void lsp_handle_completion(const char* id_json, const char* params) {
                 emitted++;
             }
             static const char* kws[] = {
-                "fn", "struct", "let", "mut", "if", "else", "for", "while", "return",
-                "unsafe", "extern", "import", "as", "i64", "i32", "f32", "f64", "str", "ptr", NULL
+                "fn", "struct", "enum", "const", "let", "mut", "if", "else", "for", "parallel_for",
+                "while", "match", "break", "continue", "return", "unsafe", "extern", "import", "as",
+                "i64", "i32", "u32", "f32", "f64", "bool", "char", "str", "ptr", NULL
             };
             for (int k = 0; kws[k] != NULL; k++) {
                 if (!lsp_prefix_match(kws[k], word)) continue;
@@ -1411,6 +1412,224 @@ static void lsp_handle_completion(const char* id_json, const char* params) {
 /* ========================================================================= */
 /* 8. LSP MAIN JSON-RPC LOOP                                                 */
 /* ========================================================================= */
+
+static int fmt_scan_line_braces(const char* s, size_t len, bool* in_block_comment, int* out_lead_close) {
+    int delta = 0;
+    int lead_close = 0;
+    bool seen_non_ws = false;
+    bool counting_lead = true;
+    bool in_str = false;
+    bool in_char = false;
+
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+        if (*in_block_comment) {
+            if (c == '*' && i + 1 < len && s[i + 1] == '/') {
+                *in_block_comment = false;
+                i++;
+            }
+            continue;
+        }
+        if (in_str) {
+            if (c == '\\' && i + 1 < len) { i++; continue; }
+            if (c == '"') in_str = false;
+            continue;
+        }
+        if (in_char) {
+            if (c == '\\' && i + 1 < len) { i++; continue; }
+            if (c == '\'') in_char = false;
+            continue;
+        }
+        if (!seen_non_ws && (c == ' ' || c == '\t')) continue;
+        seen_non_ws = true;
+        if (c == '/' && i + 1 < len && s[i + 1] == '/') break;
+        if (c == '/' && i + 1 < len && s[i + 1] == '*') {
+            counting_lead = false;
+            *in_block_comment = true;
+            i++;
+            continue;
+        }
+        if (c == '"') { counting_lead = false; in_str = true; continue; }
+        if (c == '\'') { counting_lead = false; in_char = true; continue; }
+        if (c == '}') {
+            if (counting_lead) lead_close++;
+            delta--;
+        } else {
+            counting_lead = false;
+            if (c == '{') delta++;
+        }
+    }
+    if (out_lead_close) *out_lead_close = lead_close;
+    return delta;
+}
+
+char* vortex_format_source(const char* src) {
+    LspStr out = {0};
+    if (!src || !src[0]) {
+        lstr_addc(&out, '\n');
+        return out.data;
+    }
+
+    size_t len = strlen(src);
+    size_t pos = 0;
+    int indent = 0;
+    int consecutive_blank = 0;
+    bool in_block_comment = false;
+    bool started_output = false;
+
+    while (pos < len) {
+        size_t line_start = pos;
+        while (pos < len && src[pos] != '\n') pos++;
+        size_t line_end = pos;
+        if (pos < len && src[pos] == '\n') pos++;
+
+        while (line_end > line_start &&
+               (src[line_end - 1] == '\r' || src[line_end - 1] == ' ' || src[line_end - 1] == '\t')) {
+            line_end--;
+        }
+
+        size_t trim_start = line_start;
+        while (trim_start < line_end && (src[trim_start] == ' ' || src[trim_start] == '\t')) {
+            trim_start++;
+        }
+
+        if (trim_start == line_end) {
+            if (started_output && consecutive_blank == 0) {
+                lstr_addc(&out, '\n');
+                consecutive_blank = 1;
+            }
+            continue;
+        }
+        consecutive_blank = 0;
+        started_output = true;
+
+        bool was_in_comment = in_block_comment;
+        int lead_close = 0;
+        int delta = fmt_scan_line_braces(src + line_start, line_end - line_start, &in_block_comment, &lead_close);
+
+        if (was_in_comment) {
+            lstr_addn(&out, src + line_start, line_end - line_start);
+            lstr_addc(&out, '\n');
+        } else {
+            int line_indent = indent - lead_close;
+            if (line_indent < 0) line_indent = 0;
+            for (int sp = 0; sp < line_indent * 4; sp++) {
+                lstr_addc(&out, ' ');
+            }
+            lstr_addn(&out, src + trim_start, line_end - trim_start);
+            lstr_addc(&out, '\n');
+        }
+
+        indent += delta;
+        if (indent < 0) indent = 0;
+    }
+
+    if (out.len == 0) lstr_addc(&out, '\n');
+    return out.data;
+}
+
+static char* fmt_read_file(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return NULL; }
+    fseek(f, 0, SEEK_SET);
+    char* buf = (char*)malloc((size_t)sz + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t n = fread(buf, 1, (size_t)sz, f);
+    buf[n] = '\0';
+    fclose(f);
+    return buf;
+}
+
+int vortex_cmd_fmt(int argc, char** argv) {
+    bool check_only = g_check_only;
+    bool to_stdout = false;
+    int files_processed = 0;
+    int needs_fmt = 0;
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--check") == 0) { check_only = true; continue; }
+        if (strcmp(argv[i], "--stdout") == 0) { to_stdout = true; continue; }
+        char* orig = fmt_read_file(argv[i]);
+        if (!orig) {
+            fprintf(stderr, "[VORTEX FMT ERROR] Cannot read file '%s'\n", argv[i]);
+            return 1;
+        }
+        char* formatted = vortex_format_source(orig);
+        files_processed++;
+        bool changed = (formatted && strcmp(orig, formatted) != 0);
+        if (to_stdout) {
+            fputs(formatted ? formatted : orig, stdout);
+        } else if (check_only) {
+            if (changed) {
+                printf("[FMT] Needs formatting: %s\n", argv[i]);
+                needs_fmt++;
+            }
+        } else if (changed) {
+            FILE* fw = fopen(argv[i], "wb");
+            if (!fw) {
+                fprintf(stderr, "[VORTEX FMT ERROR] Cannot write file '%s'\n", argv[i]);
+                free(orig);
+                free(formatted);
+                return 1;
+            }
+            fwrite(formatted, 1, strlen(formatted), fw);
+            fclose(fw);
+            printf("[FMT] Formatted %s\n", argv[i]);
+        }
+        free(orig);
+        free(formatted);
+    }
+
+    if (files_processed == 0) {
+        fprintf(stderr, "Usage: vortex fmt [--check|--stdout] <file.vx> [file2.vx ...]\n");
+        return 1;
+    }
+    return (check_only && needs_fmt > 0) ? 1 : 0;
+}
+
+static void lsp_handle_formatting(const char* id_json, const char* params) {
+    const char* td = json_find_key(params, "textDocument");
+    char* uri = td ? json_dup_string(json_find_key(td, "uri")) : NULL;
+    LspDocument* doc = uri ? lsp_find_doc(uri) : NULL;
+
+    LspStr res = {0};
+    lstr_adds(&res, "{\"jsonrpc\":\"2.0\",\"id\":");
+    lstr_adds(&res, id_json);
+    lstr_adds(&res, ",\"result\":");
+
+    if (doc && doc->text) {
+        char* formatted = vortex_format_source(doc->text);
+        if (formatted && strcmp(doc->text, formatted) != 0) {
+            int end_line = 0;
+            int end_col = 0;
+            for (const char* p = doc->text; *p; p++) {
+                if (*p == '\n') { end_line++; end_col = 0; }
+                else end_col++;
+            }
+            char hdr[192];
+            snprintf(hdr, sizeof(hdr),
+                     "[{\"range\":{\"start\":{\"line\":0,\"character\":0},"
+                     "\"end\":{\"line\":%d,\"character\":%d}},\"newText\":",
+                     end_line, end_col);
+            lstr_adds(&res, hdr);
+            lstr_add_json_str(&res, formatted);
+            lstr_adds(&res, "}]");
+        } else {
+            lstr_adds(&res, "[]");
+        }
+        free(formatted);
+    } else {
+        lstr_adds(&res, "[]");
+    }
+
+    lstr_adds(&res, "}");
+    lsp_send_json(res.data);
+    free(res.data);
+    free(uri);
+}
 
 int vortex_cmd_lsp(int argc, char** argv) {
     (void)argc;
@@ -1440,6 +1659,7 @@ int vortex_cmd_lsp(int argc, char** argv) {
                          "\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":true}},"
                          "\"hoverProvider\":true,"
                          "\"definitionProvider\":true,"
+                         "\"documentFormattingProvider\":true,"
                          "\"completionProvider\":{\"triggerCharacters\":[\".\",\":\"]}"
                          "},\"serverInfo\":{\"name\":\"vortex-lsp\",\"version\":\"%s\"}}}",
                          id_json, VORTEX_VERSION);
@@ -1498,6 +1718,8 @@ int vortex_cmd_lsp(int argc, char** argv) {
                 lsp_handle_hover(id_json, params);
             } else if (strcmp(method, "textDocument/completion") == 0 && has_id && params) {
                 lsp_handle_completion(id_json, params);
+            } else if (strcmp(method, "textDocument/formatting") == 0 && has_id && params) {
+                lsp_handle_formatting(id_json, params);
             } else if (has_id) {
                 char resp[256];
                 snprintf(resp, sizeof(resp),

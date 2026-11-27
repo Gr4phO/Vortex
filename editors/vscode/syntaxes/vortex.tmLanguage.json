@@ -95,7 +95,7 @@
         },
         {
           "name": "keyword.other.vortex",
-          "match": "\\b(fn|struct|enum|let|mut|extern|unsafe|as)\\b"
+          "match": "\\b(fn|struct|enum|const|let|mut|extern|unsafe|as)\\b"
         }
       ]
     },

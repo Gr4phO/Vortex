@@ -261,7 +261,8 @@ typedef enum {
     TOK_CARET_EQ,
     TOK_SHL_EQ,
     TOK_SHR_EQ,
-    TOK_COLONCOLON
+    TOK_COLONCOLON,
+    TOK_CONST
 } VortexTokenType;
 
 typedef struct {
@@ -327,6 +328,7 @@ typedef struct {
 #define MAX_ENUM_TYPES 256
 #define MAX_ENUM_VARIANTS 128
 #define MAX_SYMBOLS 1024
+#define MAX_CONSTS 1024
 #define MAX_USER_FUNCS 8192
 #define MAX_USER_FUNC_RELOCS 32768
 #define MAX_DYN_LIBS 256
@@ -957,6 +959,8 @@ int64_t vortex_assert(int64_t cond);
 int64_t vortex_assert_eq(int64_t a, int64_t b);
 int vortex_cmd_test(int argc, char** argv);
 int vortex_cmd_spec(int argc, char** argv);
+int vortex_cmd_fmt(int argc, char** argv);
+char* vortex_format_source(const char* src);
 void helper_print_i64(int64_t val);
 void helper_print_f32(float val);
 void helper_print_str(const char* s);

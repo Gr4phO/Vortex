@@ -177,4 +177,21 @@ if grep -q '\[VORTEX ' "$TMP_DIR/all6.json"; then
 fi
 echo "  [PASS] --ultrasafe 3 reported all 6 distinct sorted errors with clean messages, exact cols, and 0 warnings."
 
+# 10) Native formatter (vortex fmt --check / --stdout)
+cat > "$TMP_DIR/fmt_test.vx" <<'EOF'
+fn ugly(x: i64) -> i64 {
+if x > 0 {
+  return x + 1;
+}
+    return 0;
+}
+EOF
+if "$VTX" fmt --check "$TMP_DIR/fmt_test.vx" >/dev/null 2>&1; then
+    echo "[FAIL] vortex fmt --check should have flagged unformatted file!"
+    exit 1
+fi
+"$VTX" fmt "$TMP_DIR/fmt_test.vx" >/dev/null
+"$VTX" fmt --check "$TMP_DIR/fmt_test.vx" >/dev/null
+echo "  [PASS] vortex fmt formatted source and verified clean via --check."
+
 echo "[ULTRASAFE CHECKS] All checks PASSED!"

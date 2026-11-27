@@ -93,6 +93,7 @@ static void print_usage(const char* exe_name) {
     printf("  eval [flags] \"<code>\"       JIT-compile and evaluate inline Vortex code\n");
     printf("  build [flags] <in.vx> [-o out]  Package standalone executable\n");
     printf("  test [path] [flags]         Run native unit tests (assert / assert_eq / test_*)\n");
+    printf("  fmt [--check|--stdout] <f>  Format Vortex (.vx) source files natively\n");
     printf("  spec [--json]               Emit live compiler specification (Markdown or JSON)\n");
     printf("  pkg <subcmd>                Package manager (init, add, install, update, verify, run, build)\n");
     printf("  lsp                         Start Language Server Protocol (JSON-RPC over stdio)\n");
@@ -529,6 +530,9 @@ int main(int argc, char** argv) {
     }
     if (strcmp(arg1, "test") == 0) {
         return vortex_cmd_test(filtered_argc, filtered_argv);
+    }
+    if (strcmp(arg1, "fmt") == 0) {
+        return vortex_cmd_fmt(filtered_argc, filtered_argv);
     }
     if (strcmp(arg1, "spec") == 0) {
         return vortex_cmd_spec(filtered_argc, filtered_argv);

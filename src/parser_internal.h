@@ -17,6 +17,18 @@ VortexType vortex_parse_type_spec_full(Lexer* l, int* out_struct_id, bool* out_n
 VortexField* vortex_resolve_struct_field(int struct_id, const char* fname);
 Symbol* vortex_symtab_find(SymbolTable* st, const char* name);
 Symbol* vortex_symtab_add(SymbolTable* st, const char* name, VortexType type, bool is_mut);
+
+typedef struct {
+    char name[64];
+    VortexType type;
+    int64_t int_val;
+    float float_val;
+    const char* str_val;
+} VortexConst;
+
+VortexConst* vortex_const_find(const char* name);
+VortexConst* vortex_const_add(const char* name, VortexType type, int64_t iv, float fv, const char* sv);
+void vortex_const_reset(void);
 bool vortex_is_pointer_type(VortexType t);
 bool vortex_is_scalar_int_type(VortexType t);
 void vortex_require_unsafe(Compiler* c, const char* what, int line, int col);

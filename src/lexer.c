@@ -246,6 +246,7 @@ void next_token(Lexer* lex) {
         else if (strcmp(lex->cur.text, "unsafe") == 0) lex->cur.type = TOK_UNSAFE;
         else if (strcmp(lex->cur.text, "as") == 0) lex->cur.type = TOK_AS;
         else if (strcmp(lex->cur.text, "import") == 0) lex->cur.type = TOK_IMPORT;
+        else if (strcmp(lex->cur.text, "const") == 0) lex->cur.type = TOK_CONST;
         else if (strcmp(lex->cur.text, "break") == 0) lex->cur.type = TOK_BREAK;
         else if (strcmp(lex->cur.text, "continue") == 0) lex->cur.type = TOK_CONTINUE;
         else if (strcmp(lex->cur.text, "true") == 0) lex->cur.type = TOK_TRUE;
@@ -392,7 +393,7 @@ void vortex_lexer_sync(Lexer* l, bool in_function) {
                 return;
             }
             if (!in_function && (t == TOK_FN || t == TOK_STRUCT || t == TOK_ENUM ||
-                                 t == TOK_EXTERN || t == TOK_IMPORT || t == TOK_UNSAFE || t == TOK_LET)) {
+                                 t == TOK_EXTERN || t == TOK_IMPORT || t == TOK_CONST || t == TOK_UNSAFE || t == TOK_LET)) {
                 return;
             }
             if (in_function && (t == TOK_LET || t == TOK_IF || t == TOK_FOR || t == TOK_MATCH ||

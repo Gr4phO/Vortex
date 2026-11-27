@@ -238,6 +238,33 @@ if !errorlevel! equ 0 (
 )
 echo   [PASS] --ultrasafe 3 reported all 6 distinct sorted errors with clean messages, exact cols, and 0 warnings.
 
-del "%TMP1%" "%TMPWARN%" "%TMP2%" "%TMP2REC%" "%TMP3%" "%TMP7%" "%TMP8MOD%" "%TMP8MAIN%" "%TMP9%" "%TEMP%\vx_warn.json" "%TEMP%\vx_us2.out" "%TEMP%\vx_us3.json" "%TEMP%\vx_test.json" "%TEMP%\vx_spec.json" "%TEMP%\vx_us3_clean.json" "%TEMP%\vx_us3_map.json" "%TEMP%\vx_us3_all6.json" 2>nul
+REM 10) Native formatter (vortex fmt --check / --stdout)
+set TMPFMT=%TEMP%\vx_fmt_test.vx
+> "%TMPFMT%" (
+    echo fn ugly^(x: i64^) -^> i64 {
+    echo if x ^> 0 {
+    echo   return x + 1;
+    echo }
+    echo     return 0;
+    echo }
+)
+"%VTX%" fmt --check "%TMPFMT%" >nul 2>&1
+if !errorlevel! equ 0 (
+    echo [FAIL] vortex fmt --check should have flagged unformatted file!
+    exit /b 1
+)
+"%VTX%" fmt "%TMPFMT%" >nul 2>&1
+if !errorlevel! neq 0 (
+    echo [FAIL] vortex fmt failed!
+    exit /b 1
+)
+"%VTX%" fmt --check "%TMPFMT%" >nul 2>&1
+if !errorlevel! neq 0 (
+    echo [FAIL] vortex fmt output failed --check!
+    exit /b 1
+)
+echo   [PASS] vortex fmt formatted source and verified clean via --check.
+
+del "%TMP1%" "%TMPWARN%" "%TMP2%" "%TMP2REC%" "%TMP3%" "%TMP7%" "%TMP8MOD%" "%TMP8MAIN%" "%TMP9%" "%TMPFMT%" "%TEMP%\vx_warn.json" "%TEMP%\vx_us2.out" "%TEMP%\vx_us3.json" "%TEMP%\vx_test.json" "%TEMP%\vx_spec.json" "%TEMP%\vx_us3_clean.json" "%TEMP%\vx_us3_map.json" "%TEMP%\vx_us3_all6.json" 2>nul
 echo [ULTRASAFE CHECKS] All checks PASSED!
 exit /b 0

@@ -34,6 +34,7 @@ void vortex_parser_reset_tables(bool reset_structs) {
         g_uf_epoch = 1;
     }
     if (reset_structs) {
+        vortex_const_reset();
         g_st_epoch++;
         if (g_st_epoch == 0) {
             memset(g_st_hash_epoch_arr, 0, sizeof(g_st_hash_epoch_arr));
@@ -259,6 +260,44 @@ Symbol* vortex_symtab_add(SymbolTable* st, const char* name, VortexType type, bo
     s->len_vreg = VREG_NONE;
     s->known_len = -1;
     return s;
+}
+
+static VortexConst g_consts[MAX_CONSTS];
+static int g_const_count = 0;
+
+void vortex_const_reset(void) {
+    g_const_count = 0;
+}
+
+VortexConst* vortex_const_find(const char* name) {
+    if (!name) return NULL;
+    for (int i = g_const_count - 1; i >= 0; i--) {
+        if (strcmp(g_consts[i].name, name) == 0) return &g_consts[i];
+    }
+    return NULL;
+}
+
+VortexConst* vortex_const_add(const char* name, VortexType type, int64_t iv, float fv, const char* sv) {
+    VortexConst* existing = vortex_const_find(name);
+    if (existing) {
+        existing->type = type;
+        existing->int_val = iv;
+        existing->float_val = fv;
+        existing->str_val = sv;
+        return existing;
+    }
+    if (g_const_count >= MAX_CONSTS) {
+        vortex_compile_error("E001", 0, 1, "Maximum number of global constants reached", NULL);
+    }
+    VortexConst* kc = &g_consts[g_const_count++];
+    memset(kc, 0, sizeof(*kc));
+    strncpy(kc->name, name, sizeof(kc->name) - 1);
+    kc->name[sizeof(kc->name) - 1] = '\0';
+    kc->type = type;
+    kc->int_val = iv;
+    kc->float_val = fv;
+    kc->str_val = sv;
+    return kc;
 }
 
 /* --- User Functions & Relocations --- */
@@ -1034,78 +1073,115 @@ VortexType vortex_parse_primary(Compiler* c, VReg* out_vreg) {
         }
 
         Symbol* sym = vortex_symtab_find(c->st, name);
-        if (!sym) {
+        VortexConst* kc = (!sym) ? vortex_const_find(name) : NULL;
+        if (!sym && !kc) {
             char msg[256];
             snprintf(msg, sizeof(msg), "[VORTEX ERROR] Undefined variable '%s'", name);
             vortex_compile_error("E001", line, col, msg, "Declare the variable with 'let' before using it.");
         }
-        sym->used = true;
-        vortex_check_symbol_alive(c, sym, line, col);
 
-        VortexType primary_type = sym->type;
-        int primary_struct_id = sym->struct_id;
-        VReg cur_v = sym->vreg;
+        VortexType primary_type;
+        int primary_struct_id = -1;
+        VReg cur_v;
+        bool cur_is_slice = false;
+        VReg cur_len_vreg = VREG_NONE;
+        int64_t cur_known_len = -1;
 
-        /* Array indexing: arr[index] */
-        if (l->cur.type == TOK_LBRACKET) {
-            next_token(l);
-            VReg v_idx;
-            vortex_parse_expr(c, &v_idx);
-            vortex_parser_match(c, TOK_RBRACKET);
-
-            VortexType elem_type = (sym->type == TYPE_PTR_F32) ? TYPE_F32 :
-                                   (sym->type == TYPE_PTR_I32) ? TYPE_I32 :
-                                   (sym->type == TYPE_PTR_STRUCT) ? TYPE_PTR_STRUCT : TYPE_I64;
-            int32_t elem_size = (elem_type == TYPE_F32 || elem_type == TYPE_I32) ? 4 : 8;
-
-            bool needs_bounds = (c->unsafe_depth == 0) || sym->is_slice_ptr;
-            if (!sym->is_slice_ptr && c->unsafe_depth == 0) {
-                vortex_require_unsafe(c, "Indexing untracked raw pointer", line, col);
+        if (kc) {
+            primary_type = kc->type;
+            cur_v = ir_new_vreg(c->ir, primary_type);
+            if (primary_type == TYPE_F32) {
+                ir_emit_const_f32(c->ir, cur_v, kc->float_val);
+            } else if (primary_type == TYPE_STR) {
+                ir_emit_const_i64(c->ir, cur_v, (int64_t)(kc->str_val ? register_string_literal(kc->str_val) : ""));
+            } else {
+                ir_emit_const_i64(c->ir, cur_v, kc->int_val);
             }
-            if (needs_bounds && (g_compile_mode == VORTEX_MODE_SAFE || sym->is_slice_ptr)) {
-                ir_emit_bounds_check(c->ir, cur_v, v_idx, sym->len_vreg, sym->known_len, elem_size,
-                                     g_current_filename ? g_current_filename : "<input>", line);
-            }
-
-            VReg v_elem = ir_new_vreg(c->ir, elem_type);
-            ir_emit_load_array(c->ir, v_elem, cur_v, v_idx, elem_type);
-            if (c->ir->count > 0) {
-                c->ir->instrs[c->ir->count - 1].line = line;
-                c->ir->instrs[c->ir->count - 1].col = col;
-            }
-            cur_v = v_elem;
-            primary_type = (elem_type == TYPE_PTR_STRUCT) ? TYPE_STRUCT : elem_type;
+        } else {
+            sym->used = true;
+            vortex_check_symbol_alive(c, sym, line, col);
+            primary_type = sym->type;
+            primary_struct_id = sym->struct_id;
+            cur_v = sym->vreg;
+            cur_is_slice = sym->is_slice_ptr;
+            cur_len_vreg = sym->len_vreg;
+            cur_known_len = sym->known_len;
         }
 
-        /* Postfix field access: .field1.field2 */
-        while (l->cur.type == TOK_DOT) {
-            next_token(l);
-            if (l->cur.type != TOK_IDENT) {
-                fprintf(stderr, "[VORTEX ERROR] Expected field name after '.' at %s:%d:%d\n",
-                        g_current_filename ? g_current_filename : "<input>", l->cur.line, l->cur.col);
-                vortex_error("");
-            }
-            char fname[64];
-            strncpy(fname, l->cur.text, sizeof(fname) - 1);
-            fname[sizeof(fname) - 1] = '\0';
-            next_token(l);
+        /* Chained postfix indexing and field access: arr[i][j], obj.arr[i].field */
+        while (l->cur.type == TOK_LBRACKET || l->cur.type == TOK_DOT) {
+            if (l->cur.type == TOK_LBRACKET) {
+                int idx_line = l->cur.line;
+                int idx_col = l->cur.col;
+                next_token(l);
+                VReg v_idx;
+                vortex_parse_expr(c, &v_idx);
+                vortex_parser_match(c, TOK_RBRACKET);
 
-            VortexField* f = vortex_resolve_struct_field(primary_struct_id, fname);
-            if (!f) {
-                char msg[256];
-                snprintf(msg, sizeof(msg), "[VORTEX ERROR] Unknown field '%s' on variable '%s'", fname, sym->name);
-                vortex_compile_error("E001", l->cur.line, l->cur.col, msg, NULL);
-            }
+                VortexType elem_type = (primary_type == TYPE_PTR_F32) ? TYPE_F32 :
+                                       (primary_type == TYPE_PTR_I32) ? TYPE_I32 :
+                                       (primary_type == TYPE_PTR_STRUCT) ? TYPE_PTR_STRUCT : TYPE_I64;
+                int32_t elem_size = (elem_type == TYPE_F32 || elem_type == TYPE_I32) ? 4 : 8;
 
-            if (g_compile_mode == VORTEX_MODE_SAFE && c->unsafe_depth == 0) {
-                ir_emit_ptr_check(c->ir, cur_v, g_current_filename ? g_current_filename : "<input>", line);
-            }
+                /* Allow chained slice handles stored in [i64] slices (`mat[i][j]`) */
+                bool nested_slice_chain = (primary_type == TYPE_I64 && cur_is_slice);
+                bool effective_slice = cur_is_slice || nested_slice_chain;
 
-            VReg v_field = ir_new_vreg(c->ir, f->type);
-            ir_emit_load_offset(c->ir, v_field, cur_v, f->offset, f->type);
-            cur_v = v_field;
-            primary_type = f->type;
-            primary_struct_id = f->struct_id;
+                bool needs_bounds = (c->unsafe_depth == 0) || effective_slice;
+                if (!effective_slice && c->unsafe_depth == 0) {
+                    vortex_require_unsafe(c, "Indexing untracked raw pointer", idx_line, idx_col);
+                }
+                if (needs_bounds && (g_compile_mode == VORTEX_MODE_SAFE || effective_slice)) {
+                    ir_emit_bounds_check(c->ir, cur_v, v_idx, cur_len_vreg, cur_known_len, elem_size,
+                                         g_current_filename ? g_current_filename : "<input>", idx_line);
+                }
+
+                VReg v_elem = ir_new_vreg(c->ir, elem_type);
+                ir_emit_load_array(c->ir, v_elem, cur_v, v_idx, elem_type);
+                if (c->ir->count > 0) {
+                    c->ir->instrs[c->ir->count - 1].line = idx_line;
+                    c->ir->instrs[c->ir->count - 1].col = idx_col;
+                }
+                cur_v = v_elem;
+                primary_type = (elem_type == TYPE_PTR_STRUCT) ? TYPE_STRUCT : elem_type;
+                cur_len_vreg = VREG_NONE;
+                cur_known_len = -1;
+                cur_is_slice = (elem_type == TYPE_PTR_STRUCT || elem_type == TYPE_I64 ||
+                                elem_type == TYPE_PTR || elem_type == TYPE_PTR_I64 ||
+                                elem_type == TYPE_PTR_I32 || elem_type == TYPE_PTR_F32) && effective_slice;
+            } else {
+                next_token(l);
+                if (l->cur.type != TOK_IDENT) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "[VORTEX ERROR] Expected field name after '.'");
+                    vortex_compile_error("E001", l->cur.line, l->cur.col, msg, NULL);
+                }
+                char fname[64];
+                strncpy(fname, l->cur.text, sizeof(fname) - 1);
+                fname[sizeof(fname) - 1] = '\0';
+                next_token(l);
+
+                VortexField* f = vortex_resolve_struct_field(primary_struct_id, fname);
+                if (!f) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg), "[VORTEX ERROR] Unknown field '%s'", fname);
+                    vortex_compile_error("E001", l->cur.line, l->cur.col, msg, NULL);
+                }
+
+                if (g_compile_mode == VORTEX_MODE_SAFE && c->unsafe_depth == 0) {
+                    ir_emit_ptr_check(c->ir, cur_v, g_current_filename ? g_current_filename : "<input>", line);
+                }
+
+                VReg v_field = ir_new_vreg(c->ir, f->type);
+                ir_emit_load_offset(c->ir, v_field, cur_v, f->offset, f->type);
+                cur_v = v_field;
+                primary_type = f->type;
+                primary_struct_id = f->struct_id;
+                cur_len_vreg = VREG_NONE;
+                cur_known_len = -1;
+                cur_is_slice = (f->type == TYPE_PTR_I64 || f->type == TYPE_PTR_I32 ||
+                                f->type == TYPE_PTR_F32 || f->type == TYPE_PTR_STRUCT);
+            }
         }
 
         *out_vreg = cur_v;
