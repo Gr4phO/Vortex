@@ -4,6 +4,7 @@ Generate transparent-background (RGBA) high-DPI benchmark charts for Vortex v1.3
 with the Vortex logo rendered cleanly in the top-left corner of every image.
 """
 import json
+import math
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
@@ -149,99 +150,112 @@ def create_card_canvas(width, height, title, subtitle, badge_text="v1.3.0 · REA
 
 
 def build_total_chart(data):
-    W, H = 1240, 760
+    W, H = 1240, 770
     results = data["results"]
     by_name = {r["name"]: r for r in results}
     cpu = data["host"].get("cpu", "AMD Ryzen 5 5500")
+    main_entries = [r for r in results if r["name"] != "Python 3.12"]
+    main_entries.sort(key=lambda r: r["total_ms"])
+    runs = main_entries[0].get("runs", 5)
 
     img = create_card_canvas(
         W, H,
         "Vortex v1.3.0 — Benchmark Realiste 9 Langages (Temps Total, 5 Taches)",
-        f"{cpu} (6C/12T) · IEEE-754 strict sans -ffast-math · Mediane 3 runs · Plus court = meilleur",
+        f"{cpu} (6C/12T) · IEEE-754 strict sans -ffast-math · Mediane {runs} runs · Vortex --release & --safe",
     )
 
-    main_entries = [r for r in results if r["name"] not in ("Vortex (--safe)", "Python 3.12")]
-    main_entries.sort(key=lambda r: r["total_ms"])
     fastest_ms = main_entries[0]["total_ms"]
-    max_axis = 360.0
+    max_val = max(r["total_ms"] for r in main_entries)
+    max_axis = max(400.0, math.ceil(max_val / 100.0) * 100.0)
 
-    bar_x0 = px(338)
-    bar_w = px(600)
-    grid_top = px(106)
-    grid_bot = px(556)
+    bar_x0 = px(384)
+    bar_w = px(550)
+    grid_top = px(102)
+    grid_bot = px(574)
 
     def _grid(d):
-        for tick in [0, 90, 180, 270, 360]:
+        for i in range(5):
+            tick = int(round(max_axis * i / 4.0))
             gx = bar_x0 + int(bar_w * (tick / max_axis))
             d.line([gx, grid_top, gx, grid_bot], fill=(148, 163, 184, 34), width=px(1))
             lbl = f"{tick} ms"
             tb = d.textbbox((0, 0), lbl, font=FONTS["mono_sm"])
-            d.text((gx - (tb[2] - tb[0]) // 2, grid_bot + px(8)), lbl, font=FONTS["mono_sm"], fill=(148, 163, 184, 195))
+            d.text((gx - (tb[2] - tb[0]) // 2, grid_bot + px(7)), lbl, font=FONTS["mono_sm"], fill=(148, 163, 184, 195))
     img = blend_layer(img, _grid)
 
-    y = 114
-    row_h = 54
+    y = 108
+    row_h = 52
     for idx, r in enumerate(main_entries, 1):
         name = r["name"]
         sub = r["sublabel"]
         tot = r["total_ms"]
         ratio = tot / fastest_ms
-        is_vx = "Vortex" in name
+        is_rel = name == "Vortex (--release)"
+        is_safe = name == "Vortex (--safe)"
 
-        if is_vx:
+        if is_rel:
             img = rounded_rect(
                 img,
-                [px(28), px(y - 6), px(W - 28), px(y + row_h - 10)],
+                [px(28), px(y - 5), px(W - 28), px(y + row_h - 9)],
                 radius=px(10),
                 fill=(16, 185, 129, 34),
                 outline=(52, 211, 153, 145),
                 width=px(1.3),
             )
+        elif is_safe:
+            img = rounded_rect(
+                img,
+                [px(28), px(y - 5), px(W - 28), px(y + row_h - 9)],
+                radius=px(10),
+                fill=(99, 102, 241, 34),
+                outline=(129, 140, 248, 150),
+                width=px(1.3),
+            )
 
         img = rounded_rect(
             img,
-            [bar_x0, px(y + 10), bar_x0 + bar_w, px(y + 30)],
+            [bar_x0, px(y + 10), bar_x0 + bar_w, px(y + 29)],
             radius=px(6),
             fill=(24, 34, 54, 195),
         )
         fill_w = max(px(8), int(bar_w * min(tot, max_axis) / max_axis))
-        if is_vx:
-            img = gradient_bar(img, bar_x0, px(y + 10), fill_w, px(20), (79, 70, 229, 255), (16, 185, 129, 255), radius=6)
-        elif idx <= 2:
-            img = gradient_bar(img, bar_x0, px(y + 10), fill_w, px(20), (56, 189, 248, 240), (59, 130, 246, 240), radius=6)
+        if is_rel:
+            img = gradient_bar(img, bar_x0, px(y + 10), fill_w, px(19), (79, 70, 229, 255), (16, 185, 129, 255), radius=6)
+        elif is_safe:
+            img = gradient_bar(img, bar_x0, px(y + 10), fill_w, px(19), (139, 92, 246, 255), (56, 189, 248, 255), radius=6)
+        elif idx <= 3:
+            img = gradient_bar(img, bar_x0, px(y + 10), fill_w, px(19), (56, 189, 248, 240), (59, 130, 246, 240), radius=6)
         else:
-            img = rounded_rect(img, [bar_x0, px(y + 10), bar_x0 + fill_w, px(y + 30)], radius=px(6), fill=(82, 98, 122, 235))
+            img = rounded_rect(img, [bar_x0, px(y + 10), bar_x0 + fill_w, px(y + 29)], radius=px(6), fill=(82, 98, 122, 235))
 
-        def _row_txt(d, idx=idx, y=y, name=name, sub=sub, tot=tot, ratio=ratio, is_vx=is_vx):
-            rank_col = (110, 231, 183, 255) if is_vx else (100, 116, 139, 225)
-            name_col = (255, 255, 255, 255) if is_vx else (226, 232, 240, 245)
+        def _row_txt(d, idx=idx, y=y, name=name, sub=sub, tot=tot, ratio=ratio, is_rel=is_rel, is_safe=is_safe):
+            rank_col = (110, 231, 183, 255) if is_rel else ((199, 210, 254, 255) if is_safe else (100, 116, 139, 225))
+            name_col = (255, 255, 255, 255) if (is_rel or is_safe) else (226, 232, 240, 245)
+            sub_col = (167, 243, 208, 210) if is_rel else ((199, 210, 254, 210) if is_safe else (148, 163, 184, 215))
             d.text((px(42), px(y + 4)), f"{idx:02d}", font=FONTS["mono_b"], fill=rank_col)
             d.text((px(76), px(y + 2)), name, font=FONTS["label"], fill=name_col)
-            d.text((px(76), px(y + 21)), sub, font=FONTS["label_sm"], fill=(167, 243, 208, 210) if is_vx else (148, 163, 184, 215))
+            d.text((px(76), px(y + 21)), sub, font=FONTS["label_sm"], fill=sub_col)
 
             val_txt = f"{tot:6.2f} ms"
             rat_txt = f"{ratio:.2f}x"
-            val_col = (110, 231, 183, 255) if is_vx else (241, 245, 249, 245)
-            rat_col = (110, 231, 183, 255) if is_vx else (148, 163, 184, 225)
-            d.text((px(956), px(y + 12)), val_txt, font=FONTS["mono_b"], fill=val_col)
+            val_col = (110, 231, 183, 255) if is_rel else ((199, 210, 254, 255) if is_safe else (241, 245, 249, 245))
+            rat_col = (110, 231, 183, 255) if is_rel else ((199, 210, 254, 255) if is_safe else (148, 163, 184, 225))
+            d.text((px(956), px(y + 11)), val_txt, font=FONTS["mono_b"], fill=val_col)
             tb_r = d.textbbox((0, 0), rat_txt, font=FONTS["mono_b"])
-            d.text((px(W - 42) - (tb_r[2] - tb_r[0]), px(y + 12)), rat_txt, font=FONTS["mono_b"], fill=rat_col)
+            d.text((px(W - 42) - (tb_r[2] - tb_r[0]), px(y + 11)), rat_txt, font=FONTS["mono_b"], fill=rat_col)
         img = blend_layer(img, _row_txt)
         y += row_h
 
-    # Out-of-scale rows
-    cy = 594
-    for r_idx, (key, accent_fill, accent_line, note, is_safe) in enumerate([
-        ("Vortex (--safe)", (79, 70, 229, 34), (129, 140, 248, 130), "Bornes + epoques d'arene + stacktraces exactes", True),
-        ("Python 3.12", (30, 41, 59, 135), (71, 85, 105, 105), "Interprete CPython sans JIT (T5 GIL monothread)", False),
-    ], start=9):
-        row = by_name[key]
+    # Out-of-scale row (Python 3.12 only; Vortex --safe is now a full ranked bar above!)
+    if "Python 3.12" in by_name:
+        cy = 606
+        row = by_name["Python 3.12"]
         img = rounded_rect(
             img,
             [px(28), px(cy), px(W - 28), px(cy + 44)],
             radius=px(9),
-            fill=accent_fill,
-            outline=accent_line,
+            fill=(30, 41, 59, 135),
+            outline=(71, 85, 105, 105),
             width=px(1.1),
         )
         img = rounded_rect(
@@ -253,34 +267,41 @@ def build_total_chart(data):
             width=px(1),
         )
 
-        def _oos_txt(d, cy=cy, r_idx=r_idx, key=key, note=note, row=row, is_safe=is_safe):
-            d.text((px(42), px(cy + 13)), f"{r_idx:02d}", font=FONTS["mono_b"], fill=(165, 180, 252, 240) if is_safe else (148, 163, 184, 210))
-            d.text((px(76), px(cy + 5)), key, font=FONTS["label"], fill=(224, 231, 255, 255) if is_safe else (203, 213, 225, 235))
-            d.text((px(76), px(cy + 24)), note, font=FONTS["label_sm"], fill=(165, 180, 252, 200) if is_safe else (148, 163, 184, 210))
-            scale_note = f"HORS ECHELLE ({row['total_ms'] / fastest_ms:.1f}x vs C++)"
+        def _oos_txt(d, cy=cy, row=row):
+            d.text((px(42), px(cy + 13)), "10", font=FONTS["mono_b"], fill=(148, 163, 184, 210))
+            d.text((px(76), px(cy + 5)), "Python 3.12", font=FONTS["label"], fill=(203, 213, 225, 235))
+            d.text((px(76), px(cy + 24)), "Interprete CPython sans JIT (T5 GIL monothread)", font=FONTS["label_sm"], fill=(148, 163, 184, 210))
+            scale_note = f"HORS ECHELLE ({row['total_ms'] / fastest_ms:.1f}x vs #1)"
             tb_sn = d.textbbox((0, 0), scale_note, font=FONTS["mono_sm"])
             d.text((bar_x0 + (bar_w - (tb_sn[2] - tb_sn[0])) // 2, px(cy + 15)), scale_note, font=FONTS["mono_sm"], fill=(148, 163, 184, 225))
-            d.text((px(956), px(cy + 14)), f"{row['total_ms']:8.2f} ms", font=FONTS["mono_b"], fill=(199, 210, 254, 255) if is_safe else (148, 163, 184, 225))
+            d.text((px(956), px(cy + 14)), f"{row['total_ms']:8.2f} ms", font=FONTS["mono_b"], fill=(148, 163, 184, 225))
             rt = f"{row['total_ms'] / fastest_ms:.1f}x"
             tbr = d.textbbox((0, 0), rt, font=FONTS["mono_b"])
-            d.text((px(W - 42) - (tbr[2] - tbr[0]), px(cy + 14)), rt, font=FONTS["mono_b"], fill=(165, 180, 252, 240) if is_safe else (148, 163, 184, 210))
+            d.text((px(W - 42) - (tbr[2] - tbr[0]), px(cy + 14)), rt, font=FONTS["mono_b"], fill=(148, 163, 184, 210))
         img = blend_layer(img, _oos_txt)
-        cy += 52
 
     vx = by_name["Vortex (--release)"]
+    vxs = by_name["Vortex (--safe)"]
     img = rounded_rect(
         img,
-        [px(28), px(704), px(W - 28), px(736)],
+        [px(28), px(664), px(W - 28), px(742)],
         radius=px(8),
         fill=(15, 23, 42, 205),
         outline=(148, 163, 184, 48),
         width=px(1),
     )
-    ft = (
+    ft1 = (
         f"Vortex --release: T1={vx['t1_ms']}ms · T2={vx['t2_ms']}ms · T3={vx['t3_ms']}ms · "
-        f"T4={vx['t4_ms']}ms · T5={vx['t5_ms']}ms | AOT=0ms, JIT+Start={vx['startup_ms']}ms | Checksums 100% verifies"
+        f"T4={vx['t4_ms']}ms · T5={vx['t5_ms']}ms | AOT=0ms, Start+JIT={vx['startup_ms']}ms"
     )
-    img = blend_layer(img, lambda d: d.text((px(42), px(713)), ft, font=FONTS["mono_sm"], fill=(148, 163, 184, 235)))
+    ft2 = (
+        f"Vortex --safe   : T1={vxs['t1_ms']}ms · T2={vxs['t2_ms']}ms · T3={vxs['t3_ms']}ms · "
+        f"T4={vxs['t4_ms']}ms · T5={vxs['t5_ms']}ms | Bornes + arenes ON · Checksums 100% verifies"
+    )
+    img = blend_layer(img, lambda d: (
+        d.text((px(42), px(674)), ft1, font=FONTS["mono_sm"], fill=(167, 243, 208, 235)),
+        d.text((px(42), px(704)), ft2, font=FONTS["mono_sm"], fill=(199, 210, 254, 235)),
+    ))
 
     out = ASSETS_DIR / "bench_realistic_total.png"
     img.resize((W, H), Image.Resampling.LANCZOS).save(out, "PNG")
@@ -288,22 +309,23 @@ def build_total_chart(data):
 
 
 def build_breakdown_chart(data):
-    W, H = 1240, 780
+    W, H = 1240, 840
     results = data["results"]
     img = create_card_canvas(
         W, H,
         "Detail par Epreuve (T1..T5) & Latence AOT / Startup JIT",
-        "Chaque langage execute exactement les memes algorithmes · Vortex --release (0 ms AOT) vs compiles/VM",
+        "Memes algorithmes sur tous les langages · Vortex --release (sans bornes) ET Vortex --safe (bornes+arenes) inclus",
     )
 
     show_names = [
-        ("C++ (Clang++ -O3)", "C++ -O3"),
         ("C (Clang -O3)", "C -O3"),
-        ("Go (1.27)", "Go 1.27"),
+        ("C++ (Clang++ -O3)", "C++ -O3"),
         ("Rust (-O3)", "Rust -O3"),
-        ("C# (.NET v4.8)", "C# .NET"),
         ("Vortex (--release)", "Vortex --rel"),
+        ("C# (.NET v4.8)", "C# .NET4.8"),
+        ("Go (1.27)", "Go 1.27"),
         ("Java (OpenJDK 21)", "Java 21"),
+        ("Vortex (--safe)", "Vortex --safe"),
         ("Node.js (v26 V8)", "Node v26"),
     ]
     by_name = {r["name"]: r for r in results}
@@ -314,12 +336,12 @@ def build_breakdown_chart(data):
         ("T3 · MatMul Dense f64 (320x320x320)", "t3_ms", "ms"),
         ("T4 · Crible Eratosthene (10M)", "t4_ms", "ms"),
         ("T5 · Mandelbrot Multi-Coeur (12T)", "t5_ms", "ms"),
-        ("Latence AOT (indigo) + Startup/JIT (cyan/vert)", "aot_start", "ms"),
+        ("Latence AOT (indigo) + Startup/JIT (cyan/vert/violet)", "aot_start", "ms"),
     ]
 
-    pw, ph = 576, 200
+    pw, ph = 576, 218
     cols_x = [30, 634]
-    rows_y = [104, 322, 540]
+    rows_y = [104, 340, 576]
 
     for p_idx, (ptitle, field, unit) in enumerate(panels):
         px0 = cols_x[p_idx % 2]
@@ -335,13 +357,15 @@ def build_breakdown_chart(data):
         img = blend_layer(img, lambda d, t=ptitle, x=px0, y=py0: d.text((px(x + 16), px(y + 10)), t, font=FONTS["h3"], fill=(241, 245, 249, 250)))
 
         if field != "aot_start":
-            vals = [(short, by_name[full][field], "Vortex" in full) for full, short in show_names if full in by_name]
-            vmax = max(v for _, v, _ in vals) * 1.12
-            bx0 = px(px0 + 116)
-            bw_max = px(352)
+            vals = [(full, short, by_name[full][field]) for full, short in show_names if full in by_name]
+            vmax = max(v for _, _, v in vals) * 1.12
+            bx0 = px(px0 + 120)
+            bw_max = px(348)
             ry = py0 + 36
-            for short, val, is_vx in vals:
-                if is_vx:
+            for full, short, val in vals:
+                is_rel = full == "Vortex (--release)"
+                is_safe = full == "Vortex (--safe)"
+                if is_rel:
                     img = rounded_rect(
                         img,
                         [px(px0 + 10), px(ry - 1), px(px0 + pw - 10), px(ry + 17)],
@@ -350,21 +374,34 @@ def build_breakdown_chart(data):
                         outline=(52, 211, 153, 95),
                         width=px(0.8),
                     )
+                elif is_safe:
+                    img = rounded_rect(
+                        img,
+                        [px(px0 + 10), px(ry - 1), px(px0 + pw - 10), px(ry + 17)],
+                        radius=px(5),
+                        fill=(99, 102, 241, 32),
+                        outline=(129, 140, 248, 95),
+                        width=px(0.8),
+                    )
                 img = rounded_rect(img, [bx0, px(ry + 3), bx0 + bw_max, px(ry + 13)], radius=px(4), fill=(26, 36, 56, 195))
                 fw = max(px(5), int(bw_max * (val / vmax)))
-                if is_vx:
+                if is_rel:
                     img = gradient_bar(img, bx0, px(ry + 3), fw, px(10), (79, 70, 229, 255), (16, 185, 129, 255), radius=4)
+                elif is_safe:
+                    img = gradient_bar(img, bx0, px(ry + 3), fw, px(10), (139, 92, 246, 255), (56, 189, 248, 255), radius=4)
                 else:
                     img = rounded_rect(img, [bx0, px(ry + 3), bx0 + fw, px(ry + 13)], radius=px(4), fill=(82, 98, 122, 235))
-                img = blend_layer(img, lambda d, s=short, v=val, iv=is_vx, r=ry, x=px0: (
-                    d.text((px(x + 16), px(r + 1)), s, font=FONTS["mono_sm"], fill=(110, 231, 183, 255) if iv else (203, 213, 225, 235)),
-                    d.text((bx0 + bw_max + px(10), px(r + 1)), f"{v:6.2f} {unit}", font=FONTS["mono_sm"], fill=(110, 231, 183, 255) if iv else (226, 232, 240, 235)),
+                txt_col = (110, 231, 183, 255) if is_rel else ((199, 210, 254, 255) if is_safe else (203, 213, 225, 235))
+                val_col = (110, 231, 183, 255) if is_rel else ((199, 210, 254, 255) if is_safe else (226, 232, 240, 235))
+                img = blend_layer(img, lambda d, s=short, v=val, tc=txt_col, vc=val_col, r=ry, x=px0: (
+                    d.text((px(x + 16), px(r + 1)), s, font=FONTS["mono_sm"], fill=tc),
+                    d.text((bx0 + bw_max + px(10), px(r + 1)), f"{v:6.2f} {unit}", font=FONTS["mono_sm"], fill=vc),
                 ))
                 ry += 19
         else:
             cap = 1800.0
-            bx0 = px(px0 + 116)
-            bw_max = px(312)
+            bx0 = px(px0 + 120)
+            bw_max = px(308)
             ry = py0 + 36
             for full, short in show_names:
                 if full not in by_name:
@@ -372,8 +409,9 @@ def build_breakdown_chart(data):
                 r = by_name[full]
                 aot = r["compile_ms"]
                 st = r["startup_ms"]
-                is_vx = "Vortex" in full
-                if is_vx:
+                is_rel = full == "Vortex (--release)"
+                is_safe = full == "Vortex (--safe)"
+                if is_rel:
                     img = rounded_rect(
                         img,
                         [px(px0 + 10), px(ry - 1), px(px0 + pw - 10), px(ry + 17)],
@@ -382,21 +420,33 @@ def build_breakdown_chart(data):
                         outline=(52, 211, 153, 95),
                         width=px(0.8),
                     )
+                elif is_safe:
+                    img = rounded_rect(
+                        img,
+                        [px(px0 + 10), px(ry - 1), px(px0 + pw - 10), px(ry + 17)],
+                        radius=px(5),
+                        fill=(99, 102, 241, 32),
+                        outline=(129, 140, 248, 95),
+                        width=px(0.8),
+                    )
                 img = rounded_rect(img, [bx0, px(ry + 3), bx0 + bw_max, px(ry + 13)], radius=px(4), fill=(26, 36, 56, 195))
                 wa = int(bw_max * min(aot, cap) / cap)
                 ws = max(px(4), int(bw_max * min(st, max(0.0, cap - min(aot, cap))) / cap))
                 if wa > 0:
                     img = rounded_rect(img, [bx0, px(ry + 3), bx0 + wa, px(ry + 13)], radius=px(4), fill=(99, 102, 241, 230))
+                bar_col = (16, 185, 129, 250) if is_rel else ((139, 92, 246, 250) if is_safe else (56, 189, 248, 235))
                 img = rounded_rect(
                     img,
                     [bx0 + wa, px(ry + 3), min(bx0 + bw_max, bx0 + wa + ws), px(ry + 13)],
                     radius=px(4),
-                    fill=(16, 185, 129, 250) if is_vx else (56, 189, 248, 235),
+                    fill=bar_col,
                 )
                 lbl = f"{int(round(aot))}+{int(round(st))}ms"
-                img = blend_layer(img, lambda d, s=short, l=lbl, iv=is_vx, r=ry, x=px0: (
-                    d.text((px(x + 16), px(r + 1)), s, font=FONTS["mono_sm"], fill=(110, 231, 183, 255) if iv else (203, 213, 225, 235)),
-                    d.text((bx0 + bw_max + px(8), px(r + 1)), l, font=FONTS["mono_sm"], fill=(110, 231, 183, 255) if iv else (226, 232, 240, 235)),
+                txt_col = (110, 231, 183, 255) if is_rel else ((199, 210, 254, 255) if is_safe else (203, 213, 225, 235))
+                val_col = (110, 231, 183, 255) if is_rel else ((199, 210, 254, 255) if is_safe else (226, 232, 240, 235))
+                img = blend_layer(img, lambda d, s=short, l=lbl, tc=txt_col, vc=val_col, r=ry, x=px0: (
+                    d.text((px(x + 16), px(r + 1)), s, font=FONTS["mono_sm"], fill=tc),
+                    d.text((bx0 + bw_max + px(8), px(r + 1)), l, font=FONTS["mono_sm"], fill=vc),
                 ))
                 ry += 19
 
@@ -418,8 +468,10 @@ def build_silicon_chart(data):
     )
 
     f64_naive_gf = round(0.268435456 / (sil["vx_scalar_f64_512_ms"] / 1000.0), 2)
+    f64_vx_sp = round(sil["vx_scalar_f64_512_ms"] / sil["vx_hw_f64_512_ms"], 1)
+    f64_c_sp = round(sil["c_f64_512_ms"] / sil["vx_hw_f64_512_ms"], 1)
     left_rows = [
-        ("Vortex Scalaire Pur (1T)", f"{sil['vx_scalar_f64_512_ms']:.2f} ms · boucle JIT sans SIMD", f64_naive_gf, (82, 98, 122, 235), False),
+        ("Vortex Auto-Vec AVX2 (1T)", f"{sil['vx_scalar_f64_512_ms']:.2f} ms · boucle i-k-j sans FMA", f64_naive_gf, (82, 98, 122, 235), False),
         ("C (Clang -O3 Auto-Vec 1T)", f"{sil['c_f64_512_ms']:.2f} ms · boucle i-k-j stricte", sil["c_f64_512_gflops"], (59, 130, 246, 235), False),
         ("Vortex std/hw (BLIS AVX2 6C)", f"{sil['vx_hw_f64_512_ms']:.2f} ms · route L3_CACHE (err 0.0)", sil["vx_hw_f64_gflops"], None, True),
     ]
@@ -488,7 +540,7 @@ def build_silicon_chart(data):
         width=px(1),
     )
     fnote = (
-        f"Noyaux natifs opt-in via import \"std/hw\": hw_matmul_f64 = 76x vs Vortex scalaire (10.3x vs C -O3 1T) | "
+        f"Noyaux natifs opt-in via import \"std/hw\": hw_matmul_f64 = {f64_vx_sp}x vs Vortex 1T ({f64_c_sp}x vs C -O3 1T) | "
         f"GPU OpenCL {gpu} = {sil['vx_hw_f32_gpu_gflops']} GFLOP/s f32 (erreur 0.0)"
     )
     img = blend_layer(img, lambda d: d.text((px(44), px(503)), fnote, font=FONTS["mono_sm"], fill=(148, 163, 184, 235)))

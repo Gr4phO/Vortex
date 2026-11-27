@@ -44,6 +44,7 @@ void emit_avx2_vector_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins);
 void emit_avx2_i64_array_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins);
 void emit_avx2_grid_mod_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins);
 void emit_avx2_i64_mod_fill_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins);
+void emit_avx2_f64_axpy_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins);
 
 #define emit_u8                  jit_x64_emit_u8
 #define emit_u32                 jit_x64_emit_u32

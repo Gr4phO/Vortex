@@ -1163,3 +1163,174 @@ void emit_avx2_i64_mod_fill_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins)
     commit_vreg_int_reg(ir, ins->i_vreg, PREG_RAX, j);
     commit_vreg_int_reg(ir, ins->acc_vreg, PREG_R10, j);
 }
+
+static void emit_vmovupd_load_ymm(JITBuffer* j, int dst_ymm, int base_reg, int32_t offset) {
+    /* VEX.256.66.0F.WIG 10 /r : rdx (reg 2, B=1), r11 (reg 11, B=0) */
+    uint8_t b1 = (uint8_t)(((dst_ymm < 8) ? 0x80 : 0) | 0x40 | ((base_reg < 8) ? 0x20 : 0) | 0x01);
+    emit_u8(j, 0xC4); emit_u8(j, b1); emit_u8(j, 0x7D); emit_u8(j, 0x10);
+    if (offset == 0) {
+        emit_u8(j, (uint8_t)(0x00 | ((dst_ymm & 7) << 3) | (base_reg & 7)));
+    } else if (offset >= -128 && offset <= 127) {
+        emit_u8(j, (uint8_t)(0x40 | ((dst_ymm & 7) << 3) | (base_reg & 7)));
+        emit_u8(j, (uint8_t)(int8_t)offset);
+    } else {
+        emit_u8(j, (uint8_t)(0x80 | ((dst_ymm & 7) << 3) | (base_reg & 7)));
+        emit_u32(j, (uint32_t)offset);
+    }
+}
+
+static void emit_vmovupd_store_ymm_r11(JITBuffer* j, int src_ymm, int32_t offset) {
+    /* VEX.256.66.0F.WIG 11 /r to [r11 + offset] */
+    uint8_t b1 = (uint8_t)(((src_ymm < 8) ? 0x80 : 0) | 0x40 | 0x01);
+    emit_u8(j, 0xC4); emit_u8(j, b1); emit_u8(j, 0x7D); emit_u8(j, 0x11);
+    if (offset == 0) {
+        emit_u8(j, (uint8_t)(0x00 | ((src_ymm & 7) << 3) | 3));
+    } else if (offset >= -128 && offset <= 127) {
+        emit_u8(j, (uint8_t)(0x40 | ((src_ymm & 7) << 3) | 3));
+        emit_u8(j, (uint8_t)(int8_t)offset);
+    } else {
+        emit_u8(j, (uint8_t)(0x80 | ((src_ymm & 7) << 3) | 3));
+        emit_u32(j, (uint32_t)offset);
+    }
+}
+
+void emit_avx2_f64_axpy_loop(JITBuffer* j, IRBuffer* ir, IRInstruction* ins) {
+    /*
+     * Strict IEEE-754 AVX2 double-precision AXPY loop:
+     *   C[coff + j] += aik * B[boff + j]   for j in [i .. lim)
+     * Uses vmulpd + vaddpd (no FMA contraction) for 100% bit-exact parity.
+     */
+    emit_push_r(j, PREG_RCX);
+    emit_push_r(j, PREG_RDX);
+    emit_push_r(j, get_vreg_int_reg(ir, ins->lim_vreg, PREG_R10, j));
+    if (ins->src4 != VREG_NONE) {
+        emit_push_r(j, get_vreg_int_reg(ir, ins->src4, PREG_R10, j));
+    } else {
+        emit_mov_ri64(j, PREG_R10, 0);
+        emit_push_r(j, PREG_R10);
+    }
+    emit_push_r(j, get_vreg_int_reg(ir, ins->src2, PREG_R10, j));
+    if (ins->src3 != VREG_NONE) {
+        emit_push_r(j, get_vreg_int_reg(ir, ins->src3, PREG_R10, j));
+    } else {
+        emit_mov_ri64(j, PREG_R10, 0);
+        emit_push_r(j, PREG_R10);
+    }
+
+    int r_i = get_vreg_int_reg(ir, ins->i_vreg, PREG_RAX, j);
+    if (r_i != PREG_RAX) emit_mov_rr(j, PREG_RAX, r_i);
+
+    int r_c = get_vreg_int_reg(ir, ins->src1, PREG_R11, j);
+    if (r_c != PREG_R11) emit_mov_rr(j, PREG_R11, r_c);
+
+    /* pop r10 (coff); r11 = C + (coff + i) * 8 */
+    emit_u8(j, 0x41); emit_u8(j, 0x5A); /* pop r10 */
+    emit_add_rr(j, PREG_R10, PREG_RAX);
+    emit_shl_ri(j, PREG_R10, 3);
+    emit_add_rr(j, PREG_R11, PREG_R10);
+
+    /* pop rdx (B), pop r10 (boff); rdx = B + (boff + i) * 8 */
+    emit_u8(j, 0x5A); /* pop rdx */
+    emit_u8(j, 0x41); emit_u8(j, 0x5A); /* pop r10 */
+    emit_add_rr(j, PREG_R10, PREG_RAX);
+    emit_shl_ri(j, PREG_R10, 3);
+    emit_add_rr(j, PREG_RDX, PREG_R10);
+
+    /* pop rcx (lim) */
+    emit_u8(j, 0x59); /* pop rcx */
+
+    int x_a = get_vreg_float_reg(ir, ins->x_vreg, 0, j);
+    if (x_a != 0) emit_movaps_xx(j, 0, x_a);
+
+    emit_cmp_rr(j, PREG_RAX, PREG_RCX);
+    size_t early_done = emit_jcc_placeholder(j, 0x8D); /* jge early_done */
+
+    emit_save_xmm_range(j, 6, 3); /* preserve xmm6..xmm8 on Win64 */
+
+    /* Runtime forward-overlap alias check: if B > C && (B - C)/8 + i < lim -> scalar tail */
+    emit_cmp_rr(j, PREG_RDX, PREG_R11);
+    size_t alias_ok = emit_jcc_placeholder(j, 0x86); /* jbe alias_ok */
+    emit_mov_rr(j, PREG_R10, PREG_RDX);
+    emit_sub_rr(j, PREG_R10, PREG_R11);
+    emit_u8(j, 0x49); emit_u8(j, 0xC1); emit_u8(j, 0xEA); emit_u8(j, 0x03); /* shr r10, 3 */
+    emit_add_rr(j, PREG_R10, PREG_RAX);
+    emit_cmp_rr(j, PREG_R10, PREG_RCX);
+    size_t alias_fail = emit_jcc_placeholder(j, 0x8C); /* jl scalar_loop */
+    patch_jump(j, alias_ok);
+
+    /* vbroadcastsd ymm0, xmm0 */
+    emit_u8(j, 0xC4); emit_u8(j, 0xE2); emit_u8(j, 0x7D); emit_u8(j, 0x19); emit_u8(j, 0xC0);
+
+    /* 16-double AVX2 main loop */
+    emit_mov_rr(j, PREG_R10, PREG_RCX);
+    emit_sub_ri(j, PREG_R10, 15);
+    size_t loop16 = j->size;
+    emit_cmp_rr(j, PREG_RAX, PREG_R10);
+    size_t loop16_exit = emit_jcc_placeholder(j, 0x8D); /* jge loop4_check */
+
+    for (int k = 0; k < 4; k++) emit_vmovupd_load_ymm(j, 1 + k, PREG_RDX, k * 32);
+    for (int k = 0; k < 4; k++) emit_vex3_ymm(j, 1, 1, 1 + k, 1 + k, 0, 0x59); /* vmulpd */
+    for (int k = 0; k < 4; k++) emit_vmovupd_load_ymm(j, 5 + k, PREG_R11, k * 32);
+    for (int k = 0; k < 4; k++) emit_vex3_ymm(j, 1, 1, 5 + k, 5 + k, 1 + k, 0x58); /* vaddpd */
+    for (int k = 0; k < 4; k++) emit_vmovupd_store_ymm_r11(j, 5 + k, k * 32);
+
+    emit_u8(j, 0x48); emit_u8(j, 0x81); emit_u8(j, 0xC2); emit_u32(j, 128); /* add rdx, 128 */
+    emit_u8(j, 0x49); emit_u8(j, 0x81); emit_u8(j, 0xC3); emit_u32(j, 128); /* add r11, 128 */
+    emit_add_ri(j, PREG_RAX, 16);
+    size_t loop16_back = emit_jmp_placeholder(j);
+    int32_t l16_rel = (int32_t)(loop16 - (loop16_back + 4));
+    memcpy(&j->code[loop16_back], &l16_rel, 4);
+
+    patch_jump(j, loop16_exit);
+
+    /* 4-double AVX2 cleanup loop */
+    emit_mov_rr(j, PREG_R10, PREG_RCX);
+    emit_sub_ri(j, PREG_R10, 3);
+    size_t loop4 = j->size;
+    emit_cmp_rr(j, PREG_RAX, PREG_R10);
+    size_t loop4_exit = emit_jcc_placeholder(j, 0x8D); /* jge scalar_loop */
+
+    emit_vmovupd_load_ymm(j, 1, PREG_RDX, 0);
+    emit_vex3_ymm(j, 1, 1, 1, 1, 0, 0x59); /* vmulpd ymm1, ymm1, ymm0 */
+    emit_vmovupd_load_ymm(j, 5, PREG_R11, 0);
+    emit_vex3_ymm(j, 1, 1, 5, 5, 1, 0x58); /* vaddpd ymm5, ymm5, ymm1 */
+    emit_vmovupd_store_ymm_r11(j, 5, 0);
+
+    emit_add_ri(j, PREG_RDX, 32);
+    emit_add_ri(j, PREG_R11, 32);
+    emit_add_ri(j, PREG_RAX, 4);
+    size_t loop4_back = emit_jmp_placeholder(j);
+    int32_t l4_rel = (int32_t)(loop4 - (loop4_back + 4));
+    memcpy(&j->code[loop4_back], &l4_rel, 4);
+
+    patch_jump(j, loop4_exit);
+    emit_vzeroupper(j);
+    size_t skip_zero = emit_jmp_placeholder(j);
+
+    patch_jump(j, alias_fail);
+    emit_vzeroupper(j);
+
+    patch_jump(j, skip_zero);
+    size_t scalar_loop = j->size;
+    emit_cmp_rr(j, PREG_RAX, PREG_RCX);
+    size_t scalar_exit = emit_jcc_placeholder(j, 0x8D); /* jge scalar_exit */
+
+    emit_u8(j, 0xF2); emit_u8(j, 0x0F); emit_u8(j, 0x10); emit_u8(j, 0x0A); /* movsd xmm1, [rdx] */
+    emit_u8(j, 0xF2); emit_u8(j, 0x0F); emit_u8(j, 0x59); emit_u8(j, 0xC8); /* mulsd xmm1, xmm0 */
+    emit_u8(j, 0xF2); emit_u8(j, 0x41); emit_u8(j, 0x0F); emit_u8(j, 0x10); emit_u8(j, 0x13); /* movsd xmm2, [r11] */
+    emit_u8(j, 0xF2); emit_u8(j, 0x0F); emit_u8(j, 0x58); emit_u8(j, 0xD1); /* addsd xmm2, xmm1 */
+    emit_u8(j, 0xF2); emit_u8(j, 0x41); emit_u8(j, 0x0F); emit_u8(j, 0x11); emit_u8(j, 0x13); /* movsd [r11], xmm2 */
+    emit_add_ri(j, PREG_RDX, 8);
+    emit_add_ri(j, PREG_R11, 8);
+    emit_add_ri(j, PREG_RAX, 1);
+    size_t scalar_back = emit_jmp_placeholder(j);
+    int32_t sc_rel = (int32_t)(scalar_loop - (scalar_back + 4));
+    memcpy(&j->code[scalar_back], &sc_rel, 4);
+
+    patch_jump(j, scalar_exit);
+    emit_restore_xmm_range(j, 6, 3);
+    patch_jump(j, early_done);
+    emit_u8(j, 0x5A); /* pop rdx */
+    emit_u8(j, 0x59); /* pop rcx */
+    commit_vreg_int_reg(ir, ins->i_vreg, PREG_RAX, j);
+}

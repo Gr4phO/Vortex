@@ -592,6 +592,7 @@ typedef enum {
     IR_VEC_ARR_OP,
     IR_VEC_GRID_MOD,
     IR_VEC_MOD_FILL,
+    IR_VEC_F64_AXPY,
     IR_BAND,
     IR_BOR,
     IR_BXOR,
@@ -632,6 +633,7 @@ typedef struct IRInstruction {
     int region_id;
     int region_depth;
     bool is_ref_result;
+    bool fast_inline_safe;
     int64_t known_len;
     /* Vector / Riemann loop fields */
     VReg i_vreg;
@@ -1013,6 +1015,14 @@ double vortex_math_exp_f64(double x);
 double vortex_math_log_f64(double x);
 double vortex_math_pow_f64(double base, double exp);
 double vortex_math_atan2_f64(double y, double x);
+
+static inline bool ir_is_inline_math_intrinsic(const IRInstruction* ins) {
+    if (!ins || ins->op != IR_CALL || !ins->func_ptr) return false;
+    return ins->func_ptr == (void*)vortex_math_sqrt_f64 ||
+           ins->func_ptr == (void*)vortex_math_sqrtf ||
+           ins->func_ptr == (void*)vortex_math_fabs_f64 ||
+           ins->func_ptr == (void*)vortex_math_fabsf;
+}
 void vortex_set_program_args(int argc, char** argv);
 int64_t vortex_args_count(void);
 int64_t vortex_args_get(int64_t idx);
